@@ -1,0 +1,7 @@
+# Pinned CI-only binary tools. This file is sourced only by
+# provision-ci-tools; missing or mismatched tools fail closed.
+GITLEAKS_VERSION=8.18.4
+GITLEAKS_IMAGE=ghcr.io/gitleaks/gitleaks:v8.18.4@sha256:75bdb2b2f4db213cde0b8295f13a88d6b333091bbfbf3012a4e083d00d31caba
+SHELLCHECK_VERSION=0.10.0
+SHELLCHECK_URL=https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.x86_64.tar.xz
+SHELLCHECK_SHA256=6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87

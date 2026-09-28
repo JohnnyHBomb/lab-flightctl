@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+# shellcheck source=deploy/ci-tools.lock
+source "$root/deploy/ci-tools.lock"
+
+tool_root="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/flightctl-ci-tools"
+bin_dir="$tool_root/bin"
+mkdir -p "$bin_dir"
+chmod 700 "$tool_root" "$bin_dir"
+
+archive="$tool_root/shellcheck-${SHELLCHECK_VERSION}.tar.xz"
+curl --fail --silent --show-error --location --output "$archive" "$SHELLCHECK_URL"
+printf '%s  %s\n' "$SHELLCHECK_SHA256" "$archive" | sha256sum --check --status
+tar --extract --file "$archive" --to-stdout "shellcheck-v${SHELLCHECK_VERSION}/shellcheck" > "$bin_dir/shellcheck"
+chmod 755 "$bin_dir/shellcheck"
+
+command -v docker >/dev/null
+docker pull "$GITLEAKS_IMAGE" >/dev/null
+printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -euo pipefail' \
+    "exec docker run --rm --network none --volume \"\$PWD:/src:ro\" --workdir /src '$GITLEAKS_IMAGE' \"\$@\"" \
+    > "$bin_dir/gitleaks"
+chmod 755 "$bin_dir/gitleaks"
+
+"$bin_dir/shellcheck" --version | grep -F "version: $SHELLCHECK_VERSION" >/dev/null
+"$bin_dir/gitleaks" version | grep -F "$GITLEAKS_VERSION" >/dev/null
+
+if [[ -n "${GITHUB_PATH:-}" ]]; then
+    printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
+fi
+if [[ -n "${GITHUB_ENV:-}" ]]; then
+    printf 'GITLEAKS_IMAGE=%s\n' "$GITLEAKS_IMAGE" >> "$GITHUB_ENV"
+fi

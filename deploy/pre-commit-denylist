@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+denylist="${FLIGHTCTL_DENYLIST:-}"
+if [[ -z "$denylist" ]]; then
+    printf '%s\n' "external denylist check failed" >&2
+    exit 1
+fi
+exec python3 "$root/deploy/check_portability.py" --denylist "$denylist" "$root"

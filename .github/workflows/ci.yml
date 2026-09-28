@@ -1,23 +1,62 @@
-name: contracts
+name: flightctl-ci
 
 on:
-  push:
   pull_request:
 
 concurrency:
-  group: contracts-${{ github.workflow }}-${{ github.ref }}
+  group: flightctl-pr-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  test:
+  pr:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
         with:
           python-version: "3.12"
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install ".[test]"
-      - run: python -m pytest -q
-      - run: python tools/check_portability.py .
+      - name: Install locked CI tools
+        run: |
+          python -m pip install --no-deps -r deploy/requirements-ci.lock
+          python -m pip check
+      - name: Provision and verify pinned security tools
+        run: |
+          test -f deploy/ci-tools.lock
+          deploy/provision-ci-tools
+          export PATH="$RUNNER_TEMP/flightctl-ci-tools/bin:$PATH"
+          gitleaks version
+          shellcheck --version
+          semgrep --version
+          pip-audit --version
+      - name: Require the external denylist
+        env:
+          FLIGHTCTL_DENYLIST_CONTENT: ${{ secrets.FLIGHTCTL_DENYLIST }}
+        run: |
+          set -euo pipefail
+          test -n "$FLIGHTCTL_DENYLIST_CONTENT"
+          umask 077
+          denylist="$(mktemp)"
+          trap 'rm -f "$denylist"' EXIT
+          printf '%s\n' "$FLIGHTCTL_DENYLIST_CONTENT" > "$denylist"
+          chmod 600 "$denylist"
+          test -s "$denylist"
+          python deploy/check_portability.py --denylist "$denylist" .
+      - name: Contracts and scaffold integration
+        env:
+          FLIGHTCTL_INTEGRATION_PHASE: scaffold
+        run: python -m pytest -q tests/contracts tests/integration
+      - name: Portability
+        run: python tools/check_portability.py .
+      - name: ShellCheck
+        run: shellcheck -x deploy/pre-commit-denylist deploy/provision-ci-tools
+      - name: Gitleaks
+        run: gitleaks detect --source . --no-banner --redact --exit-code 1
+      - name: pip-audit
+        run: pip-audit --strict --no-deps -r deploy/requirements-ci.lock
+      - name: Semgrep
+        run: semgrep scan --error --config p/python deploy tests
