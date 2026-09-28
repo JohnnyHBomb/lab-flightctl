@@ -1,0 +1,7 @@
+{
+  "Peer": {
+    "node-amd": {"HostName": "amd", "DNSName": "amd.example", "Online": true},
+    "node-rtx": {"HostName": "rtx-8000", "DNSName": "rtx-8000.example", "Online": true},
+    "node-titan": {"HostName": "titan-rtx", "DNSName": "titan-rtx.example", "Online": true}
+  }
+}
