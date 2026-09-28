@@ -81,13 +81,17 @@
       "required": ["kind", "operation", "request_id", "queue_id", "retry_after_s", "wait_deadline", "reason"],
       "properties": {
         "kind": { "const": "pending" },
-        "operation": { "enum": ["acquire", "claim", "queue", "book", "chat-load"] },
+        "operation": { "enum": ["acquire", "claim", "queue", "book", "chat-load", "release"] },
         "request_id": { "$ref": "common.schema.json#/$defs/identifier" },
         "queue_id": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] },
         "retry_after_s": { "type": "integer", "minimum": 1 },
         "wait_deadline": { "$ref": "common.schema.json#/$defs/monotonic_deadline" },
         "reason": { "type": "string", "minLength": 1, "maxLength": 512 }
-      }
+      },
+      "allOf": [
+        { "if": { "properties": { "operation": { "const": "release" } } }, "then": { "properties": { "queue_id": { "type": "null" } } } }
+      ],
+      "description": "A pending release acknowledges an accepted stop, not confirmed emptiness. Retain lane exclusion until matching cgroup/GPU emptiness is confirmed; HTTP 202 and CLI exit 5 apply. The deadline bounds waiting, never authorizes freeing hardware."
     },
     "reachability_result": {
       "type": "object",
@@ -232,6 +236,10 @@
       },
       "allOf": [
         {
+          "if": { "properties": { "data": { "type": "object", "required": ["kind", "operation"], "properties": { "kind": { "const": "pending" }, "operation": { "const": "release" } } } } },
+          "then": { "properties": { "status": { "const": 202 } } }
+        },
+        {
           "if": { "properties": { "status": { "const": 200 } } },
           "then": { "required": ["data"], "properties": { "data": { "$ref": "#/$defs/result_data" }, "error": { "type": "null" } } }
         },
@@ -260,6 +268,10 @@
         "error": { "anyOf": [{ "$ref": "#/$defs/error" }, { "type": "null" }] }
       },
       "allOf": [
+        {
+          "if": { "properties": { "data": { "type": "object", "required": ["kind", "operation"], "properties": { "kind": { "const": "pending" }, "operation": { "const": "release" } } } } },
+          "then": { "properties": { "status": { "const": 202 } } }
+        },
         {
           "if": { "properties": { "status": { "const": 200 } } },
           "then": { "properties": { "data": { "$ref": "#/$defs/result_data" }, "error": { "type": "null" } } }

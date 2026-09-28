@@ -462,12 +462,19 @@
         }
       ]
     },
+    "content_labels": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/identifier" },
+      "uniqueItems": true,
+      "description": "Caller-declared content labels checked against current content policy. Omission at admission means []; neither omission nor [] asserts policy compliance. Array order is preserved in the local-action hash."
+    },
     "admission": {
       "type": "object",
       "additionalProperties": false,
       "required": ["execution", "approval", "pipeline", "delegation", "ingress", "batch"],
       "properties": {
         "execution": { "const": "atomic" },
+        "content_labels": { "$ref": "#/$defs/content_labels" },
         "approval": { "$ref": "#/$defs/approval_selection" },
         "pipeline": { "anyOf": [{ "$ref": "#/$defs/pipeline_binding" }, { "type": "null" }] },
         "delegation": { "anyOf": [{ "$ref": "#/$defs/delegation" }, { "type": "null" }] },

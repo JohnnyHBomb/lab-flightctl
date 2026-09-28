@@ -82,13 +82,14 @@
       "additionalProperties": false,
       "required": ["mode", "approval_id"],
       "properties": {
-        "mode": { "enum": ["controller-match", "approved-forced-preemption"] },
+        "mode": { "enum": ["controller-match", "owner-release", "approved-forced-preemption"] },
         "approval_id": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] }
       },
       "allOf": [
-        { "if": { "properties": { "mode": { "const": "controller-match" } } }, "then": { "properties": { "approval_id": { "type": "null" } } } },
+        { "if": { "properties": { "mode": { "enum": ["controller-match", "owner-release"] } } }, "then": { "properties": { "approval_id": { "type": "null" } } } },
         { "if": { "properties": { "mode": { "const": "approved-forced-preemption" } } }, "then": { "properties": { "approval_id": { "$ref": "common.schema.json#/$defs/identifier" } } } }
-      ]
+      ],
+      "description": "owner-release is a trusted-controller assertion that the authenticated effective principal owns the matching lease and requested release; it needs no forced-preemption approval. controller-match remains restricted to unprotected work. Every mode retains token/generation/unit/invocation fencing."
     },
     "request_base": {
       "type": "object",
@@ -126,7 +127,7 @@
       "allOf": [
         { "$ref": "#/$defs/request_base" },
         { "type": "object", "properties": { "kind": { "const": "stop" }, "identity": { "$ref": "#/$defs/running_identity" }, "stop_authority": { "$ref": "#/$defs/stop_authority" } }, "required": ["identity", "stop_authority"] },
-        { "if": { "properties": { "execution_policy": { "properties": { "protected": { "const": true } } } } }, "then": { "properties": { "stop_authority": { "properties": { "mode": { "const": "approved-forced-preemption" } } } } } }
+        { "if": { "properties": { "execution_policy": { "properties": { "protected": { "const": true } } } } }, "then": { "properties": { "stop_authority": { "properties": { "mode": { "enum": ["owner-release", "approved-forced-preemption"] } } } } } }
       ],
       "unevaluatedProperties": false
     },
