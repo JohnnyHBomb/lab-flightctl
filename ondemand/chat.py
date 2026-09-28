@@ -339,15 +339,27 @@ class SystemdExecutorHandoff:
                 error=str(probe["error"]),
             )
         probe_tenants = probe["gpu_tenants"]
-        if probe_tenants is not None:
+        if probe_tenants:
+            # A host probe names tenants, but unit cgroup membership is the
+            # evidence that binds each tenant to this controller-owned worker.
+            cgroup_occupants = set(_as_list(reply.get("cgroup_occupants")) or ())
             combined = sorted(set(reply.get("gpu_tenants", [])) | set(probe_tenants))
             reply = dict(reply)
             reply["gpu_tenants"] = combined
-            if combined:
+            if not set(combined).issubset(cgroup_occupants):
                 reply["ok"] = False
                 reply["uncertain"] = False
                 reply["observed_state"] = "quarantined"
-                reply["error"] = "GPU occupancy remains"
+                reply["error"] = "unattributed GPU occupancy remains"
+        else:
+            systemd_gpu = set(_as_list(reply.get("gpu_tenants")) or ())
+            cgroup_occupants = set(_as_list(reply.get("cgroup_occupants")) or ())
+            if not systemd_gpu.issubset(cgroup_occupants):
+                reply = dict(reply)
+                reply["ok"] = False
+                reply["uncertain"] = False
+                reply["observed_state"] = "quarantined"
+                reply["error"] = "unattributed GPU occupancy remains"
         return reply
 
     def stop(self, request: Mapping[str, object]) -> Mapping[str, object]:
@@ -361,9 +373,8 @@ class SystemdExecutorHandoff:
             raw = self.systemd.stop(unit, invocation)
         except Exception as exc:  # pragma: no cover - defensive seam boundary
             return _executor_reply("stop", identity, ok=False, uncertain=True, error=str(exc))
-        if not isinstance(raw, Mapping) or raw.get("ok") is not True:
-            reply = self._reply_from_systemd("stop", identity, raw, default_state="free")
-        else:
+        reply = self._reply_from_systemd("stop", identity, raw, default_state="free")
+        if reply.get("ok") is True:
             try:
                 post_raw = self.systemd.inspect(unit, invocation)
             except Exception as exc:  # pragma: no cover - defensive seam boundary
@@ -462,7 +473,7 @@ class SystemdExecutorHandoff:
             return _executor_reply(kind, identity, ok=False, uncertain=True, error="systemd occupancy was not observed")
         cgroup_values = _as_list(cgroup)
         gpu_values = _as_list(gpu)
-        status = str(raw.get("status", "success"))
+        status = str(raw.get("status", "unknown"))
         if cgroup_values is None or gpu_values is None:
             return _executor_reply(kind, identity, ok=False, uncertain=True, error="systemd occupancy is not a string list")
         if raw.get("unit") != identity.get("unit") or raw.get("invocation") != identity.get("invocation"):
@@ -474,8 +485,8 @@ class SystemdExecutorHandoff:
                 cgroup_occupants=cgroup_values,
                 gpu_tenants=gpu_values,
             )
-        if raw.get("ok") is not True or status in _TRANSPORT_FAILURES | {"invocation_mismatch", "failed_stop"}:
-            uncertain = status in _TRANSPORT_FAILURES
+        if raw.get("ok") is not True or status != "success":
+            uncertain = status not in {"success", "invocation_mismatch", "failed_stop"}
             return _executor_reply(
                 kind,
                 identity,
@@ -485,16 +496,8 @@ class SystemdExecutorHandoff:
                 cgroup_occupants=cgroup_values,
                 gpu_tenants=gpu_values,
             )
-        if kind == "stop" and (cgroup_values or gpu_values):
-            return _executor_reply(
-                kind,
-                identity,
-                ok=False,
-                error="occupancy remains after stop",
-                observed_state="quarantined",
-                cgroup_occupants=cgroup_values,
-                gpu_tenants=gpu_values,
-            )
+        # Stop acknowledgements may contain the pre-stop occupancy snapshot.
+        # stop() separately requires fresh empty systemd and GPU observations.
         observed_state = "running" if kind == "inspect" and (cgroup_values or gpu_values) else default_state
         return _executor_reply(
             kind,
@@ -724,7 +727,7 @@ class ChatController:
                 lane = self._lane_record(lane_id)
                 if lane is None:
                     continue
-                observation = observations.get(lane_id) if availability is not None else LaneObservation.from_value(lane_id, lane)
+                observation = observations.get(lane_id)
                 if observation is None:
                     continue
                 if observation.enabled is not True or observation.booked is not False or observation.compatible is not True:
@@ -1167,6 +1170,8 @@ class ChatController:
             return _AuthorityCall(False, status, envelope, _failure_message(envelope, _failure_message(raw, "authority did not confirm the operation")))
         if status != 200:
             return _AuthorityCall(False, status, envelope, "authority response was not a complete success")
+        if envelope.get("schema") != 1 or "error" not in envelope or envelope["error"] is not None:
+            return _AuthorityCall(False, status, envelope, "authority success envelope was inconsistent")
         if envelope.get("request_id") != request_id:
             return _AuthorityCall(False, status, envelope, "authority response request identity mismatch")
         return _AuthorityCall(True, status, envelope)
@@ -1228,18 +1233,26 @@ class ChatController:
         expected_site = self.inventory.get("site_id")
         expected_host = configured_lane.get("host_id")
         expected_lane = {"site_id": expected_site, "host_id": expected_host, "lane_id": lane_id}
-        if not _same_lane(lease_lane, expected_lane) or not _same_lane(reservation_lane, lease_lane) or lease.get("generation") != generation or lease_reservation.get("generation") != generation:
+        if (not _same_lane(lease_lane, expected_lane)
+                or not _same_lane(reservation_lane, lease_lane)
+                or not _same_lane(_mapping(lease_reservation.get("lane")), lease_lane)
+                or lease.get("generation") != generation
+                or lease_reservation.get("generation") != generation
+                or reservation.get("generation") != generation):
             return None
-        if lease.get("token") not in {None, token}:
+        if lease.get("token") != token:
             return None
-        if lease.get("class") != "service" or lease.get("state") != "starting" or lease_reservation.get("state") not in {"starting", "reserved"}:
+        if (lease.get("class") != "service" or lease.get("state") != "starting"
+                or lease_reservation.get("state") not in {"starting", "reserved"}
+                or reservation.get("state") not in {"starting", "reserved"}):
             return None
-        if adoption.get("mode") != "fresh-acquire" or adoption.get("principal_bound") is not True or adoption.get("generation_bound") is not True:
+        if (adoption.get("mode") != "fresh-acquire" or adoption.get("principal_bound") is not True
+                or adoption.get("generation_bound") is not True or adoption.get("token_source") != "controller-grant"):
             return None
         if not _is_identifier(lease.get("lease_id")) or not _is_identifier(lease.get("instance")) or not _is_identifier(lease.get("unit")) or not _is_identifier(lease.get("invocation")):
             return None
         principal = lease.get("principal")
-        if isinstance(principal, Mapping) and principal != self.principal:
+        if not isinstance(principal, Mapping) or principal != self.principal:
             return None
         return {"data": _copy(data), "lease": _copy(lease), "reservation": _copy(reservation), "token": token, "generation": generation}
 

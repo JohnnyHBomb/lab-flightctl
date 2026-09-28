@@ -108,12 +108,21 @@ def make_controller(
     systemd: UnitSystemdAdapter | None = None,
     gpu: FakeGPUProbe | None = None,
     order: list[str] | None = None,
+    lane_observations: Mapping[str, Mapping[str, object]] | None = None,
 ) -> tuple[ChatController, FakeSSH, UnitSystemdAdapter, FakeClock, FakeGPUProbe]:
     transport = transport or FakeSSH()
     systemd = systemd or UnitSystemdAdapter()
     gpu = gpu or gpu_probe()
     clock = FakeClock(datetime(2026, 9, 28, 10, 0, tzinfo=timezone.utc))
-    controller = ChatController(clock, transport, systemd, gpu, inventory(order=order), principal=PRINCIPAL)
+    controller = ChatController(
+        clock,
+        transport,
+        systemd,
+        gpu,
+        inventory(order=order),
+        principal=PRINCIPAL,
+        lane_observations=lane_observations,
+    )
     return controller, transport, systemd, clock, gpu
 
 
@@ -124,7 +133,7 @@ def load_one(controller: ChatController, transport: FakeSSH, *, generation: int 
     return result
 
 
-def test_atomic_load_vs_grant() -> None:
+def test_atomic_two_chat_loads() -> None:
     transport = FakeSSH()
     systemd = UnitSystemdAdapter()
     probe = gpu_probe()
@@ -160,6 +169,32 @@ def test_atomic_load_vs_grant() -> None:
     assert all(result.state in {"running", "unavailable", "excluded"} for result in results)
 
 
+def test_registration_precedes_executor_start() -> None:
+    controller, transport, _, _, _ = make_controller()
+    base = controller.executor
+    observed: list[tuple[str, str | None]] = []
+
+    class ObservingExecutor:
+        def reserve(self, request):
+            observed.append(("reserve", controller.occupant["state"] if controller.occupant else None))
+            return base.reserve(request)
+
+        def start(self, request):
+            observed.append(("start", controller.occupant["state"] if controller.occupant else None))
+            return base.start(request)
+
+        def inspect(self, request, *, unit=None, invocation=None):
+            return base.inspect(request, unit=unit, invocation=invocation)
+
+        def stop(self, request):
+            return base.stop(request)
+
+    controller.executor = ObservingExecutor()
+    result = load_one(controller, transport)
+    assert result.trace[:2] == ("registered/loading", "running")
+    assert observed == [("reserve", "loading"), ("start", "loading")]
+
+
 def test_external_lane_order() -> None:
     controller, _, _, _, _ = make_controller()
     selection = ChatSelection("pipeline-a", "interactive inference", compatible_lanes=frozenset({"lane-a", "lane-b"}))
@@ -188,32 +223,72 @@ def test_lane_selection_requires_explicit_observations() -> None:
     assert controller.select_lane(selection) is None
 
 
-@pytest.mark.parametrize("failure", ["authority-timeout", "executor-timeout", "mismatched-identity", "failed-load"])
+def test_lane_selection_honors_constructor_and_setter_observations() -> None:
+    lane_a = {"host_id": "host-a", "enabled": True, "booked": True, "compatible": True, "reachability": "confirmed", "state": "free"}
+    lane_b = {"host_id": "host-b", "enabled": True, "booked": False, "compatible": True, "reachability": "confirmed", "state": "free"}
+    selection = ChatSelection("pipeline-a", "interactive inference", compatible_lanes=frozenset({"lane-a", "lane-b"}))
+    controller, _, _, _, _ = make_controller(lane_observations={"lane-a": lane_a})
+    assert controller.select_lane(selection) == "lane-b"
+
+    controller.set_lane_observations({"lane-b": {**lane_b, "booked": True}})
+    assert controller.select_lane(selection) is None
+
+    unknown, _, _, _, _ = make_controller(lane_observations={"lane-a": {**lane_a, "booked": None}})
+    assert unknown.select_lane(selection) == "lane-b"
+
+
+@pytest.mark.parametrize("failure", ["authority-timeout", "authority-lost", "executor-timeout", "executor-lost", "mismatched-identity", "failed-load"])
 def test_load_failure(failure: str) -> None:
     controller, transport, systemd, _, _ = make_controller()
-    if failure == "authority-timeout":
-        transport.queue("timeout")
+    if failure in {"authority-timeout", "authority-lost"}:
+        transport.queue("timeout" if failure == "authority-timeout" else "lost")
     elif failure == "mismatched-identity":
         queue_load(transport, grant_response(lane_id="lane-b", host_id="host-b", request_id="same-request"))
     else:
         queue_load(transport, grant_response(request_id="same-request"))
-        if failure in {"executor-timeout", "failed-load"}:
-            systemd.queue("unit-a", "timeout")
+        if failure in {"executor-timeout", "executor-lost", "failed-load"}:
+            outcome = {"executor-lost": "lost", "executor-timeout": "timeout", "failed-load": "invocation_mismatch"}[failure]
+            systemd.queue("unit-a", outcome)
     result = controller.load(ChatSelection("pipeline-a", "interactive inference", compatible_lanes=frozenset({"lane-a"})), "same-request")
     assert not result.ok
     assert controller.state in {"unavailable", "quarantined"}
     starts = [call for call in systemd.calls if call["method"] == "start"]
-    assert len(starts) == (1 if failure in {"executor-timeout", "failed-load"} else 0)
+    assert len(starts) == (1 if failure in {"executor-timeout", "executor-lost", "failed-load"} else 0)
     retry = controller.load(ChatSelection("pipeline-a", "interactive inference", compatible_lanes=frozenset({"lane-a"})), "same-request")
     assert retry is result
-    assert len(starts) == (1 if failure in {"executor-timeout", "failed-load"} else 0)
+    assert len([call for call in systemd.calls if call["method"] == "start"]) == len(starts)
     assert controller.accounting()["last_completed_at"] is None
+    controller.clock.advance(utc_s=1000, monotonic_s=1000)
+    assert not controller.idle_due()
+
+
+def test_lost_load_fresh_request_retries_on_next_eligible_lane() -> None:
+    controller, transport, systemd, _, _ = make_controller()
+    selection = ChatSelection("pipeline-a", "interactive inference", compatible_lanes=frozenset({"lane-a", "lane-b"}))
+    transport.queue("lost")
+    lost = controller.load(selection, "lost-request")
+    assert not lost.ok
+    assert lost.state == "excluded"
+    assert len(transport.calls) == 1
+    assert not [call for call in systemd.calls if call["method"] == "start"]
+    assert controller.load(selection, "lost-request") is lost
+    assert len(transport.calls) == 1
+
+    queue_load(transport, grant_response(lane_id="lane-b", host_id="host-b", request_id="fresh-request"))
+    fresh = controller.load(selection, "fresh-request")
+    assert fresh.ok
+    assert fresh.occupant["lane"]["lane_id"] == "lane-b"
+    assert len(transport.calls) == 2
+    assert len([call for call in systemd.calls if call["method"] == "start"]) == 1
 
 
 def test_request_accounting() -> None:
     controller, transport, _, clock, _ = make_controller()
     load_one(controller, transport)
     adapter = ChatAdapter(controller, generation=1, occupant_id="occupant-a")
+    assert controller._current.loaded_at == "2026-09-28T10:00:00Z"
+    assert controller._current.last_activity_monotonic == 0
+    assert controller._current.deadline["monotonic_anchor_s"] == 0
     assert controller.accounting() == {"active_requests": 0, "completed_requests": 0, "last_completed_at": None, "activity_basis": "completed-user-request"}
     assert adapter.request_started("request-a")
     assert adapter.request_started("request-b")
@@ -234,6 +309,25 @@ def test_request_accounting() -> None:
     assert record is not None
     assert controller.apply_request_event("complete", "request-c") is not None
     validate_definition(controller.occupant_record(), "occupant-v1.schema.json", "occupant")
+
+
+def test_disconnect_is_first_terminal_event_and_updates_anchor_once() -> None:
+    controller, transport, _, clock, _ = make_controller()
+    load_one(controller, transport)
+    adapter = ChatAdapter(controller, generation=1, occupant_id="occupant-a")
+    assert adapter.request_started("disconnect-first")
+    clock.advance(utc_s=7, monotonic_s=7)
+    assert adapter.disconnected("disconnect-first")
+    assert not adapter.disconnected("disconnect-first")
+    assert not adapter.request_completed("disconnect-first")
+    accounting = controller.accounting()
+    assert accounting["active_requests"] == 0
+    assert accounting["completed_requests"] == 1
+    assert accounting["last_completed_at"] == "2026-09-28T10:00:07Z"
+    anchor = controller._current.last_activity_monotonic
+    adapter.health_check()
+    adapter.connected()
+    assert controller._current.last_activity_monotonic == anchor == 7
 
 
 def test_health_and_reconnect_do_not_move_inactivity_anchor() -> None:
@@ -260,7 +354,12 @@ def test_streaming_inactivity() -> None:
     assert controller.poll_idle().ok is False
     assert controller.state == "running"
     assert adapter.stream_completed("stream-a")
-    clock.advance(utc_s=599, monotonic_s=599)
+    assert controller.accounting()["last_completed_at"] == "2026-09-28T10:10:01Z"
+    assert controller._current.last_activity_monotonic == 601
+    for elapsed in (100, 100, 100, 100, 100, 99):
+        clock.advance(utc_s=elapsed, monotonic_s=elapsed)
+        adapter.health_check()
+        adapter.connected()
     assert controller.poll_idle().ok is False
     assert controller.state == "running"
     queue_load(transport, unload_response(request_id="idle-unload"))
@@ -270,12 +369,13 @@ def test_streaming_inactivity() -> None:
     assert controller.state == "unavailable"
 
 
-def test_eviction_drain() -> None:
+@pytest.mark.parametrize("trigger_class", ["batch", "booked", "operator"])
+def test_eviction_drain(trigger_class: str) -> None:
     controller, transport, systemd, clock, _ = make_controller()
     load_one(controller, transport)
     adapter = ChatAdapter(controller, generation=1, occupant_id="occupant-a")
     assert adapter.stream_started("stream-a")
-    assert controller.request_eviction("batch").state == "draining"
+    assert controller.request_eviction(trigger_class).state == "draining"
     assert not adapter.request_started("new-request")
     assert adapter.stream_completed("stream-a")
     clock.advance(utc_s=119, monotonic_s=119)
@@ -287,6 +387,16 @@ def test_eviction_drain() -> None:
     assert controller.state == "unavailable"
     assert [call["method"] for call in systemd.calls] == ["start", "inspect", "stop", "inspect"]
     assert controller.request_eviction("service").ok is False
+
+
+@pytest.mark.parametrize("trigger_class", ["service", "resident", "standby"])
+def test_non_evicting_classes_cannot_start_drain(trigger_class: str) -> None:
+    controller, transport, systemd, _, _ = make_controller()
+    load_one(controller, transport)
+    result = controller.request_eviction(trigger_class)
+    assert not result.ok
+    assert controller.state == "running"
+    assert [call["method"] for call in systemd.calls] == ["start"]
 
 
 @pytest.mark.parametrize("failure", ["residual", "unknown-probe", "failed-stop", "lost-authority"])
@@ -301,6 +411,7 @@ def test_failed_unload_exclusion(failure: str) -> None:
         if failure == "residual":
             systemd.set_occupancy("unit-a", cgroup=["tenant-a"], gpu=["gpu-a"])
         elif failure == "failed-stop":
+            systemd.queue("unit-a", "success")
             systemd.queue("unit-a", "failed_stop")
     result = controller.unload(occupant_id="occupant-a", generation=1, request_id=f"unload-{failure}")
     assert not result.ok
@@ -313,6 +424,8 @@ def test_failed_unload_exclusion(failure: str) -> None:
         inspect_calls = [call for call in systemd.calls if call["method"] == "inspect"]
         assert inspect_calls[-1]["unit"] == "unit-a"
         assert inspect_calls[-1]["invocation"] == "invoke-a"
+    if failure == "failed-stop":
+        assert [call["method"] for call in systemd.calls] == ["start", "inspect", "stop"]
 
 
 def test_cleanup_stops_verified_worker_before_checking_empty() -> None:
@@ -322,6 +435,30 @@ def test_cleanup_stops_verified_worker_before_checking_empty() -> None:
     queue_load(transport, unload_response(request_id="owned-cleanup"))
     result = controller.unload(occupant_id="occupant-a", generation=1, request_id="owned-cleanup")
     assert result.ok
+    assert [call["method"] for call in systemd.calls] == ["start", "inspect", "stop", "inspect"]
+
+
+def test_cleanup_stops_verified_owned_gpu_worker() -> None:
+    controller, transport, systemd, _, _ = make_controller()
+    load_one(controller, transport)
+    systemd.set_occupancy("unit-a", cgroup=["owned-worker"], gpu=["owned-worker"])
+    queue_load(transport, unload_response(request_id="owned-gpu-cleanup"))
+    result = controller.unload(occupant_id="occupant-a", generation=1, request_id="owned-gpu-cleanup")
+    assert result.ok
+    assert controller.state == "unavailable"
+    assert [call["method"] for call in systemd.calls] == ["start", "inspect", "stop", "inspect"]
+
+
+def test_cleanup_requires_empty_gpu_evidence_after_owned_worker_stop() -> None:
+    controller, transport, systemd, _, _ = make_controller(
+        gpu=gpu_probe(scripted=[{"count": 0, "reason": "confirmed no GPU", "devices": []}, {"gpu_tenants": ["foreign-worker"]}])
+    )
+    load_one(controller, transport)
+    systemd.set_occupancy("unit-a", cgroup=["owned-worker"], gpu=["owned-worker"])
+    queue_load(transport, unload_response(request_id="owned-gpu-residual"))
+    result = controller.unload(occupant_id="occupant-a", generation=1, request_id="owned-gpu-residual")
+    assert not result.ok
+    assert controller.state == "quarantined"
     assert [call["method"] for call in systemd.calls] == ["start", "inspect", "stop", "inspect"]
 
 
@@ -405,6 +542,7 @@ def test_unload_authority_bindings_are_required(binding: str) -> None:
 def test_successful_cleanup_retry_restores_lane_eligibility() -> None:
     controller, transport, systemd, _, _ = make_controller()
     load_one(controller, transport)
+    systemd.queue("unit-a", "success")
     systemd.queue("unit-a", "failed_stop")
     queue_load(transport, unload_response(request_id="failed-cleanup"))
     failed = controller.unload(occupant_id="occupant-a", generation=1, request_id="failed-cleanup")
@@ -414,6 +552,7 @@ def test_successful_cleanup_retry_restores_lane_eligibility() -> None:
     queue_load(transport, unload_response(request_id="retry-cleanup"))
     recovered = controller.unload(occupant_id="occupant-a", generation=1, request_id="retry-cleanup")
     assert recovered.ok
+    assert [call["method"] for call in systemd.calls] == ["start", "inspect", "stop", "inspect", "stop", "inspect"]
     assert controller.select_lane(ChatSelection("pipeline-a", "interactive inference", compatible_lanes=frozenset({"lane-a"}))) == "lane-a"
 
 
@@ -433,6 +572,36 @@ def test_manual_reload_only() -> None:
     explicit = controller.load(ChatSelection("pipeline-b", "interactive inference", compatible_lanes=frozenset({"lane-a"})), "load-2")
     assert explicit.ok
     assert len([call for call in systemd.calls if call["method"] == "start"]) == start_count + 1
+
+
+@pytest.mark.parametrize("unload_mode", ["idle", "eviction"])
+def test_idle_and_eviction_unload_do_not_reload_on_lifecycle_events(unload_mode: str) -> None:
+    controller, transport, systemd, clock, _ = make_controller()
+    load_one(controller, transport)
+    if unload_mode == "idle":
+        clock.advance(utc_s=600, monotonic_s=600)
+        queue_load(transport, unload_response(request_id="idle-reload"))
+        unloaded = controller.poll_idle("idle-reload")
+    else:
+        assert controller.request_eviction("booked").state == "draining"
+        clock.advance(utc_s=120, monotonic_s=120)
+        queue_load(transport, unload_response(request_id="eviction-reload"))
+        unloaded = controller.process_eviction("eviction-reload")
+    assert unloaded.ok
+    assert controller.state == "unavailable"
+    calls_after_unload = len(transport.calls)
+    starts_after_unload = len([call for call in systemd.calls if call["method"] == "start"])
+
+    assert controller.on_reconnect() is False
+    assert controller.health_check()["state"] == "unavailable"
+    assert controller.unit_restarted()["state"] == "unavailable"
+    assert len(transport.calls) == calls_after_unload
+    assert len([call for call in systemd.calls if call["method"] == "start"]) == starts_after_unload
+
+    queue_load(transport, grant_response(generation=2, token="token-bbbbbbbbbbbbbbbb", lease_id="occupant-b", unit="unit-b", invocation="invoke-b", request_id="explicit-reload"))
+    explicit = controller.load(ChatSelection("pipeline-b", "interactive inference", compatible_lanes=frozenset({"lane-a"})), "explicit-reload")
+    assert explicit.ok
+    assert len([call for call in systemd.calls if call["method"] == "start"]) == starts_after_unload + 1
 
 
 def test_redacted_occupancy() -> None:
