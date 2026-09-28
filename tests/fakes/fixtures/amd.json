@@ -1,0 +1,5 @@
+{
+  "family": "amd",
+  "raw": "vendor=amd\nmodel=Generic AMD Accelerator\nvram_bytes=8589934592\ndriver=6.1\n",
+  "expected": { "vendor": "amd", "model": "Generic AMD Accelerator", "vram_bytes": 8589934592, "driver": "6.1", "count": 1 }
+}

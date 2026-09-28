@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/pipeline-v1.schema.json",
+  "title": "Flightctl pipeline v1",
+  "oneOf": [{ "$ref": "#/$defs/pipeline" }, { "$ref": "#/$defs/config" }],
+  "$defs": {
+    "pipeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "pipeline_id", "version", "revision", "purpose", "content_policy", "availability", "partner_overrides", "policy_hash", "updated_at"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "pipeline_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "purpose": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "content_policy": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/identifier" }, "minItems": 1, "uniqueItems": true },
+        "availability": { "enum": ["available", "unavailable", "approval_required"] },
+        "partner_overrides": { "type": "object", "propertyNames": { "$ref": "common.schema.json#/$defs/short_identifier" }, "additionalProperties": { "enum": ["available", "unavailable", "approval_required"] } },
+        "policy_hash": { "$ref": "common.schema.json#/$defs/sha256" },
+        "updated_at": { "$ref": "common.schema.json#/$defs/utc_time" }
+      }
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "revision", "pipelines"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "pipelines": { "type": "array", "items": { "$ref": "#/$defs/pipeline" }, "minItems": 1 }
+      }
+    }
+  },
+  "x-examples": {
+    "valid": [
+      { "schema_version": 1, "pipeline_id": "chat", "version": "1.0.0", "revision": 1, "purpose": "interactive inference", "content_policy": ["acceptable-use"], "availability": "available", "partner_overrides": { "site-b": "approval_required" }, "policy_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "updated_at": "2026-09-27T20:00:00Z" },
+      { "schema_version": 1, "revision": 1, "pipelines": [{ "schema_version": 1, "pipeline_id": "batch", "version": "1.0.0", "revision": 1, "purpose": "benchmark", "content_policy": ["acceptable-use"], "availability": "unavailable", "partner_overrides": {}, "policy_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "updated_at": "2026-09-27T20:00:00Z" }] }
+    ],
+    "invalid": [
+      { "schema_version": 1, "pipeline_id": "chat", "version": "1.0", "revision": 1, "purpose": "interactive inference", "content_policy": [], "availability": "maybe", "partner_overrides": {}, "policy_hash": "bad", "updated_at": "2026-09-27T20:00:00Z" }
+    ]
+  }
+}

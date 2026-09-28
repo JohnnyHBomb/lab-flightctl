@@ -1,0 +1,5 @@
+{
+  "family": "nvidia",
+  "raw": "Tesla T4,16384,535.1,nvidia\n",
+  "expected": { "vendor": "nvidia", "model": "Tesla T4", "vram_bytes": 17179869184, "driver": "535.1", "count": 1 }
+}

@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/occupant-v1.schema.json",
+  "title": "Flightctl occupant v1",
+  "oneOf": [{ "$ref": "#/$defs/occupant" }, { "$ref": "#/$defs/read_form" }],
+  "$defs": {
+    "request_accounting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["active_requests", "completed_requests", "last_completed_at", "activity_basis"],
+      "properties": {
+        "active_requests": { "type": "integer", "minimum": 0 },
+        "completed_requests": { "type": "integer", "minimum": 0 },
+        "last_completed_at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/utc_time" }, { "type": "null" }] },
+        "activity_basis": { "const": "completed-user-request" }
+      }
+    },
+    "base": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["schema_version", "occupant_id", "lane", "reservation", "generation", "instance", "principal", "class", "pipeline_ref", "purpose", "loaded_at", "last_activity", "request_accounting", "state", "unit", "invocation", "deadline"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "occupant_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "lane": { "$ref": "common.schema.json#/$defs/lane_ref" },
+        "reservation": { "$ref": "common.schema.json#/$defs/lane_generation" },
+        "generation": { "type": "integer", "minimum": 1 },
+        "instance": { "$ref": "common.schema.json#/$defs/identifier" },
+        "principal": { "$ref": "common.schema.json#/$defs/principal" },
+        "class": { "enum": ["service", "resident", "standby"] },
+        "pipeline_ref": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "purpose": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "loaded_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "last_activity": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "request_accounting": { "$ref": "#/$defs/request_accounting" },
+        "state": { "enum": ["loading", "running", "draining", "unloaded", "quarantined"] },
+        "unit": { "$ref": "common.schema.json#/$defs/identifier" },
+        "invocation": { "$ref": "common.schema.json#/$defs/identifier" },
+        "deadline": { "$ref": "common.schema.json#/$defs/monotonic_deadline" }
+      }
+    },
+    "occupant": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": ["token"],
+          "properties": { "token": { "type": "string", "minLength": 16, "maxLength": 512 } }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "read_form": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": ["token_redacted"],
+          "properties": { "token": false, "token_redacted": { "const": true } }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  },
+  "x-examples": {
+    "valid": [
+      { "schema_version": 1, "occupant_id": "occupant-a", "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "reservation": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 2, "state": "running" }, "generation": 2, "token": "token-abcdefghijklmnop", "instance": "instance-a", "principal": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "service-a" }, "class": "service", "pipeline_ref": "chat", "purpose": "interactive inference", "loaded_at": "2026-09-27T20:00:00Z", "last_activity": "2026-09-27T20:00:00Z", "request_accounting": { "active_requests": 0, "completed_requests": 3, "last_completed_at": "2026-09-27T20:00:00Z", "activity_basis": "completed-user-request" }, "state": "running", "unit": "unit-a", "invocation": "invoke-a", "deadline": { "boot_id": "boot-a", "deadline_s": 600, "utc_anchor": "2026-09-27T20:00:00Z", "monotonic_anchor_s": 10 } },
+      { "schema_version": 1, "occupant_id": "occupant-a", "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "reservation": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 2, "state": "running" }, "generation": 2, "instance": "instance-a", "principal": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "service-a" }, "class": "service", "pipeline_ref": "chat", "purpose": "interactive inference", "loaded_at": "2026-09-27T20:00:00Z", "last_activity": "2026-09-27T20:00:00Z", "request_accounting": { "active_requests": 1, "completed_requests": 3, "last_completed_at": "2026-09-27T20:00:00Z", "activity_basis": "completed-user-request" }, "state": "running", "unit": "unit-a", "invocation": "invoke-a", "deadline": { "boot_id": "boot-a", "deadline_s": 600, "utc_anchor": "2026-09-27T20:00:00Z", "monotonic_anchor_s": 10 }, "token_redacted": true }
+    ],
+    "invalid": [
+      { "schema_version": 1, "occupant_id": "occupant-a", "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "reservation": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 2, "state": "running" }, "generation": 2, "token": "short", "instance": "instance-a", "principal": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "service-a" }, "class": "service", "pipeline_ref": "chat", "purpose": "interactive inference", "loaded_at": "2026-09-27T20:00:00Z", "last_activity": "2026-09-27T20:00:00Z", "request_accounting": { "active_requests": 0, "completed_requests": 0, "last_completed_at": null, "activity_basis": "completed-user-request" }, "state": "running", "unit": "unit-a", "invocation": "invoke-a", "deadline": { "boot_id": "boot-a", "deadline_s": 600, "utc_anchor": "2026-09-27T20:00:00Z", "monotonic_anchor_s": 10 } },
+      { "schema_version": 1, "occupant_id": "occupant-a", "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "reservation": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 2, "state": "running" }, "generation": 2, "instance": "instance-a", "principal": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "service-a" }, "class": "service", "pipeline_ref": "chat", "purpose": "interactive inference", "loaded_at": "2026-09-27T20:00:00Z", "last_activity": "2026-09-27T20:00:00Z", "request_accounting": { "active_requests": 0, "completed_requests": 0, "last_completed_at": null, "activity_basis": "completed-user-request" }, "state": "running", "unit": "unit-a", "invocation": "invoke-a", "deadline": { "boot_id": "boot-a", "deadline_s": 600, "utc_anchor": "2026-09-27T20:00:00Z", "monotonic_anchor_s": 10 }, "token": "short", "token_redacted": true }
+    ]
+  }
+}

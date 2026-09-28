@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "pipelines": [
+    { "pipeline_id": "available", "availability": "available", "purpose": "allowed purpose", "partner_override": { "site-b": "approval_required" }, "admission": "local checks plus current policy" },
+    { "pipeline_id": "unavailable", "availability": "unavailable", "purpose": "allowed purpose", "admission": "deny" },
+    { "pipeline_id": "approval", "availability": "approval_required", "purpose": "allowed purpose", "admission": "matching unconsumed approval required" }
+  ],
+  "rejections": [
+    "stale policy authorisation",
+    "rejected acceptable-use purpose",
+    "unsupported supplied security hook",
+    "cross-site audience or destination mismatch",
+    "delegation beyond attenuation ceiling",
+    "approval replay",
+    "approval changed revision",
+    "unknown lane state",
+    "clock skew above 30 seconds"
+  ],
+  "decision_vectors": [
+    { "name": "available local purpose", "pipeline_id": "available", "destination_site": "site-a", "purpose": "batch inference", "content_labels": ["acceptable-use"], "expected": true },
+    { "name": "partner override requires approval", "pipeline_id": "available", "destination_site": "site-b", "purpose": "batch inference", "content_labels": ["acceptable-use"], "expected": false },
+    { "name": "rejected content", "pipeline_id": "available", "destination_site": "site-a", "purpose": "batch inference", "content_labels": ["disallowed"], "expected": false },
+    { "name": "stale policy", "pipeline_id": "available", "destination_site": "site-a", "purpose": "batch inference", "policy_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "expected": false },
+    { "name": "empty approval is never admission", "pipeline_id": "approval", "destination_site": "site-a", "purpose": "interactive inference", "approval": {}, "expected": false },
+    { "name": "unsigned approval is never admission", "pipeline_id": "approval", "destination_site": "site-a", "purpose": "interactive inference", "approval": { "consumed_at": null }, "expected": false }
+  ],
+  "future_runtime_obligations": [
+    "unknown state refuses grants and extensions",
+    "lease expiry never implies empty hardware",
+    "protected overrun quarantines without automatic kill",
+    "only matching token/unit/invocation may stop",
+    "confirm cgroup and GPU emptiness before release",
+    "no automatic chat reload after unload"
+  ]
+}

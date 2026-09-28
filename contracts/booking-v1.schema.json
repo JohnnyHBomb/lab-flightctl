@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/booking-v1.schema.json",
+  "title": "Flightctl booking v1",
+  "oneOf": [{ "$ref": "#/$defs/booking" }, { "$ref": "#/$defs/check_in" }],
+  "$defs": {
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "at", "reason"],
+      "properties": {
+        "state": { "enum": ["none", "blocked-check-in", "no-show-reopened", "overrun-delayed"] },
+        "at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/utc_time" }, { "type": "null" }] },
+        "reason": { "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 512 }, { "type": "null" }] }
+      },
+      "allOf": [
+        { "if": { "properties": { "state": { "const": "none" } } }, "then": { "properties": { "at": { "type": "null" }, "reason": { "type": "null" } } } },
+        { "if": { "properties": { "state": { "enum": ["blocked-check-in", "no-show-reopened", "overrun-delayed"] } } }, "then": { "properties": { "at": { "$ref": "common.schema.json#/$defs/utc_time" }, "reason": { "type": "string", "minLength": 1 } } } }
+      ]
+    },
+    "booking": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "booking_id", "revision", "lane", "reservation", "principal", "purpose", "start", "end", "state", "checked_in_at", "created_at", "displacement", "recovery"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "booking_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "lane": { "anyOf": [{ "$ref": "common.schema.json#/$defs/lane_ref" }, { "type": "null" }] },
+        "reservation": { "$ref": "common.schema.json#/$defs/lane_generation" },
+        "principal": { "$ref": "common.schema.json#/$defs/principal" },
+        "purpose": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "start": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "end": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "state": { "enum": ["scheduled", "blocked", "claimed", "missed", "completed", "cancelled", "displaced", "recovery"] },
+        "checked_in_at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/utc_time" }, { "type": "null" }] },
+        "created_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "displacement": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] },
+        "recovery": { "$ref": "#/$defs/recovery" }
+      }
+    },
+    "check_in": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["booking_id", "revision", "checked_in_at"],
+      "properties": {
+        "booking_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "checked_in_at": { "$ref": "common.schema.json#/$defs/utc_time" }
+      }
+    }
+  },
+  "x-examples": {
+    "valid": [
+      { "schema_version": 1, "booking_id": "booking-a", "revision": 1, "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "reservation": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": null, "state": "unassigned" }, "principal": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "subject-a" }, "purpose": "benchmark", "start": "2026-09-28T10:00:00Z", "end": "2026-09-28T11:00:00Z", "state": "scheduled", "checked_in_at": null, "created_at": "2026-09-27T20:00:00Z", "displacement": null, "recovery": { "state": "none", "at": null, "reason": null } },
+      { "booking_id": "booking-a", "revision": 1, "checked_in_at": "2026-09-28T09:50:00Z" }
+    ],
+    "invalid": [
+      { "schema_version": 1, "booking_id": "booking-a", "revision": 1, "lane": null, "reservation": { "lane": null, "generation": null, "state": "unassigned" }, "principal": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "subject-a" }, "purpose": "benchmark", "start": "not-time", "end": "2026-09-28T11:00:00Z", "state": "scheduled", "checked_in_at": null, "created_at": "2026-09-27T20:00:00Z", "displacement": null, "recovery": { "state": "none", "at": null, "reason": null } }
+    ]
+  }
+}

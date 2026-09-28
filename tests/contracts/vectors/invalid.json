@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "cases": [
+    { "id": "unsupported-schema", "document": { "schema_version": 2 }, "expected": "deny" },
+    { "id": "bad-utc", "value": "2026-09-27T20:00:00+01:00", "expected": "deny" },
+    { "id": "unknown-without-reason", "gpu_count": null, "gpu_count_reason": null, "expected": "deny" },
+    { "id": "dangling-lane", "host_id": "missing-host", "expected": "deny" },
+    { "id": "estimate-over-max", "est_s": 601, "max_s": 600, "expected": "deny" },
+    { "id": "renew-without-lane", "op": "renew", "lane": null, "expected": "deny" },
+    { "id": "approval-replay", "consumed_at": "2026-09-27T20:01:00Z", "expected": "deny" },
+    { "id": "changed-revision", "revision": 2, "approval_revision": 1, "expected": "deny" },
+    { "id": "pipeline-purpose", "purpose": "rejected purpose", "expected": "deny" },
+    { "id": "manifest-without-image-digest", "field": "image_digest", "expected": "deny" }
+  ]
+}

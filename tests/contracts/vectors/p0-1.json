@@ -1,0 +1,505 @@
+{
+  "schema_version": 1,
+  "pending_release": {
+    "valid": {
+      "schema": 1,
+      "request_id": "req-release-pending",
+      "status": 202,
+      "data": {
+        "kind": "pending",
+        "operation": "release",
+        "request_id": "req-release-pending",
+        "queue_id": null,
+        "retry_after_s": 60,
+        "wait_deadline": {
+          "boot_id": "boot-a",
+          "deadline_s": 600,
+          "utc_anchor": "2026-09-27T20:00:00Z",
+          "monotonic_anchor_s": 10
+        },
+        "reason": "matching stop accepted; emptiness not yet confirmed"
+      },
+      "error": null
+    },
+    "invalid": [
+      {
+        "schema": 1,
+        "request_id": "req-release-pending",
+        "status": 200,
+        "data": {
+          "kind": "pending",
+          "operation": "release",
+          "request_id": "req-release-pending",
+          "queue_id": null,
+          "retry_after_s": 60,
+          "wait_deadline": {
+            "boot_id": "boot-a",
+            "deadline_s": 600,
+            "utc_anchor": "2026-09-27T20:00:00Z",
+            "monotonic_anchor_s": 10
+          },
+          "reason": "matching stop accepted; emptiness not yet confirmed"
+        },
+        "error": null
+      },
+      {
+        "schema": 1,
+        "request_id": "req-release-pending",
+        "status": 202,
+        "data": {
+          "kind": "pending",
+          "operation": "release",
+          "request_id": "req-release-pending",
+          "queue_id": "queue-a",
+          "retry_after_s": 60,
+          "wait_deadline": {
+            "boot_id": "boot-a",
+            "deadline_s": 600,
+            "utc_anchor": "2026-09-27T20:00:00Z",
+            "monotonic_anchor_s": 10
+          },
+          "reason": "matching stop accepted; emptiness not yet confirmed"
+        },
+        "error": null
+      }
+    ]
+  },
+  "owner_release": {
+    "valid": {
+      "schema_version": 1,
+      "kind": "stop",
+      "controller_request_id": "req-stop",
+      "execution_policy": {
+        "class": "batch",
+        "protected": true,
+        "preemptible": false,
+        "grace_s": 0,
+        "max_end": "2026-09-27T21:00:00Z",
+        "deadline_kind": "max-end"
+      },
+      "stop_authority": {
+        "mode": "owner-release",
+        "approval_id": null
+      },
+      "identity": {
+        "lane": {
+          "site_id": "site-a",
+          "host_id": "host-1",
+          "lane_id": "lane-gpu0"
+        },
+        "generation": 7,
+        "token": "token-abcdefghijklmnop",
+        "instance": "instance-a",
+        "unit": "unit-a",
+        "invocation": "invoke-a",
+        "deadline": {
+          "kind": "max-end",
+          "owner_class": "batch",
+          "boot_id": "boot-a",
+          "deadline_s": 100,
+          "utc_anchor": "2026-09-27T20:00:00Z",
+          "monotonic_anchor_s": 10
+        }
+      }
+    },
+    "invalid": [
+      {
+        "schema_version": 1,
+        "kind": "stop",
+        "controller_request_id": "req-stop",
+        "execution_policy": {
+          "class": "batch",
+          "protected": true,
+          "preemptible": false,
+          "grace_s": 0,
+          "max_end": "2026-09-27T21:00:00Z",
+          "deadline_kind": "max-end"
+        },
+        "stop_authority": {
+          "mode": "owner-release",
+          "approval_id": "approval-a"
+        },
+        "identity": {
+          "lane": {
+            "site_id": "site-a",
+            "host_id": "host-1",
+            "lane_id": "lane-gpu0"
+          },
+          "generation": 7,
+          "token": "token-abcdefghijklmnop",
+          "instance": "instance-a",
+          "unit": "unit-a",
+          "invocation": "invoke-a",
+          "deadline": {
+            "kind": "max-end",
+            "owner_class": "batch",
+            "boot_id": "boot-a",
+            "deadline_s": 100,
+            "utc_anchor": "2026-09-27T20:00:00Z",
+            "monotonic_anchor_s": 10
+          }
+        }
+      },
+      {
+        "schema_version": 1,
+        "kind": "stop",
+        "controller_request_id": "req-bad",
+        "execution_policy": {
+          "class": "batch",
+          "protected": true,
+          "preemptible": false,
+          "grace_s": 0,
+          "max_end": "2026-09-27T21:00:00Z",
+          "deadline_kind": "max-end"
+        },
+        "stop_authority": {
+          "mode": "controller-match",
+          "approval_id": null
+        },
+        "identity": {
+          "lane": {
+            "site_id": "site-a",
+            "host_id": "host-1",
+            "lane_id": "lane-gpu0"
+          },
+          "generation": 7,
+          "token": "token-abcdefghijklmnop",
+          "instance": "instance-a",
+          "unit": "unit-a",
+          "invocation": "invoke-a",
+          "deadline": {
+            "kind": "max-end",
+            "owner_class": "batch",
+            "boot_id": "boot-a",
+            "deadline_s": 100,
+            "utc_anchor": "2026-09-27T20:00:00Z",
+            "monotonic_anchor_s": 10
+          }
+        }
+      }
+    ]
+  },
+  "content_labels": {
+    "valid": {
+      "idempotency_scope": {
+        "scope": "authenticated-principal",
+        "controller_id": "controller-a"
+      },
+      "request_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "admission": {
+        "execution": "atomic",
+        "approval": {
+          "approval_id": null,
+          "required": false,
+          "consume_atomically": true
+        },
+        "pipeline": {
+          "pipeline_id": "batch",
+          "version": "1.0.0",
+          "revision": 1,
+          "purpose": "batch inference",
+          "policy_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "delegation": null,
+        "ingress": {
+          "actor": {
+            "site_id": "site-a",
+            "tenant_id": "tenant-a",
+            "issuer": "issuer-a",
+            "subject": "subject-a"
+          },
+          "subject": null,
+          "controller_id": "controller-a",
+          "authenticated_peer": "peer-a",
+          "peer_source": "socket-peer",
+          "auth_method": "tailnet-peer",
+          "transport_binding": "transport-independent",
+          "peer_verified": true,
+          "forwarding_headers_ignored": true,
+          "operator_elevation": "none"
+        },
+        "batch": null,
+        "content_labels": [
+          "acceptable-use"
+        ]
+      },
+      "schema": 1,
+      "request_id": "req-a",
+      "op": "acquire",
+      "lane": null,
+      "args": {
+        "purpose": "batch inference",
+        "class": "batch",
+        "est_s": 60,
+        "max_s": 600,
+        "pipeline_ref": "batch"
+      }
+    },
+    "invalid": {
+      "idempotency_scope": {
+        "scope": "authenticated-principal",
+        "controller_id": "controller-a"
+      },
+      "request_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "admission": {
+        "execution": "atomic",
+        "approval": {
+          "approval_id": null,
+          "required": false,
+          "consume_atomically": true
+        },
+        "pipeline": {
+          "pipeline_id": "batch",
+          "version": "1.0.0",
+          "revision": 1,
+          "purpose": "batch inference",
+          "policy_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "delegation": null,
+        "ingress": {
+          "actor": {
+            "site_id": "site-a",
+            "tenant_id": "tenant-a",
+            "issuer": "issuer-a",
+            "subject": "subject-a"
+          },
+          "subject": null,
+          "controller_id": "controller-a",
+          "authenticated_peer": "peer-a",
+          "peer_source": "socket-peer",
+          "auth_method": "tailnet-peer",
+          "transport_binding": "transport-independent",
+          "peer_verified": true,
+          "forwarding_headers_ignored": true,
+          "operator_elevation": "none"
+        },
+        "batch": null,
+        "content_labels": "acceptable-use"
+      },
+      "schema": 1,
+      "request_id": "req-a",
+      "op": "acquire",
+      "lane": null,
+      "args": {
+        "purpose": "batch inference",
+        "class": "batch",
+        "est_s": 60,
+        "max_s": 600,
+        "pipeline_ref": "batch"
+      }
+    },
+    "policy_denied": {
+      "idempotency_scope": {
+        "scope": "authenticated-principal",
+        "controller_id": "controller-a"
+      },
+      "request_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "admission": {
+        "execution": "atomic",
+        "approval": {
+          "approval_id": null,
+          "required": false,
+          "consume_atomically": true
+        },
+        "pipeline": {
+          "pipeline_id": "batch",
+          "version": "1.0.0",
+          "revision": 1,
+          "purpose": "batch inference",
+          "policy_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "delegation": null,
+        "ingress": {
+          "actor": {
+            "site_id": "site-a",
+            "tenant_id": "tenant-a",
+            "issuer": "issuer-a",
+            "subject": "subject-a"
+          },
+          "subject": null,
+          "controller_id": "controller-a",
+          "authenticated_peer": "peer-a",
+          "peer_source": "socket-peer",
+          "auth_method": "tailnet-peer",
+          "transport_binding": "transport-independent",
+          "peer_verified": true,
+          "forwarding_headers_ignored": true,
+          "operator_elevation": "none"
+        },
+        "batch": null,
+        "content_labels": [
+          "disallowed"
+        ]
+      },
+      "schema": 1,
+      "request_id": "req-a",
+      "op": "acquire",
+      "lane": null,
+      "args": {
+        "purpose": "batch inference",
+        "class": "batch",
+        "est_s": 60,
+        "max_s": 600,
+        "pipeline_ref": "batch"
+      }
+    }
+  },
+  "local_action": {
+    "request": {
+      "idempotency_scope": {
+        "scope": "authenticated-principal",
+        "controller_id": "controller-a"
+      },
+      "request_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "admission": {
+        "execution": "atomic",
+        "approval": {
+          "approval_id": null,
+          "required": false,
+          "consume_atomically": true
+        },
+        "pipeline": {
+          "pipeline_id": "batch",
+          "version": "1.0.0",
+          "revision": 1,
+          "purpose": "benchmark café/雪\n\"quoted\"",
+          "policy_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "delegation": null,
+        "ingress": {
+          "actor": {
+            "site_id": "site-a",
+            "tenant_id": "tenant-a",
+            "issuer": "issuer-a",
+            "subject": "subject-a"
+          },
+          "subject": null,
+          "controller_id": "controller-a",
+          "authenticated_peer": "peer-a",
+          "peer_source": "socket-peer",
+          "auth_method": "tailnet-peer",
+          "transport_binding": "transport-independent",
+          "peer_verified": true,
+          "forwarding_headers_ignored": true,
+          "operator_elevation": "none"
+        },
+        "batch": null,
+        "content_labels": [
+          "acceptable-use"
+        ]
+      },
+      "schema": 1,
+      "request_id": "req-a",
+      "op": "acquire",
+      "lane": null,
+      "args": {
+        "purpose": "benchmark café/雪\n\"quoted\"",
+        "class": "batch",
+        "est_s": 60,
+        "max_s": 600,
+        "pipeline_ref": "batch"
+      }
+    },
+    "destination_site": "site-a",
+    "controller_id": "controller-a",
+    "policy_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "manifest_hash": null,
+    "projection": {
+      "schema": 1,
+      "op": "acquire",
+      "lane": null,
+      "args": {
+        "purpose": "benchmark café/雪\n\"quoted\"",
+        "class": "batch",
+        "est_s": 60,
+        "max_s": 600,
+        "pipeline_ref": "batch"
+      },
+      "requester": {
+        "site_id": "site-a",
+        "tenant_id": "tenant-a",
+        "issuer": "issuer-a",
+        "subject": "subject-a"
+      },
+      "pipeline": {
+        "pipeline_id": "batch",
+        "version": "1.0.0",
+        "revision": 1,
+        "purpose": "benchmark café/雪\n\"quoted\"",
+        "policy_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "content_labels": [
+        "acceptable-use"
+      ],
+      "batch": null,
+      "destination_site": "site-a",
+      "controller_id": "controller-a",
+      "policy_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "manifest_hash": null
+    },
+    "fields": [
+      "schema",
+      "op",
+      "lane",
+      "args",
+      "requester",
+      "pipeline",
+      "content_labels",
+      "batch",
+      "destination_site",
+      "controller_id",
+      "policy_hash",
+      "manifest_hash"
+    ],
+    "canonical_utf8": "[[\"schema\",1],[\"op\",\"acquire\"],[\"lane\",null],[\"args\",{\"class\":\"batch\",\"est_s\":60,\"max_s\":600,\"pipeline_ref\":\"batch\",\"purpose\":\"benchmark café/雪\\n\\\"quoted\\\"\"}],[\"requester\",{\"issuer\":\"issuer-a\",\"site_id\":\"site-a\",\"subject\":\"subject-a\",\"tenant_id\":\"tenant-a\"}],[\"pipeline\",{\"pipeline_id\":\"batch\",\"policy_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"purpose\":\"benchmark café/雪\\n\\\"quoted\\\"\",\"revision\":1,\"version\":\"1.0.0\"}],[\"content_labels\",[\"acceptable-use\"]],[\"batch\",null],[\"destination_site\",\"site-a\"],[\"controller_id\",\"controller-a\"],[\"policy_hash\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"],[\"manifest_hash\",null]]",
+    "payload_hash": "25e6bb0b680aa31fab3e0fa87a34f25bcb83768e386e12571654287e9cb1b505",
+    "negative_mutations": [
+      {
+        "path": [
+          "args",
+          "purpose"
+        ],
+        "value": "different purpose"
+      },
+      {
+        "path": [
+          "args",
+          "max_s"
+        ],
+        "value": 601
+      },
+      {
+        "path": [
+          "lane"
+        ],
+        "value": "lane-gpu1"
+      },
+      {
+        "path": [
+          "admission",
+          "content_labels"
+        ],
+        "value": [
+          "disallowed"
+        ]
+      },
+      {
+        "path": [
+          "admission",
+          "pipeline",
+          "revision"
+        ],
+        "value": 2
+      },
+      {
+        "path": [
+          "admission",
+          "ingress",
+          "actor",
+          "subject"
+        ],
+        "value": "subject-b"
+      }
+    ]
+  }
+}

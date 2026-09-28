@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/lease-v1.schema.json",
+  "title": "Flightctl lease v1",
+  "oneOf": [{ "$ref": "#/$defs/lease" }, { "$ref": "#/$defs/read_form" }],
+  "$defs": {
+    "lease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "lease_id", "lane", "generation", "reservation", "token", "instance", "principal", "class", "purpose", "estimated_s", "started_at", "max_end", "approved_max_end", "heartbeat_at", "deadline", "booking_id", "unit", "invocation", "state"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "lease_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "lane": { "$ref": "common.schema.json#/$defs/lane_ref" },
+        "generation": { "type": "integer", "minimum": 1 },
+        "reservation": { "$ref": "common.schema.json#/$defs/lane_generation" },
+        "token": { "type": "string", "minLength": 16, "maxLength": 512 },
+        "instance": { "$ref": "common.schema.json#/$defs/identifier" },
+        "principal": { "$ref": "common.schema.json#/$defs/principal" },
+        "class": { "enum": ["operator", "booked", "batch", "service", "resident", "standby"] },
+        "purpose": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "estimated_s": { "type": "integer", "minimum": 1 },
+        "started_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "max_end": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "approved_max_end": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "heartbeat_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "deadline": { "$ref": "common.schema.json#/$defs/monotonic_deadline" },
+        "booking_id": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] },
+        "unit": { "$ref": "common.schema.json#/$defs/identifier" },
+        "invocation": { "$ref": "common.schema.json#/$defs/identifier" },
+        "state": { "enum": ["starting", "running", "stopping", "quarantined"] }
+      }
+    },
+    "read_form": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "lease_id", "lane", "generation", "reservation", "instance", "principal", "class", "purpose", "state", "token_redacted"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "lease_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "lane": { "$ref": "common.schema.json#/$defs/lane_ref" },
+        "generation": { "type": "integer", "minimum": 1 },
+        "reservation": { "$ref": "common.schema.json#/$defs/lane_generation" },
+        "instance": { "$ref": "common.schema.json#/$defs/identifier" },
+        "principal": { "$ref": "common.schema.json#/$defs/principal" },
+        "class": { "enum": ["operator", "booked", "batch", "service", "resident", "standby"] },
+        "purpose": { "type": "string", "minLength": 1 },
+        "state": { "enum": ["starting", "running", "stopping", "quarantined"] },
+        "token_redacted": { "const": true }
+      }
+    }
+  },
+  "x-examples": {
+    "valid": [
+      {
+        "schema_version": 1, "lease_id": "lease-a", "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 4, "reservation": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 4, "state": "running" }, "token": "token-abcdefghijklmnop", "instance": "instance-a",
+        "principal": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "subject-a" }, "class": "batch", "purpose": "benchmark", "estimated_s": 60,
+        "started_at": "2026-09-27T20:00:00Z", "max_end": "2026-09-27T21:00:00Z", "approved_max_end": "2026-09-27T21:00:00Z", "heartbeat_at": "2026-09-27T20:01:00Z",
+        "deadline": { "boot_id": "boot-a", "deadline_s": 3600, "utc_anchor": "2026-09-27T20:00:00Z", "monotonic_anchor_s": 10 }, "booking_id": null, "unit": "unit-a", "invocation": "invoke-a", "state": "running"
+      },
+      {
+        "schema_version": 1, "lease_id": "lease-a", "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 4, "reservation": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 4, "state": "running" }, "instance": "instance-a", "principal": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "subject-a" }, "class": "batch", "purpose": "benchmark", "state": "running", "token_redacted": true
+      }
+    ],
+    "invalid": [
+      {
+        "schema_version": 1, "lease_id": "lease-a", "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 0, "reservation": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 0, "state": "running" }, "token": "short", "instance": "instance-a",
+        "principal": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "subject-a" }, "class": "batch", "purpose": "benchmark", "estimated_s": 60,
+        "started_at": "2026-09-27T20:00:00Z", "max_end": "2026-09-27T21:00:00Z", "approved_max_end": "2026-09-27T21:00:00Z", "heartbeat_at": "2026-09-27T20:01:00Z",
+        "deadline": { "boot_id": "boot-a", "deadline_s": 3600, "utc_anchor": "2026-09-27T20:00:00Z", "monotonic_anchor_s": 10 }, "booking_id": null, "unit": "unit-a", "invocation": "invoke-a", "state": "running"
+      }
+    ]
+  }
+}

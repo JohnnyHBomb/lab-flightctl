@@ -1,0 +1,375 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/rpc-envelope-v1.schema.json",
+  "title": "Flightctl RPC envelope, typed results, and idempotency record v1",
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/response" },
+    { "$ref": "#/$defs/idempotency_record" }
+  ],
+  "$defs": {
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "request_id", "op", "lane", "args", "idempotency_scope", "request_fingerprint", "admission"],
+      "properties": {
+        "schema": { "type": "integer", "const": 1 },
+        "request_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "op": { "$ref": "rpc-ops-v1.schema.json#/$defs/op_name" },
+        "lane": { "anyOf": [{ "$ref": "common.schema.json#/$defs/short_identifier" }, { "type": "null" }] },
+        "args": { "type": "object" },
+        "idempotency_scope": { "$ref": "common.schema.json#/$defs/idempotency_scope" },
+        "request_fingerprint": { "$ref": "common.schema.json#/$defs/sha256" },
+        "admission": { "$ref": "common.schema.json#/$defs/admission" }
+      }
+    },
+    "projection_window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end", "state", "certainty", "reason"],
+      "properties": {
+        "start": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "end": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "state": { "enum": ["free", "booked", "occupied", "unknown"] },
+        "certainty": { "$ref": "common.schema.json#/$defs/certainty" },
+        "reason": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "certainty": { "enum": ["estimate", "unknown"] } } },
+          "then": { "properties": { "reason": { "type": "string", "minLength": 1 } } }
+        }
+      ]
+    },
+    "grant_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "operation", "token", "generation", "lease", "reservation", "adoption"],
+      "properties": {
+        "kind": { "const": "grant" },
+        "operation": { "enum": ["acquire", "claim", "chat-load"] },
+        "token": { "type": "string", "minLength": 16, "maxLength": 512 },
+        "generation": { "type": "integer", "minimum": 1 },
+        "lease": { "$ref": "lease-v1.schema.json#/$defs/lease" },
+        "reservation": { "$ref": "common.schema.json#/$defs/lane_generation" },
+        "adoption": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "principal_bound", "generation_bound", "token_source"],
+          "properties": {
+            "mode": { "enum": ["fresh-acquire", "authenticated-adoption"] },
+            "principal_bound": { "const": true },
+            "generation_bound": { "const": true },
+            "token_source": { "enum": ["controller-grant", "authenticated-adoption"] }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "mode": { "const": "fresh-acquire" } } },
+              "then": { "properties": { "token_source": { "const": "controller-grant" } } }
+            },
+            {
+              "if": { "properties": { "mode": { "const": "authenticated-adoption" } } },
+              "then": { "properties": { "token_source": { "const": "authenticated-adoption" } } }
+            }
+          ]
+        }
+      }
+    },
+    "pending_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "operation", "request_id", "queue_id", "retry_after_s", "wait_deadline", "reason"],
+      "properties": {
+        "kind": { "const": "pending" },
+        "operation": { "enum": ["acquire", "claim", "queue", "book", "chat-load", "release"] },
+        "request_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "queue_id": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] },
+        "retry_after_s": { "type": "integer", "minimum": 1 },
+        "wait_deadline": { "$ref": "common.schema.json#/$defs/monotonic_deadline" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 512 }
+      },
+      "allOf": [
+        { "if": { "properties": { "operation": { "const": "release" } } }, "then": { "properties": { "queue_id": { "type": "null" } } } }
+      ],
+      "description": "A pending release acknowledges an accepted stop, not confirmed emptiness. Retain lane exclusion until matching cgroup/GPU emptiness is confirmed; HTTP 202 and CLI exit 5 apply. The deadline bounds waiting, never authorizes freeing hardware."
+    },
+    "reachability_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "lane", "host_id", "reachability", "observation", "error"],
+      "properties": {
+        "kind": { "const": "reachability" },
+        "lane": { "anyOf": [{ "$ref": "common.schema.json#/$defs/lane_ref" }, { "type": "null" }] },
+        "host_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "reachability": { "enum": ["confirmed", "unreachable", "unknown"] },
+        "observation": { "$ref": "common.schema.json#/$defs/measurement" },
+        "error": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] }
+      }
+    },
+    "occupancy_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "lane", "state", "generation", "lease", "occupant", "observation"],
+      "properties": {
+        "kind": { "const": "occupancy" },
+        "lane": { "$ref": "common.schema.json#/$defs/lane_ref" },
+        "state": { "enum": ["free", "starting", "running", "stopping", "quarantined", "unknown"] },
+        "generation": { "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+        "lease": { "anyOf": [{ "$ref": "lease-v1.schema.json#/$defs/read_form" }, { "type": "null" }] },
+        "occupant": { "anyOf": [{ "$ref": "occupant-v1.schema.json#/$defs/read_form" }, { "type": "null" }] },
+        "observation": { "$ref": "common.schema.json#/$defs/measurement" }
+      }
+    },
+    "projection_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "scope", "lane", "windows", "observation"],
+      "properties": {
+        "kind": { "const": "projection" },
+        "scope": { "enum": ["calendar", "free"] },
+        "lane": { "anyOf": [{ "$ref": "common.schema.json#/$defs/lane_ref" }, { "type": "null" }] },
+        "windows": { "type": "array", "items": { "$ref": "#/$defs/projection_window" } },
+        "observation": { "$ref": "common.schema.json#/$defs/measurement" }
+      }
+    },
+    "status_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "lane", "state", "generation", "occupancy", "reachability"],
+      "properties": {
+        "kind": { "const": "status" },
+        "lane": { "anyOf": [{ "$ref": "common.schema.json#/$defs/lane_ref" }, { "type": "null" }] },
+        "state": { "enum": ["free", "starting", "running", "stopping", "quarantined", "unknown"] },
+        "generation": { "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+        "occupancy": { "$ref": "common.schema.json#/$defs/measurement" },
+        "reachability": { "$ref": "common.schema.json#/$defs/measurement" }
+      }
+    },
+    "mutation_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "operation", "record_type", "record_id", "state", "revision", "reservation"],
+      "properties": {
+        "kind": { "const": "mutation" },
+        "operation": { "$ref": "rpc-ops-v1.schema.json#/$defs/op_name" },
+        "record_type": { "enum": ["lease", "booking", "queue", "occupant", "approval", "event"] },
+        "record_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "state": { "$ref": "rpc-ops-v1.schema.json#/$defs/record_state" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "reservation": { "$ref": "common.schema.json#/$defs/lane_generation" }
+      }
+    },
+    "queue_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "entries"],
+      "properties": {
+        "kind": { "const": "queue" },
+        "entries": { "type": "array", "items": { "$ref": "queue-v1.schema.json#/$defs/entry" } }
+      }
+    },
+    "booking_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "booking"],
+      "properties": {
+        "kind": { "const": "booking" },
+        "booking": { "$ref": "booking-v1.schema.json#/$defs/booking" }
+      }
+    },
+    "approval_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "approval"],
+      "properties": {
+        "kind": { "const": "approval" },
+        "approval": { "$ref": "approval-v1.schema.json#/$defs/approval" }
+      }
+    },
+    "report_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "events", "next_cursor"],
+      "properties": {
+        "kind": { "const": "report" },
+        "events": { "type": "array", "items": { "$ref": "event-v1.schema.json" } },
+        "next_cursor": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] }
+      }
+    },
+    "result_data": {
+      "oneOf": [
+        { "$ref": "#/$defs/grant_result" },
+        { "$ref": "#/$defs/pending_result" },
+        { "$ref": "#/$defs/reachability_result" },
+        { "$ref": "#/$defs/occupancy_result" },
+        { "$ref": "#/$defs/projection_result" },
+        { "$ref": "#/$defs/status_result" },
+        { "$ref": "#/$defs/mutation_result" },
+        { "$ref": "#/$defs/queue_result" },
+        { "$ref": "#/$defs/booking_result" },
+        { "$ref": "#/$defs/approval_result" },
+        { "$ref": "#/$defs/report_result" }
+      ]
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable", "failure_class"],
+      "properties": {
+        "code": { "enum": ["invalid", "busy", "denied", "conflict", "unknown", "unsupported_version", "stale_policy", "fenced", "unavailable", "timeout"] },
+        "message": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "retryable": { "type": "boolean" },
+        "failure_class": { "enum": ["client", "policy", "conflict", "transport", "state", "timeout"] },
+        "details": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "request_id", "status", "data", "error"],
+      "properties": {
+        "schema": { "type": "integer", "const": 1 },
+        "request_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "status": { "enum": [200, 202, 403, 409, 503] },
+        "data": { "anyOf": [{ "$ref": "#/$defs/result_data" }, { "type": "null" }] },
+        "error": { "anyOf": [{ "$ref": "#/$defs/error" }, { "type": "null" }] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "data": { "type": "object", "required": ["kind", "operation"], "properties": { "kind": { "const": "pending" }, "operation": { "const": "release" } } } } },
+          "then": { "properties": { "status": { "const": 202 } } }
+        },
+        {
+          "if": { "properties": { "status": { "const": 200 } } },
+          "then": { "required": ["data"], "properties": { "data": { "$ref": "#/$defs/result_data" }, "error": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "status": { "const": 202 } } },
+          "then": { "properties": { "data": { "$ref": "#/$defs/pending_result" }, "error": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "status": { "enum": [403, 409, 503] } } },
+          "then": { "required": ["error"], "properties": { "data": { "type": "null" }, "error": { "$ref": "#/$defs/error" } } }
+        }
+      ]
+    },
+    "idempotency_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "request_id", "idempotency_scope", "request_fingerprint", "stored_at", "status", "data", "error"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "request_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "idempotency_scope": { "$ref": "common.schema.json#/$defs/idempotency_scope" },
+        "request_fingerprint": { "$ref": "common.schema.json#/$defs/sha256" },
+        "stored_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "status": { "enum": [200, 202, 403, 409, 503] },
+        "data": { "anyOf": [{ "$ref": "#/$defs/result_data" }, { "type": "null" }] },
+        "error": { "anyOf": [{ "$ref": "#/$defs/error" }, { "type": "null" }] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "data": { "type": "object", "required": ["kind", "operation"], "properties": { "kind": { "const": "pending" }, "operation": { "const": "release" } } } } },
+          "then": { "properties": { "status": { "const": 202 } } }
+        },
+        {
+          "if": { "properties": { "status": { "const": 200 } } },
+          "then": { "properties": { "data": { "$ref": "#/$defs/result_data" }, "error": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "status": { "const": 202 } } },
+          "then": { "properties": { "data": { "$ref": "#/$defs/pending_result" }, "error": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "status": { "enum": [403, 409, 503] } } },
+          "then": { "properties": { "data": { "type": "null" }, "error": { "$ref": "#/$defs/error" } } }
+        }
+      ]
+    }
+  },
+  "x-examples": {
+    "valid": [
+      {
+        "schema": 1,
+        "request_id": "req-a",
+        "op": "status",
+        "lane": null,
+        "args": {},
+        "idempotency_scope": { "scope": "authenticated-principal", "controller_id": "controller-a" },
+        "request_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "admission": {
+          "execution": "atomic",
+          "approval": { "approval_id": null, "required": false, "consume_atomically": true },
+          "pipeline": null,
+          "delegation": null,
+          "ingress": { "actor": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "subject-a" }, "subject": null, "controller_id": "controller-a", "authenticated_peer": "peer-a", "peer_source": "socket-peer", "auth_method": "tailnet-peer", "transport_binding": "transport-independent", "peer_verified": true, "forwarding_headers_ignored": true, "operator_elevation": "none" },
+          "batch": null
+        }
+      },
+      {
+        "schema": 1,
+        "request_id": "req-a",
+        "status": 200,
+        "data": { "kind": "status", "lane": null, "state": "unknown", "generation": null, "occupancy": { "certainty": "unknown", "reason": "controller has no observation" }, "reachability": { "certainty": "unknown", "reason": "controller has no observation" } },
+        "error": null
+      },
+      {
+        "schema": 1,
+        "request_id": "req-grant",
+        "status": 200,
+        "data": {
+          "kind": "grant",
+          "operation": "acquire",
+          "token": "token-abcdefghijklmnop",
+          "generation": 7,
+          "lease": {
+            "schema_version": 1,
+            "lease_id": "lease-a",
+            "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" },
+            "generation": 7,
+            "reservation": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 7, "state": "starting" },
+            "token": "token-abcdefghijklmnop",
+            "instance": "instance-a",
+            "principal": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "subject-a" },
+            "class": "batch",
+            "purpose": "benchmark",
+            "estimated_s": 60,
+            "started_at": "2026-09-27T20:00:00Z",
+            "max_end": "2026-09-27T21:00:00Z",
+            "approved_max_end": "2026-09-27T21:00:00Z",
+            "heartbeat_at": "2026-09-27T20:01:00Z",
+            "deadline": { "boot_id": "boot-a", "deadline_s": 3600, "utc_anchor": "2026-09-27T20:00:00Z", "monotonic_anchor_s": 10 },
+            "booking_id": null,
+            "unit": "unit-a",
+            "invocation": "invoke-a",
+            "state": "starting"
+          },
+          "reservation": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 7, "state": "starting" },
+          "adoption": { "mode": "fresh-acquire", "principal_bound": true, "generation_bound": true, "token_source": "controller-grant" }
+        },
+        "error": null
+      },
+      {
+        "schema": 1,
+        "request_id": "req-a",
+        "status": 503,
+        "data": null,
+        "error": { "code": "unknown", "message": "state is unknown", "retryable": true, "failure_class": "state" }
+      },
+      {
+        "schema_version": 1,
+        "request_id": "req-a",
+        "idempotency_scope": { "scope": "authenticated-principal", "controller_id": "controller-a" },
+        "request_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "stored_at": "2026-09-27T20:00:00Z",
+        "status": 503,
+        "data": null,
+        "error": { "code": "unknown", "message": "state is unknown", "retryable": true, "failure_class": "state" }
+      }
+    ],
+    "invalid": [
+      { "schema": 1, "request_id": "req-a", "status": 201, "data": null, "error": null },
+      { "schema": 1, "request_id": "req-a", "status": 503, "data": null, "error": null }
+    ]
+  }
+}

@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "defaults": { "ttl_min": 240, "wait_max_min": 10, "lane_source": "argv[1]", "token_enrichment": "server-token-lease-lookup" },
+  "cases": [
+    {
+      "name": "lane-first positional acquire quoted purpose",
+      "argv": ["acquire", "lane-gpu0", "quoted purpose", "2"],
+      "env": {},
+      "expected_rpc": [{ "op": "acquire", "lane": "lane-gpu0", "args": { "purpose": "quoted purpose", "class": "batch", "est_s": 120, "max_s": 120 } }],
+      "expected_state": "starting",
+      "response": { "schema": 1, "request_id": "req-cli-1", "status": 200, "data": { "kind": "grant", "operation": "acquire", "token": "token-abcdefghijklmnop", "generation": 7, "lease": { "schema_version": 1, "lease_id": "lease-a", "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 7, "reservation": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 7, "state": "starting" }, "token": "token-abcdefghijklmnop", "instance": "instance-a", "principal": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "subject-a" }, "class": "batch", "purpose": "quoted purpose", "estimated_s": 120, "started_at": "2026-09-27T20:00:00Z", "max_end": "2026-09-27T21:00:00Z", "approved_max_end": "2026-09-27T21:00:00Z", "heartbeat_at": "2026-09-27T20:01:00Z", "deadline": { "boot_id": "boot-a", "deadline_s": 3600, "utc_anchor": "2026-09-27T20:00:00Z", "monotonic_anchor_s": 10 }, "booking_id": null, "unit": "unit-a", "invocation": "invoke-a", "state": "starting" }, "reservation": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 7, "state": "starting" }, "adoption": { "mode": "fresh-acquire", "principal_bound": true, "generation_bound": true, "token_source": "controller-grant" } }, "error": null },
+      "exit": 0
+    },
+    {
+      "name": "lane-first positional release with server generation lookup",
+      "argv": ["release", "lane-gpu0", "token-abcdefghijklmnop"],
+      "env": {},
+      "expected_rpc": [{ "op": "release", "lane": "lane-gpu0", "args": { "token": "token-abcdefghijklmnop" } }],
+      "lookup": { "mode": "server-token-lease", "caller_generation_argument": false, "principal_and_lane_checked": true },
+      "expected_state": "free",
+      "response": { "schema": 1, "request_id": "req-cli-2", "status": 200, "data": { "kind": "mutation", "operation": "release", "record_type": "lease", "record_id": "lease-a", "state": "free", "revision": 2, "reservation": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 7, "state": "released" } }, "error": null },
+      "exit": 0
+    },
+    {
+      "name": "lane-first positional renew TTL minutes to seconds",
+      "argv": ["renew", "lane-gpu0", "token-abcdefghijklmnop", "15"],
+      "env": {},
+      "expected_rpc": [{ "op": "renew", "lane": "lane-gpu0", "args": { "token": "token-abcdefghijklmnop", "extend_s": 900 } }],
+      "lookup": { "mode": "server-token-lease", "caller_generation_argument": false, "principal_and_lane_checked": true },
+      "response": { "schema": 1, "request_id": "req-cli-3", "status": 409, "data": null, "error": { "code": "conflict", "message": "approved maximum reached", "retryable": false, "failure_class": "conflict" } },
+      "exit": 1
+    },
+    {
+      "name": "lane-first wait converts TTL and wait minutes",
+      "argv": ["wait", "lane-gpu0", "quoted purpose", "2", "5"],
+      "env": {},
+      "expected_rpc": [{ "op": "queue", "lane": "lane-gpu0", "args": { "action": "add", "purpose": "quoted purpose", "class": "batch", "max_wait_s": 300 } }, { "op": "acquire", "lane": "lane-gpu0", "args": { "purpose": "quoted purpose", "class": "batch", "est_s": 120, "max_s": 120, "queue_id": "queue-from-first-result" } }],
+      "expected_state": "queued",
+      "response": { "schema": 1, "request_id": "req-cli-4", "status": 202, "data": { "kind": "pending", "operation": "acquire", "request_id": "req-cli-4", "queue_id": "queue-a", "retry_after_s": 60, "wait_deadline": { "boot_id": "boot-a", "deadline_s": 300, "utc_anchor": "2026-09-27T20:00:00Z", "monotonic_anchor_s": 10 }, "reason": "lane is occupied" }, "error": null },
+      "exit": 5
+    },
+    {
+      "name": "default TTL and bounded wait",
+      "argv": ["wait", "lane-gpu0", "quoted purpose"],
+      "env": {},
+      "expected_rpc": [{ "op": "queue", "lane": "lane-gpu0", "args": { "action": "add", "purpose": "quoted purpose", "class": "batch", "max_wait_s": 600 } }, { "op": "acquire", "lane": "lane-gpu0", "args": { "purpose": "quoted purpose", "class": "batch", "est_s": 14400, "max_s": 14400, "queue_id": "queue-from-first-result" } }],
+      "response": { "schema": 1, "request_id": "req-cli-default", "status": 202, "data": { "kind": "pending", "operation": "acquire", "request_id": "req-cli-default", "queue_id": "queue-a", "retry_after_s": 60, "wait_deadline": { "boot_id": "boot-a", "deadline_s": 600, "utc_anchor": "2026-09-27T20:00:00Z", "monotonic_anchor_s": 10 }, "reason": "lane is occupied" }, "error": null },
+      "exit": 5
+    },
+    {
+      "name": "bounded wait timeout",
+      "argv": ["wait", "lane-gpu0", "quoted purpose", "2", "1"],
+      "env": {},
+      "expected_rpc": [{ "op": "queue", "lane": "lane-gpu0", "args": { "action": "add", "purpose": "quoted purpose", "class": "batch", "max_wait_s": 60 } }, { "op": "acquire", "lane": "lane-gpu0", "args": { "purpose": "quoted purpose", "class": "batch", "est_s": 120, "max_s": 120, "queue_id": "queue-from-first-result" } }],
+      "response": { "schema": 1, "request_id": "req-cli-timeout", "status": 409, "data": null, "error": { "code": "timeout", "message": "bounded wait expired", "retryable": false, "failure_class": "timeout" } },
+      "exit": 1
+    },
+    {
+      "name": "json free read",
+      "argv": ["--json", "free", "lane-gpu0"],
+      "expected_rpc": [{ "op": "free", "lane": "lane-gpu0", "args": {} }],
+      "response": { "schema": 1, "request_id": "req-cli-5", "status": 200, "data": { "kind": "projection", "scope": "free", "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "windows": [], "observation": { "certainty": "confirmed", "reason": null } }, "error": null },
+      "exit": 0
+    },
+    {
+      "name": "calendar projection",
+      "argv": ["cal", "lane-gpu0"],
+      "expected_rpc": [{ "op": "cal", "lane": "lane-gpu0", "args": {} }],
+      "response": { "schema": 1, "request_id": "req-cli-5a", "status": 200, "data": { "kind": "projection", "scope": "calendar", "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "windows": [], "observation": { "certainty": "estimate", "reason": "future schedule projection" } }, "error": null },
+      "exit": 0
+    },
+    {
+      "name": "cancel",
+      "argv": ["cancel", "lane-gpu0", "booking-a", "1"],
+      "expected_rpc": [{ "op": "cancel", "lane": "lane-gpu0", "args": { "booking_id": "booking-a", "revision": 1 } }],
+      "response": { "schema": 1, "request_id": "req-cli-5b", "status": 200, "data": { "kind": "mutation", "operation": "cancel", "record_type": "booking", "record_id": "booking-a", "state": "cancelled", "revision": 2, "reservation": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": null, "state": "released" } }, "error": null },
+      "exit": 0
+    },
+    {
+      "name": "book",
+      "argv": ["book", "lane-gpu0", "2026-09-28T10:00:00Z", "2026-09-28T11:00:00Z", "benchmark"],
+      "expected_rpc": [{ "op": "book", "lane": "lane-gpu0", "args": { "start": "2026-09-28T10:00:00Z", "end": "2026-09-28T11:00:00Z", "purpose": "benchmark" } }],
+      "response": { "schema": 1, "request_id": "req-cli-6", "status": 403, "data": null, "error": { "code": "denied", "message": "approval required", "retryable": false, "failure_class": "policy" } },
+      "exit": 2
+    },
+    {
+      "name": "run fresh acquire and release sequence",
+      "argv": ["run", "lane-gpu0", "quoted purpose", "--class", "batch", "--est", "2", "--max", "5", "--", "workload"],
+      "env": {},
+      "expected_rpc": [
+        { "op": "acquire", "lane": "lane-gpu0", "args": { "purpose": "quoted purpose", "class": "batch", "est_s": 120, "max_s": 300 } },
+        { "op": "release", "lane": "lane-gpu0", "args": { "token": "token-abcdefghijklmnop" } }
+      ],
+      "trace": ["acquire", "release"],
+      "response": { "schema": 1, "request_id": "req-cli-7", "status": 200, "data": { "kind": "mutation", "operation": "release", "record_type": "lease", "record_id": "lease-a", "state": "free", "revision": 3, "reservation": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 7, "state": "released" } }, "error": null },
+      "exit": 0
+    },
+    {
+      "name": "run authenticated adoption and release sequence",
+      "argv": ["run", "lane-gpu0", "quoted purpose", "--class", "batch", "--est", "2", "--max", "5", "--", "workload"],
+      "env": { "LANE_TOKEN": "token-abcdefghijklmnop", "LANE_GENERATION": "7" },
+      "expected_rpc": [
+        { "op": "claim", "lane": "lane-gpu0", "args": { "token": "token-abcdefghijklmnop", "generation": 7, "generation_source": "authenticated-adoption" } },
+        { "op": "release", "lane": "lane-gpu0", "args": { "token": "token-abcdefghijklmnop" } }
+      ],
+      "trace": ["claim", "release"],
+      "response": { "schema": 1, "request_id": "req-cli-adopt", "status": 200, "data": { "kind": "grant", "operation": "claim", "token": "token-abcdefghijklmnop", "generation": 7, "lease": { "schema_version": 1, "lease_id": "lease-a", "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 7, "reservation": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 7, "state": "running" }, "token": "token-abcdefghijklmnop", "instance": "instance-a", "principal": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "subject-a" }, "class": "batch", "purpose": "quoted purpose", "estimated_s": 120, "started_at": "2026-09-27T20:00:00Z", "max_end": "2026-09-27T21:00:00Z", "approved_max_end": "2026-09-27T21:00:00Z", "heartbeat_at": "2026-09-27T20:01:00Z", "deadline": { "boot_id": "boot-a", "deadline_s": 3600, "utc_anchor": "2026-09-27T20:00:00Z", "monotonic_anchor_s": 10 }, "booking_id": null, "unit": "unit-a", "invocation": "invoke-a", "state": "running" }, "reservation": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 7, "state": "running" }, "adoption": { "mode": "authenticated-adoption", "principal_bound": true, "generation_bound": true, "token_source": "authenticated-adoption" } }, "error": null },
+      "exit": 0
+    },
+    {
+      "name": "approve",
+      "argv": ["approve", "approval-a", "signature"],
+      "expected_rpc": [{ "op": "approve", "lane": null, "args": { "approval_id": "approval-a", "proof": { "scheme": "ssh-sk", "key_id": "key-a", "namespace": "flightctl/approval/v1", "encoding": "openssh-ssh-sk-signature/base64", "signature_b64": "c2ln" }, "evidence": { "verifier": "controller-a", "verified_at": "2026-09-27T20:01:00Z", "user_presence": "verified", "user_verification": "verified" } } }],
+      "response": { "schema": 1, "request_id": "req-cli-7a", "status": 200, "data": { "kind": "mutation", "operation": "approve", "record_type": "approval", "record_id": "approval-a", "state": "approved", "revision": 1, "reservation": { "lane": null, "generation": null, "state": "unassigned" } }, "error": null },
+      "exit": 0
+    },
+    {
+      "name": "chat load",
+      "argv": ["chat", "load", "lane-gpu0", "interactive", "interactive inference"],
+      "expected_rpc": [{ "op": "chat-load", "lane": "lane-gpu0", "args": { "pipeline_ref": "interactive", "purpose": "interactive inference" } }],
+      "response": { "schema": 1, "request_id": "req-cli-7b", "status": 200, "data": { "kind": "mutation", "operation": "chat-load", "record_type": "occupant", "record_id": "occupant-a", "state": "loading", "revision": 1, "reservation": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 2, "state": "starting" } }, "error": null },
+      "exit": 0
+    },
+    {
+      "name": "preempt unknown",
+      "argv": ["preempt", "lane-gpu0", "approval-a"],
+      "expected_rpc": [{ "op": "preempt", "lane": "lane-gpu0", "args": { "token": "token-abcdefghijklmnop", "approval_id": "approval-a" } }],
+      "response": { "schema": 1, "request_id": "req-cli-8", "status": 503, "data": null, "error": { "code": "unknown", "message": "lane state unknown", "retryable": true, "failure_class": "state" } },
+      "exit": 3
+    },
+    {
+      "name": "yield",
+      "argv": ["wait", "lane-gpu0", "quoted purpose", "5", "10", "--yield"],
+      "expected_rpc": [{ "op": "queue", "lane": "lane-gpu0", "args": { "action": "add", "purpose": "quoted purpose", "class": "batch", "max_wait_s": 600 } }],
+      "response": { "schema": 1, "request_id": "req-cli-9", "status": 200, "data": { "kind": "mutation", "operation": "queue", "record_type": "queue", "record_id": "queue-a", "state": "queued", "revision": 1, "reservation": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": null, "state": "unassigned" } }, "error": null },
+      "exit_key": "yield",
+      "exit": 4
+    }
+  ],
+  "negative_cases": [
+    {
+      "name": "release cannot carry caller generation",
+      "expected_rpc": [{ "op": "release", "lane": "lane-gpu0", "args": { "token": "token-abcdefghijklmnop", "generation": 7 } }]
+    }
+  ],
+  "exit_mapping": { "200": 0, "202": 5, "403": 2, "409": 1, "503": 3, "yield": 4 }
+}

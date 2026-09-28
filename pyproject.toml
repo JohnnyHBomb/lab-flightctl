@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lab-flightctl-contracts"
+version = "0.1.0"
+description = "Portable v1 contracts, fakes, and executable vectors for a flight controller"
+requires-python = ">=3.12,<3.15"
+dependencies = []
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.0",
+  "jsonschema>=4.23",
+  "referencing>=0.35",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.setuptools]
+packages = ["contracts", "tests", "tests.fakes", "tests.contracts"]

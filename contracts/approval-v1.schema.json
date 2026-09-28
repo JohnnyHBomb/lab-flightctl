@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/approval-v1.schema.json",
+  "title": "Flightctl approval and server challenge v1",
+  "oneOf": [{ "$ref": "#/$defs/approval" }, { "$ref": "#/$defs/challenge" }],
+  "x-local-action-hash": {
+    "fields": ["schema", "op", "lane", "args", "requester", "pipeline", "content_labels", "batch", "destination_site", "controller_id", "policy_hash", "manifest_hash"],
+    "domain": "flightctl/local-action/v1",
+    "canonicalization": "JCS-RFC8785",
+    "encoding": "UTF-8",
+    "hash": "SHA-256",
+    "output": "lowercase-hex",
+    "separator_hex": "00"
+  },
+  "$defs": {
+    "local_action": {
+      "description": "Projection of a validated prospective local execution RPC, not approval-request/approve. See README Approval binding for field sources and mandatory execution-time recomputation; this definition validates the projection shape, not authorization or its digest.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "op", "lane", "args", "requester", "pipeline", "content_labels", "batch", "destination_site", "controller_id", "policy_hash", "manifest_hash"],
+      "properties": {
+        "schema": { "const": 1, "type": "integer" },
+        "op": { "enum": ["acquire", "renew", "release", "claim", "queue", "book", "cancel", "preempt", "chat-load", "chat-unload"] },
+        "lane": { "anyOf": [{ "$ref": "common.schema.json#/$defs/short_identifier" }, { "type": "null" }] },
+        "args": { "type": "object", "not": { "required": ["approval_id"] } },
+        "requester": { "$ref": "common.schema.json#/$defs/principal" },
+        "pipeline": { "anyOf": [{ "$ref": "common.schema.json#/$defs/pipeline_binding" }, { "type": "null" }] },
+        "content_labels": { "$ref": "common.schema.json#/$defs/content_labels" },
+        "batch": { "anyOf": [{ "$ref": "common.schema.json#/$defs/batch_registration" }, { "type": "null" }] },
+        "destination_site": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "controller_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "policy_hash": { "$ref": "common.schema.json#/$defs/sha256" },
+        "manifest_hash": { "type": "null" }
+      }
+    },
+    "bounds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_s", "max_end"],
+      "properties": { "max_s": { "type": "integer", "minimum": 1 }, "max_end": { "$ref": "common.schema.json#/$defs/utc_time" } }
+    },
+    "signed_fields": {
+      "type": "array",
+      "const": ["id", "action", "requester", "lane", "booking_id", "revision", "target_generation", "bounds", "reason", "nonce", "expires", "destination_site", "controller_id", "payload_hash", "manifest_hash", "policy_hash", "challenge_id", "challenge_nonce"]
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "challenge_id", "challenge_nonce", "action", "requester", "lane", "booking_id", "revision", "target_generation", "bounds", "reason", "nonce", "expires", "approver", "approved_at", "proof", "verified_evidence", "consumed_at", "destination_site", "controller_id", "payload_hash", "manifest_hash", "policy_hash", "challenge_policy_hash", "challenge_manifest_hash", "canonicalization", "canonical_encoding", "hash_algorithm", "domain", "signed_fields", "state"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "challenge_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "challenge_nonce": { "$ref": "common.schema.json#/$defs/identifier" },
+        "action": { "enum": ["extension", "forced-preemption", "displacement", "pipeline", "operator-admission"] },
+        "requester": { "$ref": "common.schema.json#/$defs/principal" },
+        "lane": { "anyOf": [{ "$ref": "common.schema.json#/$defs/lane_ref" }, { "type": "null" }] },
+        "booking_id": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] },
+        "revision": { "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+        "target_generation": { "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+        "bounds": { "$ref": "#/$defs/bounds" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "nonce": { "$ref": "common.schema.json#/$defs/identifier" },
+        "expires": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "approver": { "anyOf": [{ "$ref": "common.schema.json#/$defs/principal" }, { "type": "null" }] },
+        "approved_at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/utc_time" }, { "type": "null" }] },
+        "proof": { "anyOf": [{ "$ref": "common.schema.json#/$defs/proof" }, { "type": "null" }] },
+        "verified_evidence": { "anyOf": [{ "$ref": "common.schema.json#/$defs/verified_evidence" }, { "type": "null" }] },
+        "consumed_at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/utc_time" }, { "type": "null" }] },
+        "destination_site": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "controller_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "payload_hash": { "$ref": "common.schema.json#/$defs/sha256" },
+        "manifest_hash": { "anyOf": [{ "$ref": "common.schema.json#/$defs/sha256" }, { "type": "null" }] },
+        "policy_hash": { "$ref": "common.schema.json#/$defs/sha256" },
+        "challenge_policy_hash": { "$ref": "common.schema.json#/$defs/sha256" },
+        "challenge_manifest_hash": { "anyOf": [{ "$ref": "common.schema.json#/$defs/sha256" }, { "type": "null" }] },
+        "canonicalization": { "const": "JCS-RFC8785" },
+        "canonical_encoding": { "const": "UTF-8" },
+        "hash_algorithm": { "const": "SHA-256" },
+        "domain": { "const": "flightctl/approval/v1" },
+        "signed_fields": { "$ref": "#/$defs/signed_fields" },
+        "state": { "enum": ["issued", "approved", "consumed", "expired", "revoked"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "action": { "enum": ["extension", "forced-preemption"] } } },
+          "then": { "properties": { "lane": { "$ref": "common.schema.json#/$defs/lane_ref" }, "target_generation": { "type": "integer", "minimum": 1 } } }
+        },
+        {
+          "if": { "properties": { "action": { "const": "displacement" } } },
+          "then": { "properties": { "booking_id": { "$ref": "common.schema.json#/$defs/identifier" }, "revision": { "type": "integer", "minimum": 1 } } }
+        },
+        {
+          "if": { "properties": { "state": { "const": "issued" } } },
+          "then": { "properties": { "approver": { "type": "null" }, "approved_at": { "type": "null" }, "proof": { "type": "null" }, "verified_evidence": { "type": "null" }, "consumed_at": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "state": { "enum": ["approved", "consumed"] } } },
+          "then": {
+            "properties": {
+              "approver": { "$ref": "common.schema.json#/$defs/principal" },
+              "approved_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+              "proof": { "$ref": "common.schema.json#/$defs/proof" },
+              "verified_evidence": { "$ref": "common.schema.json#/$defs/verified_evidence" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "state": { "const": "consumed" } } },
+          "then": { "properties": { "consumed_at": { "$ref": "common.schema.json#/$defs/utc_time" } } }
+        }
+      ]
+    },
+    "challenge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "challenge_id", "action", "requester", "lane", "booking_id", "revision", "target_generation", "payload_hash", "manifest_hash", "policy_hash", "destination_site", "controller_id", "nonce", "issued_at", "issued_by_controller", "expires", "bounds", "canonicalization", "canonical_encoding", "hash_algorithm", "domain", "state"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "challenge_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "action": { "enum": ["extension", "forced-preemption", "displacement", "pipeline", "operator-admission"] },
+        "requester": { "$ref": "common.schema.json#/$defs/principal" },
+        "lane": { "anyOf": [{ "$ref": "common.schema.json#/$defs/lane_ref" }, { "type": "null" }] },
+        "booking_id": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] },
+        "revision": { "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+        "target_generation": { "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+        "payload_hash": { "$ref": "common.schema.json#/$defs/sha256" },
+        "manifest_hash": { "anyOf": [{ "$ref": "common.schema.json#/$defs/sha256" }, { "type": "null" }] },
+        "policy_hash": { "$ref": "common.schema.json#/$defs/sha256" },
+        "destination_site": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "controller_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "nonce": { "$ref": "common.schema.json#/$defs/identifier" },
+        "issued_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "issued_by_controller": { "const": true },
+        "expires": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "bounds": { "$ref": "#/$defs/bounds" },
+        "canonicalization": { "const": "JCS-RFC8785" },
+        "canonical_encoding": { "const": "UTF-8" },
+        "hash_algorithm": { "const": "SHA-256" },
+        "domain": { "const": "flightctl/approval/v1" },
+        "state": { "enum": ["issued", "expired", "revoked"] }
+      }
+    }
+  },
+  "x-examples": {
+    "valid": [
+      { "schema_version": 1, "id": "approval-a", "challenge_id": "challenge-a", "challenge_nonce": "nonce-a", "action": "forced-preemption", "requester": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "subject-a" }, "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "booking_id": null, "revision": null, "target_generation": 4, "bounds": { "max_s": 120, "max_end": "2026-09-27T21:00:00Z" }, "reason": "operator intervention", "nonce": "nonce-a", "expires": "2026-09-27T20:05:00Z", "approver": null, "approved_at": null, "proof": null, "verified_evidence": null, "consumed_at": null, "destination_site": "site-a", "controller_id": "controller-a", "payload_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "manifest_hash": null, "policy_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "challenge_policy_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "challenge_manifest_hash": null, "canonicalization": "JCS-RFC8785", "canonical_encoding": "UTF-8", "hash_algorithm": "SHA-256", "domain": "flightctl/approval/v1", "signed_fields": ["id", "action", "requester", "lane", "booking_id", "revision", "target_generation", "bounds", "reason", "nonce", "expires", "destination_site", "controller_id", "payload_hash", "manifest_hash", "policy_hash", "challenge_id", "challenge_nonce"], "state": "issued" },
+      { "schema_version": 1, "id": "approval-pipeline", "challenge_id": "challenge-pipeline", "challenge_nonce": "nonce-pipeline", "action": "pipeline", "requester": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "subject-a" }, "lane": null, "booking_id": null, "revision": 3, "target_generation": null, "bounds": { "max_s": 600, "max_end": "2026-09-27T21:00:00Z" }, "reason": "pipeline approval", "nonce": "nonce-pipeline", "expires": "2026-09-27T20:05:00Z", "approver": null, "approved_at": null, "proof": null, "verified_evidence": null, "consumed_at": null, "destination_site": "site-b", "controller_id": "controller-b", "payload_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "manifest_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "policy_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "challenge_policy_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "challenge_manifest_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "canonicalization": "JCS-RFC8785", "canonical_encoding": "UTF-8", "hash_algorithm": "SHA-256", "domain": "flightctl/approval/v1", "signed_fields": ["id", "action", "requester", "lane", "booking_id", "revision", "target_generation", "bounds", "reason", "nonce", "expires", "destination_site", "controller_id", "payload_hash", "manifest_hash", "policy_hash", "challenge_id", "challenge_nonce"], "state": "issued" },
+      { "schema_version": 1, "challenge_id": "challenge-a", "action": "pipeline", "requester": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "subject-a" }, "lane": null, "booking_id": null, "revision": null, "target_generation": null, "payload_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "manifest_hash": null, "policy_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "destination_site": "site-a", "controller_id": "controller-a", "nonce": "nonce-a", "issued_at": "2026-09-27T20:00:00Z", "issued_by_controller": true, "expires": "2026-09-27T20:05:00Z", "bounds": { "max_s": 60, "max_end": "2026-09-27T21:00:00Z" }, "canonicalization": "JCS-RFC8785", "canonical_encoding": "UTF-8", "hash_algorithm": "SHA-256", "domain": "flightctl/approval/v1", "state": "issued" }
+    ],
+    "invalid": [
+      { "schema_version": 1, "id": "approval-a", "challenge_id": "challenge-a", "challenge_nonce": "nonce-a", "action": "forced-preemption", "requester": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "subject-a" }, "lane": null, "booking_id": null, "revision": null, "target_generation": 4, "bounds": { "max_s": 120, "max_end": "2026-09-27T21:00:00Z" }, "reason": "operator intervention", "nonce": "nonce-a", "expires": "2026-09-27T20:05:00Z", "approver": null, "approved_at": null, "proof": { "scheme": "ssh-sk", "key_id": "key-a", "namespace": "flightctl/approval/v1", "encoding": "openssh-ssh-sk-signature/base64", "signature_b64": "sig" }, "verified_evidence": null, "consumed_at": null, "destination_site": "site-a", "controller_id": "controller-a", "payload_hash": "bad", "manifest_hash": null, "policy_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "challenge_policy_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "challenge_manifest_hash": null, "canonicalization": "JCS-RFC8785", "canonical_encoding": "UTF-8", "hash_algorithm": "SHA-256", "domain": "flightctl/approval/v1", "signed_fields": ["id"], "state": "approved" }
+    ]
+  }
+}

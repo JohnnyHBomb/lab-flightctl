@@ -1,0 +1,5 @@
+{
+  "family": "nvidia",
+  "raw": "NVIDIA TITAN RTX,24576,535.1,nvidia\n",
+  "expected": { "vendor": "nvidia", "model": "NVIDIA TITAN RTX", "vram_bytes": 25769803776, "driver": "535.1", "count": 1 }
+}
