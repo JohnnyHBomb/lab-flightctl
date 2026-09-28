@@ -134,6 +134,11 @@ class SQLiteStore:
                 PRIMARY KEY(queue_id, dependency_queue_id),
                 FOREIGN KEY(queue_id) REFERENCES queue_entries(queue_id) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS queue_admissions (
+                queue_id TEXT PRIMARY KEY,
+                record_json TEXT NOT NULL,
+                FOREIGN KEY(queue_id) REFERENCES queue_entries(queue_id) ON DELETE CASCADE
+            );
             CREATE TABLE IF NOT EXISTS approvals (
                 approval_id TEXT PRIMARY KEY,
                 state TEXT NOT NULL,
@@ -318,6 +323,19 @@ class SQLiteStore:
         else:
             rows = (connection or self.connection).execute("SELECT record_json FROM queue_entries WHERE lane_id=? ORDER BY sequence,queue_id", (lane_id,)).fetchall()
         return [dict(_load(row[0])) for row in rows]
+
+    def put_queue_admission(self, queue_id: str, admission: Mapping[str, Any], *, connection: sqlite3.Connection | None = None) -> None:
+        (connection or self.connection).execute(
+            "INSERT INTO queue_admissions(queue_id,record_json) VALUES(?,?) ON CONFLICT(queue_id) DO UPDATE SET record_json=excluded.record_json",
+            (str(queue_id), _json(admission)),
+        )
+
+    def get_queue_admission(self, queue_id: str, *, connection: sqlite3.Connection | None = None) -> dict[str, Any] | None:
+        row = (connection or self.connection).execute("SELECT record_json FROM queue_admissions WHERE queue_id=?", (str(queue_id),)).fetchone()
+        return dict(_load(row[0])) if row else None
+
+    def delete_queue_admission(self, queue_id: str, *, connection: sqlite3.Connection | None = None) -> None:
+        (connection or self.connection).execute("DELETE FROM queue_admissions WHERE queue_id=?", (str(queue_id),))
 
     def put_approval(self, approval: Mapping[str, Any], *, connection: sqlite3.Connection | None = None) -> None:
         record = dict(approval)

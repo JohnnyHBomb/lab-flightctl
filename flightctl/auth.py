@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import copy
 import hashlib
 import json
 import math
@@ -22,6 +23,21 @@ from typing import Any, Callable, Iterable, Mapping
 
 
 DOMAIN = "flightctl/approval/v1"
+LOCAL_ACTION_DOMAIN = "flightctl/local-action/v1"
+LOCAL_ACTION_FIELDS = (
+    "schema",
+    "op",
+    "lane",
+    "args",
+    "requester",
+    "pipeline",
+    "content_labels",
+    "batch",
+    "destination_site",
+    "controller_id",
+    "policy_hash",
+    "manifest_hash",
+)
 APPROVAL_SIGNED_FIELDS = (
     "id",
     "action",
@@ -185,6 +201,92 @@ def approval_signing_bytes(approval: Mapping[str, Any]) -> bytes:
 
 def approval_digest(approval: Mapping[str, Any]) -> bytes:
     return hashlib.sha256(approval_signing_bytes(approval)).digest()
+
+
+def local_action_projection(
+    request: Mapping[str, Any],
+    requester: Mapping[str, Any] | None = None,
+    *,
+    destination_site: str,
+    controller_id: str,
+    policy_hash: str,
+    manifest_hash: None = None,
+) -> dict[str, Any]:
+    """Project a validated local execution request for approval binding.
+
+    The request identity and approval selection are deliberately absent from
+    this projection.  The authority supplies the already-authenticated
+    requester and current policy values; callers must validate the execution
+    request before asking for this projection.
+    """
+
+    if not isinstance(request, Mapping) or request.get("schema") != 1:
+        raise AuthError("local action request is invalid")
+    if request.get("op") not in {"acquire", "renew", "release", "claim", "queue", "book", "cancel", "preempt", "chat-load", "chat-unload"}:
+        raise AuthError("local action operation is invalid")
+    if "lane" not in request or not isinstance(request.get("args"), Mapping):
+        raise AuthError("local action request is incomplete")
+
+    admission = request.get("admission")
+    if admission is None:
+        admission = {}
+    if not isinstance(admission, Mapping):
+        raise AuthError("local action admission is invalid")
+    if admission.get("delegation") is not None:
+        raise AuthError("delegated local actions are not supported")
+    if request["args"].get("signed_manifest") is not None:
+        raise AuthError("manifest-backed local actions are not supported")
+    if manifest_hash is not None:
+        raise AuthError("manifest-backed local actions are not supported")
+
+    labels = admission.get("content_labels", [])
+    if not isinstance(labels, list) or any(not isinstance(label, str) for label in labels):
+        raise AuthError("local action content labels are invalid")
+    effective_requester = requester
+    if effective_requester is None:
+        ingress = admission.get("ingress")
+        if not isinstance(ingress, Mapping):
+            raise AuthError("local action requester is missing")
+        effective_requester = ingress.get("subject") or ingress.get("actor")
+    if not isinstance(effective_requester, Mapping):
+        raise AuthError("local action requester is invalid")
+    if not isinstance(destination_site, str) or not isinstance(controller_id, str) or not isinstance(policy_hash, str):
+        raise AuthError("local action authority binding is invalid")
+
+    args = copy.deepcopy(dict(request["args"]))
+    args.pop("approval_id", None)
+    return {
+        "schema": 1,
+        "op": request["op"],
+        "lane": copy.deepcopy(request["lane"]),
+        "args": args,
+        "requester": copy.deepcopy(dict(effective_requester)),
+        "pipeline": copy.deepcopy(admission.get("pipeline")),
+        "content_labels": copy.deepcopy(labels),
+        "batch": copy.deepcopy(admission.get("batch")),
+        "destination_site": destination_site,
+        "controller_id": controller_id,
+        "policy_hash": policy_hash,
+        "manifest_hash": None,
+    }
+
+
+def local_action_canonical_bytes(projection: Mapping[str, Any]) -> bytes:
+    """Serialize the ordered local-action projection with RFC 8785 JCS."""
+
+    if not isinstance(projection, Mapping) or any(field not in projection for field in LOCAL_ACTION_FIELDS):
+        raise AuthError("local action projection is incomplete")
+    return canonical_bytes([[field, projection[field]] for field in LOCAL_ACTION_FIELDS])
+
+
+def local_action_digest(projection: Mapping[str, Any]) -> str:
+    """Return the domain-separated local-action payload hash."""
+
+    canonical = local_action_canonical_bytes(projection)
+    return hashlib.sha256(LOCAL_ACTION_DOMAIN.encode("utf-8") + b"\0" + canonical).hexdigest()
+
+
+local_action_payload_hash = local_action_digest
 
 
 # These aliases make the normative operation easy to discover without making

@@ -7,7 +7,7 @@ import struct
 
 import pytest
 
-from flightctl.auth import ApprovalVerifier, AuthError, KeyRecord, approval_digest, approval_projection, canonical_json, ed25519_public_key, ed25519_sign
+from flightctl.auth import ApprovalVerifier, AuthError, KeyRecord, approval_digest, approval_projection, canonical_json, ed25519_public_key, ed25519_sign, local_action_digest, local_action_projection
 from tests.authority.helpers import PRINCIPAL, make_authority, request
 
 
@@ -39,7 +39,12 @@ def test_approval_proof_binding(tmp_path):
     verifier = ApprovalVerifier({"key-a": KeyRecord(ed25519_public_key(seed), evidence={"verifier": "key-a", "user_presence": "verified", "user_verification": "verified"}, application=_SECURITY_KEY_APPLICATION)})
     pipelines = [{"pipeline_id": "interactive", "version": "1.0.0", "revision": 1, "purpose": "interactive inference", "content_policy": ["acceptable-use"], "availability": "approval_required", "partner_overrides": {}, "policy_hash": "b" * 64, "updated_at": "2026-09-28T10:00:00Z"}]
     authority, _transport, _clock = make_authority(tmp_path, pipelines=pipelines, approval_verifier=verifier)
-    approval_request = request("req-challenge", "approval-request", _approval_args(), lane="lane-gpu0")
+    acquire_args = {"purpose": "interactive inference", "class": "batch", "est_s": 30, "max_s": 60, "pipeline_ref": "interactive"}
+    acquire_admission = {"pipeline": {"pipeline_id": "interactive", "version": "1.0.0", "revision": 1, "purpose": "interactive inference", "policy_hash": "b" * 64}, "approval": {"approval_id": "approval-placeholder", "required": True, "consume_atomically": True}}
+    acquire_request = request("req-approved-acquire", "acquire", acquire_args, admission=acquire_admission)
+    approval_args = _approval_args()
+    approval_args["payload_hash"] = local_action_digest(local_action_projection(acquire_request, PRINCIPAL, destination_site="site-a", controller_id="controller-a", policy_hash="b" * 64))
+    approval_request = request("req-challenge", "approval-request", approval_args, lane="lane-gpu0")
     issued = authority.handle(approval_request, peer="peer-a")
     assert issued["status"] == 200
     record = issued["data"]["approval"]
@@ -61,7 +66,7 @@ def test_approval_proof_binding(tmp_path):
     mutate["signature_b64"] = "!"
     invalid = request("req-invalid-proof", "approve", {"approval_id": record["id"], "proof": mutate, "evidence": approve["args"]["evidence"]})
     assert authority.handle(invalid, peer="peer-a")["status"] == 403
-    acquire = request("req-approved-acquire", "acquire", {"purpose": "interactive inference", "class": "batch", "est_s": 30, "max_s": 60, "pipeline_ref": "interactive"}, admission={"pipeline": {"pipeline_id": "interactive", "version": "1.0.0", "revision": 1, "purpose": "interactive inference", "policy_hash": "b" * 64}, "approval": {"approval_id": record["id"], "required": True, "consume_atomically": True}})
+    acquire = request("req-approved-acquire", "acquire", acquire_args, admission={"pipeline": {"pipeline_id": "interactive", "version": "1.0.0", "revision": 1, "purpose": "interactive inference", "policy_hash": "b" * 64}, "approval": {"approval_id": record["id"], "required": True, "consume_atomically": True}})
     assert authority.handle(acquire, peer="peer-a")["status"] == 200
     replay = request("req-approved-acquire-2", "acquire", {"purpose": "interactive inference", "class": "batch", "est_s": 30, "max_s": 60, "pipeline_ref": "interactive"}, admission={"pipeline": {"pipeline_id": "interactive", "version": "1.0.0", "revision": 1, "purpose": "interactive inference", "policy_hash": "b" * 64}, "approval": {"approval_id": record["id"], "required": True, "consume_atomically": True}})
     assert authority.handle(replay, peer="peer-a")["status"] in {403, 409}

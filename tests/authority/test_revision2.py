@@ -19,6 +19,8 @@ from flightctl.auth import (
     approval_digest,
     ed25519_public_key,
     ed25519_sign,
+    local_action_digest,
+    local_action_projection,
 )
 from flightctl.authority import Authority, request_fingerprint
 from flightctl.store import SQLiteStore, StoreError
@@ -135,7 +137,13 @@ def _genuine_approval_verifier() -> ApprovalVerifier:
     return ApprovalVerifier({"key-a": KeyRecord(ed25519_public_key(bytes(range(32))), application=_SECURITY_KEY_APPLICATION)})
 
 
-def _issue_genuine_approval(authority, request_id: str, *, action: str, peer: str, lane: str | None, booking_id: str | None = None, revision: int | None = None, target_generation: int | None = None, max_s: int = 60, max_end: str = "2026-09-28T10:05:00Z") -> dict[str, object]:
+def _issue_genuine_approval(authority, request_id: str, *, action: str, peer: str, lane: str | None, booking_id: str | None = None, revision: int | None = None, target_generation: int | None = None, token: str | None = None, max_s: int = 60, max_end: str = "2026-09-28T10:05:00Z") -> dict[str, object]:
+    if action == "operator-admission":
+        execution = request(f"{request_id}-execution", "acquire", {"purpose": "benchmark", "class": "operator", "est_s": 1, "max_s": 60}, lane="lane-gpu0", admission={"approval": {"approval_id": "approval-placeholder", "required": True, "consume_atomically": True}})
+    else:
+        execution = request(f"{request_id}-execution", "preempt", {"token": token or "token-abcdefghijklmnop", "approval_id": "approval-placeholder"}, lane="lane-gpu0")
+    policy_hash = authority._current_policy_hash()
+    payload_hash = local_action_digest(local_action_projection(execution, PRINCIPAL, destination_site=authority.site_id, controller_id=authority.controller_id, policy_hash=policy_hash))
     approval_args = {
         "action": action,
         "booking_id": booking_id,
@@ -145,9 +153,9 @@ def _issue_genuine_approval(authority, request_id: str, *, action: str, peer: st
         "reason": "test approval",
         "destination_site": "site-a",
         "controller_id": "controller-a",
-        "payload_hash": "a" * 64,
+        "payload_hash": payload_hash,
         "manifest_hash": None,
-        "policy_hash": "b" * 64,
+        "policy_hash": policy_hash,
     }
     issued = authority.handle(request(request_id, "approval-request", approval_args, lane=lane), peer=peer)
     assert issued["status"] == 200
@@ -305,7 +313,7 @@ def test_revision2_approval_is_consumed_before_stop_effect(tmp_path):
     grant = authority.handle(request("acquire-before-preempt", "acquire", {"purpose": "benchmark", "class": "batch", "est_s": 1, "max_s": 60}), peer="peer-a")
     assert grant["status"] == 200
     lease = grant["data"]["lease"]
-    approval = _issue_genuine_approval(authority, "forced-preemption-approval", action="forced-preemption", peer="peer-op", lane="lane-gpu0", target_generation=lease["generation"], max_end=lease["max_end"])
+    approval = _issue_genuine_approval(authority, "forced-preemption-approval", action="forced-preemption", peer="peer-op", lane="lane-gpu0", target_generation=lease["generation"], token=grant["data"]["token"], max_end=lease["max_end"])
     preempt = request("preempt-once", "preempt", {"token": grant["data"]["token"], "approval_id": approval["id"]})
     result: dict[str, dict[str, object]] = {}
     thread = threading.Thread(target=lambda: result.setdefault("response", authority.handle(preempt, peer="peer-op")))
@@ -754,7 +762,7 @@ def test_revision2_eviction_matrix_allows_only_lower_classes_with_bounded_grace(
     current_booking = displacement_authority.store.get_booking(booking["booking_id"])
     unsigned = displacement_authority.handle(request("unsigned-displacement", "preempt", {"token": lease["token"]}), peer="peer-op")
     assert unsigned["status"] == 403
-    displacement_approval = _issue_genuine_approval(displacement_authority, "displacement-approval-request", action="displacement", peer="peer-op", lane="lane-gpu0", booking_id=booking["booking_id"], revision=current_booking["revision"], max_end=lease["max_end"])
+    displacement_approval = _issue_genuine_approval(displacement_authority, "displacement-approval-request", action="displacement", peer="peer-op", lane="lane-gpu0", booking_id=booking["booking_id"], revision=current_booking["revision"], token=lease["token"], max_end=lease["max_end"])
     displaced = displacement_authority.handle(request("approved-displacement", "preempt", {"token": lease["token"], "approval_id": displacement_approval["id"]}), peer="peer-op")
     assert displaced["status"] == 200
     assert displacement_authority.store.get_booking(booking["booking_id"])["state"] == "displaced"

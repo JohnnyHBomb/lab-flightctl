@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 import secrets
 import sqlite3
 import threading
@@ -28,6 +29,8 @@ from .auth import (
     PeerAuthenticator,
     approval_digest,
     canonical_bytes,
+    local_action_digest,
+    local_action_projection,
 )
 from .store import SQLiteStore, StoreError, StoreUnavailable, utc_text
 
@@ -37,6 +40,7 @@ CLASS_RANK = {name: index for index, name in enumerate(CLASSES)}
 PROTECTED_CLASSES = {"operator", "booked", "batch"}
 ACTIVE_LEASE_STATES = {"starting", "running", "stopping", "quarantined"}
 ACTIVE_QUEUE_STATES = {"queued", "eligible"}
+_CONTENT_LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$")
 
 
 class AuthorityError(RuntimeError):
@@ -193,6 +197,7 @@ class Authority:
             "schema_version": 1,
             "policy_id": policy.get("policy_id", "default"),
             "revision": int(policy.get("revision", 1)),
+            "policy_hash": policy.get("policy_hash"),
             "updated_at": policy.get("updated_at"),
             "purpose_rules": list(policy.get("purpose_rules", ["purpose-required"])),
             "content_rules": list(policy.get("content_rules", [])),
@@ -258,7 +263,8 @@ class Authority:
         return str(self.clock.boot_id()) if hasattr(self.clock, "boot_id") else "boot-unknown"
 
     def _deadline(self, seconds: int | float) -> dict[str, Any]:
-        return {"boot_id": self._boot_id(), "deadline_s": self._monotonic() + float(seconds), "utc_anchor": _time_text(self._utc()), "monotonic_anchor_s": self._monotonic()}
+        anchor = self._monotonic()
+        return {"boot_id": self._boot_id(), "deadline_s": anchor + float(seconds), "utc_anchor": _time_text(self._utc()), "monotonic_anchor_s": anchor}
 
     def _health_tx(self, connection: sqlite3.Connection) -> None:
         now = self._utc()
@@ -494,24 +500,93 @@ class Authority:
             raise _Reject(403, "denied", "class is not configured for this principal", failure_class="policy")
         return requested
 
+    def _admission_content_labels(self, request: Mapping[str, Any]) -> list[str]:
+        admission = request.get("admission")
+        if admission is None:
+            return []
+        if not isinstance(admission, Mapping):
+            raise _Reject(403, "invalid", "admission is invalid", failure_class="client")
+        labels = admission.get("content_labels", [])
+        if not isinstance(labels, list):
+            raise _Reject(403, "invalid", "content_labels must be an array", failure_class="client")
+        if any(not isinstance(label, str) or _CONTENT_LABEL.fullmatch(label) is None for label in labels):
+            raise _Reject(403, "invalid", "content_labels contains an invalid identifier", failure_class="client")
+        if len(labels) != len(set(labels)):
+            raise _Reject(403, "invalid", "content_labels must be unique", failure_class="client")
+        return list(labels)
+
+    def _check_content_policy(self, request: Mapping[str, Any], pipeline: Mapping[str, Any] | None) -> list[str]:
+        labels = self._admission_content_labels(request)
+        site_rules = {str(item) for item in self.policy.get("content_rules", ()) if isinstance(item, str)}
+        if labels and site_rules and not set(labels).issubset(site_rules):
+            raise _Reject(403, "denied", "content label is outside the current site policy", failure_class="policy")
+        if labels and pipeline is not None:
+            pipeline_rules = pipeline.get("content_policy")
+            if not isinstance(pipeline_rules, (list, tuple)) or not set(labels).issubset({str(item) for item in pipeline_rules}):
+                raise _Reject(403, "denied", "content label is outside the current pipeline policy", failure_class="policy")
+        return labels
+
+    def _pipeline_for_binding(self, request: Mapping[str, Any]) -> dict[str, Any] | None:
+        admission = request.get("admission")
+        binding = admission.get("pipeline") if isinstance(admission, Mapping) else None
+        if binding is None:
+            return None
+        if not isinstance(binding, Mapping) or not binding.get("pipeline_id"):
+            raise _Reject(403, "stale_policy", "current pipeline policy binding is invalid", failure_class="policy")
+        pipeline = self.pipelines.get(str(binding["pipeline_id"]))
+        if pipeline is None:
+            raise _Reject(403, "denied", "pipeline is unavailable", failure_class="policy")
+        if binding.get("revision") != pipeline.get("revision") or binding.get("policy_hash") != pipeline.get("policy_hash"):
+            raise _Reject(403, "stale_policy", "pipeline policy binding is stale", failure_class="policy")
+        for field in ("version", "purpose"):
+            if field in binding and binding.get(field) != pipeline.get(field):
+                raise _Reject(403, "stale_policy", "pipeline policy binding is stale", failure_class="policy")
+        self._check_content_policy(request, pipeline)
+        return pipeline
+
+    def _current_policy_hash(self) -> str:
+        configured = self.policy.get("policy_hash")
+        if isinstance(configured, str) and re.fullmatch(r"[A-Fa-f0-9]{64}", configured):
+            return configured
+        policy = copy.deepcopy(self.policy)
+        policy.pop("policy_hash", None)
+        return hashlib.sha256(canonical_bytes(policy)).hexdigest()
+
+    def _local_action_hash(self, request: Mapping[str, Any], context: _Context, pipeline: Mapping[str, Any] | None) -> str:
+        bound_pipeline = self._pipeline_for_binding(request)
+        if pipeline is None:
+            pipeline = bound_pipeline
+        policy_hash = pipeline.get("policy_hash") if pipeline is not None else self._current_policy_hash()
+        if not isinstance(policy_hash, str):
+            raise _Reject(503, "unknown", "current policy hash is unavailable", retryable=True, failure_class="state")
+        try:
+            projection = local_action_projection(
+                request,
+                context.principal,
+                destination_site=self.site_id,
+                controller_id=self.controller_id,
+                policy_hash=policy_hash,
+            )
+            return local_action_digest(projection)
+        except AuthError as exc:
+            raise _Reject(403, "denied", str(exc), failure_class="policy") from exc
+
     def _pipeline_admission(self, request: Mapping[str, Any], args: Mapping[str, Any], context: _Context, *, action: str | None = None, lane: Mapping[str, Any] | None = None, generation: int | None = None, booking_id: str | None = None, max_s: int | None = None, max_end: datetime | None = None) -> tuple[dict[str, Any] | None, str | None]:
         pipeline_ref = args.get("pipeline_ref")
         manifest = args.get("signed_manifest")
-        if pipeline_ref is None and manifest is None:
-            return None, None
+        self._check_content_policy(request, None)
         if manifest is not None:
             # P1 has no manifest execution/ceiling or federation trust model.
             # A signature alone cannot establish those unsupported semantics.
             raise _Reject(403, "denied", "signed manifests are not supported", failure_class="policy")
-        pipeline = self.pipelines.get(str(pipeline_ref)) if pipeline_ref is not None else None
+        pipeline = self._pipeline_for_binding(request)
+        if pipeline_ref is None and pipeline is None:
+            return None, None
         if pipeline is None:
-            raise _Reject(403, "denied", "pipeline is unavailable", failure_class="policy")
-        admission = request.get("admission") if isinstance(request.get("admission"), Mapping) else {}
-        supplied_binding = admission.get("pipeline") if isinstance(admission, Mapping) else None
-        if pipeline_ref is not None and not isinstance(supplied_binding, Mapping):
             raise _Reject(403, "stale_policy", "current pipeline policy binding is required", failure_class="policy")
-        if supplied_binding is not None and (supplied_binding.get("pipeline_id") != pipeline.get("pipeline_id") or supplied_binding.get("revision") != pipeline.get("revision") or supplied_binding.get("policy_hash") != pipeline.get("policy_hash")):
-            raise _Reject(403, "stale_policy", "pipeline policy binding is stale", failure_class="policy")
+        if pipeline_ref is not None and pipeline_ref != pipeline.get("pipeline_id"):
+            raise _Reject(403, "stale_policy", "pipeline reference and binding differ", failure_class="policy")
+        admission = request.get("admission") if isinstance(request.get("admission"), Mapping) else {}
         destination = self.site_id
         availability = pipeline.get("availability")
         if destination in pipeline.get("partner_overrides", {}):
@@ -521,6 +596,7 @@ class Authority:
         purpose = str(args.get("purpose", ""))
         if purpose != str(pipeline.get("purpose", "")):
             raise _Reject(403, "denied", "purpose is not current pipeline purpose", failure_class="policy")
+        self._check_content_policy(request, pipeline)
         if manifest is not None and manifest.get("policy_hash") != pipeline.get("policy_hash"):
             raise _Reject(403, "stale_policy", "manifest policy is stale", failure_class="policy")
         approval_id = None
@@ -630,23 +706,34 @@ class Authority:
         }
         message: dict[str, Any] = {"schema_version": 1, "kind": kind, "controller_request_id": f"executor-{uuid.uuid4().hex}", "execution_policy": execution_policy, "identity": identity}
         if kind == "stop":
-            message["stop_authority"] = stop_authority or {"mode": "controller-match", "approval_id": None}
+            authority = stop_authority or {"mode": "controller-match", "approval_id": None}
+            if not isinstance(authority, Mapping):
+                return False, None, "stop authority is invalid"
+            mode = authority.get("mode")
+            approval_id = authority.get("approval_id")
+            if mode not in {"controller-match", "owner-release", "approved-forced-preemption"}:
+                return False, None, "stop authority is invalid"
+            if mode in {"controller-match", "owner-release"} and approval_id is not None:
+                return False, None, "stop authority approval binding is invalid"
+            if mode == "approved-forced-preemption" and not isinstance(approval_id, str):
+                return False, None, "forced preemption approval is missing"
+            if lease["class"] in PROTECTED_CLASSES and mode == "controller-match":
+                return False, None, "protected stop requires owner release or forced-preemption approval"
+            message["stop_authority"] = {"mode": mode, "approval_id": approval_id}
         endpoint = str(lane.get("endpoint") or lane.get("host_id"))
         try:
             raw = self.transport.request(endpoint, message, 30.0)
         except Exception:
             return False, None, "executor transport failure"
         if not isinstance(raw, Mapping) or raw.get("status") != "ok":
-            return False, None, "executor outcome is not a confirmed success"
+            return False, None, "executor outcome is not a confirmed response"
         reply = raw.get("response")
         if not isinstance(reply, Mapping):
             # A direct typed executor reply is also accepted, but a bare
             # {status: ok} is intentionally not success.
             reply = raw if raw.get("kind") is not None else None
-        if reply is None or reply.get("kind") != kind or reply.get("ok") is not True or reply.get("uncertain") is not False:
-            return False, None, "executor reply is not a confirmed typed success"
-        if reply.get("error") is not None:
-            return False, None, "executor success contained an error"
+        if reply is None or reply.get("kind") != kind:
+            return False, None, "executor reply is not a confirmed typed response"
         expected_ack = {"reserve": "reserved", "start": "started", "beat": "beat", "stop": "stopped", "inspect": "inspected"}.get(kind)
         if reply.get("acknowledgement") != expected_ack:
             return False, None, "executor acknowledgement mismatch"
@@ -658,12 +745,21 @@ class Authority:
                 return False, None, f"executor identity mismatch: {field}"
         if not isinstance(reply.get("cgroup_occupants"), list) or not isinstance(reply.get("gpu_tenants"), list):
             return False, None, "executor reply omitted occupancy observations"
+        if reply.get("uncertain") is not False:
+            return False, reply, "executor reply is uncertain"
         if kind == "reserve":
+            if reply.get("ok") is not True or reply.get("error") is not None:
+                return False, reply, "executor reserve was not accepted"
             if reply.get("observed_state") not in {"starting", "running"} or reply.get("cgroup_occupants") != [] or reply.get("gpu_tenants") != []:
                 return False, None, "executor reserve did not prove a non-quarantined empty reservation"
-        if kind == "stop":
-            if reply.get("observed_state") != "free" or reply.get("cgroup_occupants") != [] or reply.get("gpu_tenants") != []:
-                return False, None, "executor stop did not prove empty hardware"
+        elif kind == "stop":
+            if reply.get("ok") is True and reply.get("error") is None and reply.get("observed_state") == "free" and reply.get("cgroup_occupants") == [] and reply.get("gpu_tenants") == []:
+                return True, reply, "ok"
+            if reply.get("ok") is False and isinstance(reply.get("error"), str) and reply.get("error") and reply.get("observed_state") == "stopping":
+                return False, reply, "stop accepted; emptiness not yet confirmed"
+            return False, reply, "executor stop did not prove empty hardware"
+        elif reply.get("ok") is not True or reply.get("error") is not None:
+            return False, reply, "executor reply is not a confirmed typed success"
         return True, reply, "ok"
 
     # ---- acquire and lease operations ----------------------------------
@@ -680,6 +776,7 @@ class Authority:
                 entry["state"] = "expired"
                 entry["eligible"] = False
                 self.store.put_queue(entry, connection=connection)
+                self.store.delete_queue_admission(str(entry["queue_id"]), connection=connection)
                 self.store.put_event(
                     self._controller_event(
                         kind="queue",
@@ -875,7 +972,7 @@ class Authority:
     def _grant_data(self, lease: Mapping[str, Any], operation: str, mode: str = "fresh-acquire") -> dict[str, Any]:
         return {"kind": "grant", "operation": operation, "token": lease["token"], "generation": lease["generation"], "lease": copy.deepcopy(dict(lease)), "reservation": copy.deepcopy(lease["reservation"]), "adoption": {"mode": mode, "principal_bound": True, "generation_bound": True, "token_source": "controller-grant" if mode == "fresh-acquire" else "authenticated-adoption"}}
 
-    def _acquire(self, request: Mapping[str, Any], context: _Context, fingerprint: str, *, operation: str = "acquire", forced_booking_id: str | None = None, idempotency_claimed: bool = False) -> dict[str, Any]:
+    def _acquire(self, request: Mapping[str, Any], context: _Context, fingerprint: str, *, operation: str = "acquire", forced_booking_id: str | None = None, idempotency_claimed: bool = False, execution_request: Mapping[str, Any] | None = None) -> dict[str, Any]:
         args = request.get("args", {})
         if not isinstance(args, Mapping) or not isinstance(args.get("purpose"), str) or not args.get("purpose"):
             raise _Reject(403, "denied", "purpose is required", failure_class="policy")
@@ -940,6 +1037,15 @@ class Authority:
             queue_entry = self._queue_eligible(active_queue, str(queue_id) if queue_id else None, effective_class, str(args["purpose"]), context)
             if queue_id and queue_entry is None:
                 raise _Reject(409, "busy", "queue entry is not eligible", retryable=True, failure_class="conflict")
+            if queue_entry is not None:
+                queued_admission = self.store.get_queue_admission(str(queue_entry["queue_id"]), connection=connection)
+                if queued_admission is not None:
+                    admission = request.get("admission") if isinstance(request.get("admission"), Mapping) else {}
+                    current_pipeline_binding = admission.get("pipeline") if isinstance(admission, Mapping) else None
+                    if self._admission_content_labels(request) != list(queued_admission.get("content_labels", [])) or current_pipeline_binding != queued_admission.get("pipeline"):
+                        raise _Reject(403, "denied", "queued admission binding changed", failure_class="policy")
+                    if queued_admission.get("pipeline") is not None:
+                        self._pipeline_for_binding(request)
             future = [item for item in self.store.all_bookings(lane_id=lane["lane_id"], connection=connection) if item.get("state") in {"scheduled", "blocked"} and item.get("booking_id") != booking_id and _parse_time(item["start"]) > now]
             future.sort(key=lambda item: item["start"])
             if future:
@@ -948,6 +1054,8 @@ class Authority:
                 if estimate_end > next_start:
                     raise _Reject(409, "conflict", "estimate crosses next booking", retryable=False, failure_class="conflict", details={"next_booking_id": future[0]["booking_id"], "next_start": future[0]["start"], "fitting_max_s": max(0, int((next_start - now).total_seconds()))})
             generation = int(lane.get("generation", 0)) + 1
+            local_payload_hash = self._local_action_hash(execution_request if execution_request is not None else request, context, pipeline) if approval_id else None
+            current_policy_hash = pipeline.get("policy_hash") if pipeline is not None else self._current_policy_hash()
             if approval_id:
                 desired_end = now + timedelta(seconds=int(args["max_s"]))
                 selected_approval = self.store.get_approval(approval_id, connection=connection)
@@ -961,9 +1069,9 @@ class Authority:
                     generation=generation if approval_action in {"extension", "forced-preemption"} else None,
                     booking_id=booking_id,
                     revision=pipeline.get("revision") if approval_action == "pipeline" and pipeline else None,
-                    payload_hash=(args.get("signed_manifest") or {}).get("canonical_payload_hash") if isinstance(args.get("signed_manifest"), Mapping) else None,
-                    manifest_hash=(args.get("signed_manifest") or {}).get("manifest_hash") if isinstance(args.get("signed_manifest"), Mapping) else None,
-                    policy_hash=pipeline.get("policy_hash") if approval_action == "pipeline" and pipeline else None,
+                    payload_hash=local_payload_hash,
+                    manifest_hash=None,
+                    policy_hash=current_policy_hash,
                     max_s=int(args["max_s"]),
                     max_end=desired_end,
                 )
@@ -975,7 +1083,7 @@ class Authority:
                 booking_end = _parse_time(str(booking["end"]))
                 approved_max_end = booking_end if approved_max_end is None else min(approved_max_end, booking_end)
             if batch_arms is not None:
-                self._persist_batch_queues(connection, batch, batch_arms, lane, context)
+                self._persist_batch_queues(connection, batch, batch_arms, lane, context, request=request)
             lease = self._make_lease(lane, context, args, effective_class, generation, booking_id=str(booking_id) if booking_id else None, approved_max_end=approved_max_end)
             lane_new = dict(lane)
             lane_new["state"] = "starting"
@@ -1023,6 +1131,7 @@ class Authority:
                 queue_entry["eligible"] = False
                 queue_entry["reservation"] = {"lane": lane["lane"], "generation": generation, "state": "reserved"}
                 self.store.put_queue(queue_entry, connection=connection)
+                self.store.delete_queue_admission(str(queue_entry["queue_id"]), connection=connection)
             if booking_id:
                 booking = self.store.get_booking(str(booking_id), connection=connection)
                 if booking:
@@ -1039,7 +1148,7 @@ class Authority:
                 self.store.put_event(self._event(kind=operation, state="starting", request_id=str(request["request_id"]), context=context, lane=final_lease["lane"], generation=final_lease["generation"], reason="reserve acknowledged", data={"lease_id": final_lease["lease_id"], "token_redacted": True}), connection=connection)
             return response
 
-    def _lookup_token(self, connection: sqlite3.Connection, request: Mapping[str, Any], context: _Context, *, allow_preempt: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
+    def _lookup_token(self, connection: sqlite3.Connection, request: Mapping[str, Any], context: _Context, *, allow_preempt: bool = False, allow_stopping: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
         args = request.get("args", {})
         if "generation" in args or "generation_source" in args:
             raise _Reject(403, "denied", "token operations derive generation from the server", failure_class="policy")
@@ -1057,7 +1166,12 @@ class Authority:
         lane = self.store.get_lane(str(request.get("lane")), connection=connection)
         if lane is None:
             raise _Reject(503, "unknown", "lane state unavailable", retryable=True, failure_class="state")
-        if reservation_status != "acknowledged" or lease.get("state") not in {"starting", "running"} or lane.get("state") == "quarantined":
+        allowed_states = {"starting", "running"}
+        if allow_stopping:
+            allowed_states.add("stopping")
+        if lane.get("generation") != lease.get("generation"):
+            raise _Reject(409, "conflict", "token generation is no longer current", failure_class="conflict")
+        if reservation_status != "acknowledged" or lease.get("state") not in allowed_states or lane.get("state") == "quarantined":
             raise _Reject(503, "unknown", "lease requires reconciliation", retryable=True, failure_class="state")
         return lease, lane
 
@@ -1068,10 +1182,13 @@ class Authority:
                 return existing
             self._health_tx(connection)
             self._claim_request(connection, request, context, fingerprint)
-            lease, lane = self._lookup_token(connection, request, context, allow_preempt=preempt)
+            lease, lane = self._lookup_token(connection, request, context, allow_preempt=preempt, allow_stopping=not preempt)
             approval = None
             approval_action = "forced-preemption"
             target_booking = None
+            local_payload_hash = None
+            approval_pipeline = self._pipeline_for_binding(request) if preempt else None
+            current_policy_hash = approval_pipeline.get("policy_hash") if approval_pipeline is not None else self._current_policy_hash()
             if preempt:
                 caller_class = "operator" if {"operator", "john"} & set(context.roles) else next((item for item in CLASSES if item in context.roles), None)
                 if caller_class not in {"operator", "booked", "batch"}:
@@ -1089,7 +1206,20 @@ class Authority:
                         approval_action = "displacement"
                     approval_record = self.store.get_approval(str(approval_id), connection=connection)
                     approval_lane = lease["lane"] if approval_record and approval_record.get("lane") is not None else None
-                    approval = self._approval_row(connection, str(approval_id), action=approval_action, context=context, lane=approval_lane, generation=None if approval_action == "displacement" else int(lease["generation"]), booking_id=target_booking["booking_id"] if target_booking is not None else None, revision=int(target_booking["revision"]) if target_booking is not None else None, max_end=_parse_time(lease["max_end"]))
+                    local_payload_hash = self._local_action_hash(request, context, approval_pipeline)
+                    approval = self._approval_row(
+                        connection,
+                        str(approval_id),
+                        action=approval_action,
+                        context=context,
+                        lane=approval_lane,
+                        generation=None if approval_action == "displacement" else int(lease["generation"]),
+                        booking_id=target_booking["booking_id"] if target_booking is not None else None,
+                        revision=int(target_booking["revision"]) if target_booking is not None else None,
+                        payload_hash=local_payload_hash,
+                        policy_hash=current_policy_hash,
+                        max_end=_parse_time(lease["max_end"]),
+                    )
                     self._consume_approval(connection, approval, context, str(request["request_id"]))
             lease["state"] = "stopping"
             lease["reservation"]["state"] = "stopping"
@@ -1097,13 +1227,48 @@ class Authority:
             lane_new["state"] = "stopping"
             self.store.put_lease(lease, reservation_status="acknowledged", connection=connection)
             self.store.put_lane(lane_new, connection=connection)
-        ok, _reply, why = self._executor_call(lane, lease, "stop", stop_authority={"mode": "approved-forced-preemption" if approval is not None else "controller-match", "approval_id": request["args"].get("approval_id") if approval is not None else None})
+        stop_authority = {
+            "mode": "approved-forced-preemption" if approval is not None else ("controller-match" if preempt else "owner-release"),
+            "approval_id": request["args"].get("approval_id") if approval is not None else None,
+        }
+        ok, reply, why = self._executor_call(lane, lease, "stop", stop_authority=stop_authority)
         with self.store.transaction() as connection:
             current = self.store.get_lease(lease_id=lease["lease_id"], connection=connection)
             if current is None:
                 raise _Reject(503, "unknown", "lease disappeared during stop", retryable=True, failure_class="state")
             lease_current, _status = current
+            lane_current = self.store.get_lane(lease_current["lane"]["lane_id"], connection=connection)
+            # Another owner's retry may finish and admit a successor while
+            # this stop is in flight. Its late reply cannot change that state.
+            if (lane_current is None or lane_current.get("generation") != lease["generation"]
+                    or lane_current.get("state") != "stopping" or _status != "acknowledged"
+                    or lease_current.get("state") != "stopping"):
+                response = self._response(str(request["request_id"]), 409, error=self._error("conflict", "reservation changed during stop", retryable=False, failure_class="conflict"))
+                self._remember(connection, request, context, fingerprint, response)
+                return response
             if not ok:
+                if not preempt and isinstance(reply, Mapping) and reply.get("kind") == "stop" and reply.get("acknowledgement") == "stopped" and reply.get("ok") is False and isinstance(reply.get("error"), str) and reply.get("error") and reply.get("observed_state") == "stopping" and reply.get("uncertain") is False:
+                    lease_current["state"] = "stopping"
+                    lease_current["reservation"]["state"] = "stopping"
+                    self.store.put_lease(lease_current, reservation_status="acknowledged", connection=connection)
+                    lane_pending = self.store.get_lane(lease_current["lane"]["lane_id"], connection=connection) or dict(lane)
+                    lane_pending["state"] = "stopping"
+                    self.store.put_lane(lane_pending, connection=connection)
+                    retry_after = max(1, int(self.policy["admission"].get("queue_refresh_s", 60)))
+                    wait_deadline = self._deadline(max(1, int(self.policy["admission"].get("queue_expiry_s", 600))))
+                    data = {
+                        "kind": "pending",
+                        "operation": "release",
+                        "request_id": str(request["request_id"]),
+                        "queue_id": None,
+                        "retry_after_s": retry_after,
+                        "wait_deadline": wait_deadline,
+                        "reason": "matching stop accepted; emptiness not yet confirmed",
+                    }
+                    response = self._response(str(request["request_id"]), 202, data=data)
+                    self._remember(connection, request, context, fingerprint, response)
+                    self.store.put_event(self._event(kind="release", state="stopping", request_id=str(request["request_id"]), context=context, lane=lease_current["lane"], generation=lease_current["generation"], reason="matching stop accepted; emptiness not yet confirmed", data={"lease_id": lease_current["lease_id"], "token_redacted": True}), connection=connection)
+                    return response
                 lease_current["state"] = "quarantined"
                 lease_current["reservation"]["state"] = "quarantined"
                 self.store.put_lease(lease_current, reservation_status="uncertain", connection=connection)
@@ -1223,11 +1388,11 @@ class Authority:
         # again there, so it cannot be silently shifted by a concurrent caller.
         acquire_args = {"purpose": booking["purpose"], "class": "booked", "est_s": max(1, int((end - now).total_seconds())), "max_s": max(1, int((end - now).total_seconds())), "booking_id": booking_id}
         acquire_request = dict(request, op="acquire", args=acquire_args)
-        return self._acquire(acquire_request, context, fingerprint, operation="claim", forced_booking_id=booking_id, idempotency_claimed=True)
+        return self._acquire(acquire_request, context, fingerprint, operation="claim", forced_booking_id=booking_id, idempotency_claimed=True, execution_request=request)
 
     # ---- queues and batches ---------------------------------------------
 
-    def _persist_batch_queues(self, connection: sqlite3.Connection, batch: Mapping[str, Any], arms: Iterable[Mapping[str, Any]], lane: Mapping[str, Any], context: _Context) -> None:
+    def _persist_batch_queues(self, connection: sqlite3.Connection, batch: Mapping[str, Any], arms: Iterable[Mapping[str, Any]], lane: Mapping[str, Any], context: _Context, *, request: Mapping[str, Any] | None = None) -> None:
         batch_record = dict(batch)
         batch_record["batch_id"] = str(batch_record["batch_id"])
         batch_record["arms"] = [dict(item) for item in arms]
@@ -1259,6 +1424,12 @@ class Authority:
                 "eligible": predecessor_id is None,
             }
             self.store.put_queue(entry, connection=connection)
+            if request is not None:
+                admission = request.get("admission") or {}
+                self.store.put_queue_admission(queue_id, {
+                    "content_labels": self._admission_content_labels(request),
+                    "pipeline": copy.deepcopy(admission.get("pipeline")),
+                }, connection=connection)
             dependency_names = {str(item) for item in dependencies}
             if predecessor is not None:
                 dependency_names.add(str(predecessor))
@@ -1301,6 +1472,7 @@ class Authority:
                 raise _Reject(403, "denied", "unknown lane", failure_class="policy")
             if action == "add":
                 effective_class = self._effective_class(args, context)
+                self._pipeline_for_binding(request)
                 active = self._queue_active(connection, str(lane_id))
                 sequence = max([int(item.get("sequence", 0)) for item in self.store.all_queue(lane_id=str(lane_id), connection=connection)] + [0]) + 1
                 entry = {
@@ -1319,6 +1491,15 @@ class Authority:
                     "eligible": not active,
                 }
                 self.store.put_queue(entry, connection=connection)
+                admission = request.get("admission") if isinstance(request.get("admission"), Mapping) else {}
+                self.store.put_queue_admission(
+                    entry["queue_id"],
+                    {
+                        "content_labels": self._admission_content_labels(request),
+                        "pipeline": copy.deepcopy(admission.get("pipeline")) if isinstance(admission, Mapping) else None,
+                    },
+                    connection=connection,
+                )
                 data = self._mutation("queue", "queue", entry["queue_id"], "queued", entry["lane"], None)
                 response = self._response(str(request["request_id"]), 200, data=data)
                 self._remember(connection, request, context, fingerprint, response)
@@ -1348,6 +1529,7 @@ class Authority:
                 entry["state"] = "removed"
                 entry["eligible"] = False
                 self.store.put_queue(entry, connection=connection)
+                self.store.delete_queue_admission(str(entry["queue_id"]), connection=connection)
                 data = self._mutation("queue", "queue", entry["queue_id"], "removed", entry["lane"], None)
                 response = self._response(str(request["request_id"]), 200, data=data)
                 self._remember(connection, request, context, fingerprint, response)
@@ -1558,7 +1740,7 @@ class Authority:
         args = request.get("args", {})
         acquire_args = {"purpose": args.get("purpose"), "class": "service", "est_s": 1, "max_s": 600, "pipeline_ref": args.get("pipeline_ref")}
         acquire_request = dict(request, op="acquire", args=acquire_args)
-        return self._acquire(acquire_request, context, fingerprint, operation="chat-load")
+        return self._acquire(acquire_request, context, fingerprint, operation="chat-load", execution_request=request)
 
     def _register_chat_occupant(self, connection: sqlite3.Connection, request: Mapping[str, Any], context: _Context, lease: Mapping[str, Any]) -> dict[str, Any]:
         """Commit occupant registration with the reservation result and replay record."""
@@ -1738,6 +1920,7 @@ class Authority:
             actual_peer = ingress_peer if ingress_peer is not None else peer
             context = self._authenticate(actual_peer)
             self._validate_args_shape(str(request["op"]), request["args"])
+            self._admission_content_labels(request)
             supplied = request.get("request_fingerprint")
             expected = request_fingerprint(request, principal=context.principal)
             if supplied is None:
@@ -1747,6 +1930,13 @@ class Authority:
             else:
                 fingerprint = str(supplied)
             self._idempotency_scope(request)
+            # Replay authenticates and binds the original request, but does
+            # not readmit an action that has already committed.
+            with self.store.transaction() as connection:
+                existing = self._existing(connection, request, context, fingerprint)
+                if existing is not None:
+                    return existing
+            self._check_content_policy(request, None)
             op = str(request["op"])
             if op in {"acquire", "chat-load"}:
                 return self._acquire(request, context, fingerprint) if op == "acquire" else self._chat_load(request, context, fingerprint)

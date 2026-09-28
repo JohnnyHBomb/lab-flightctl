@@ -115,16 +115,15 @@ def test_retired_lease_is_not_projected_over_its_successor(tmp_path, monkeypatch
     assert projection["data"]["windows"][0]["end"] == second["data"]["lease"]["max_end"]
 
 
-def test_frozen_protected_voluntary_release_contract_gap(tmp_path):
-    """Document the unresolved P0 gap; this is not release acceptance."""
+def test_protected_voluntary_release_uses_owner_authority(tmp_path):
+    """A matching owner's release is distinct from forced preemption."""
     authority, transport, _ = make_authority(tmp_path)
     grant = authority.handle(request("first", "acquire", {"purpose": "benchmark", "class": "batch", "est_s": 1, "max_s": 60}), peer="peer-a")
     assert authority.handle(request("release", "release", {"token": grant["data"]["token"]}), peer="peer-a")["status"] == 200
     validate_instance(transport.calls[0]["message"], "executor-v1.schema.json")
     stop = transport.calls[1]["message"]
-    assert stop["stop_authority"] == {"mode": "controller-match", "approval_id": None}
-    with pytest.raises(ContractError):
-        validate_instance(stop, "executor-v1.schema.json")
+    assert stop["stop_authority"] == {"mode": "owner-release", "approval_id": None}
+    validate_instance(stop, "executor-v1.schema.json")
 
 
 def test_frozen_rpc_vectors_against_production_handlers(tmp_path):
