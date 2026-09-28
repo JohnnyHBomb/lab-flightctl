@@ -93,3 +93,13 @@ The file-backed rehearsal is not assembled acceptance. Unknown occupancy is
 quarantined rather than treated as empty, and smoke refuses to reopen after a
 failed drain or a missing/unknown safety gate. Real containment, identity, key
 transport, GPU unloading, and deadline survival remain later deployment gates.
+
+Injected release backends must report `empty: true` with an empty `occupants`
+list after inspection; missing, unknown, contradictory, or nonempty results
+refuse drain, activation, smoke, and rollback before later rollout steps.
+
+`FLIGHTCTL_INTEGRATION_PHASE=scaffold` explicitly skips assembled acceptance.
+`assembled` remains a failing gate until P6 owns behavioral assertions for all
+nine required scenarios against the real packages, including implementation
+mutations such as free-before-unload. Adapter verdicts and seam call counts
+cannot satisfy this gate. Any other phase value fails.

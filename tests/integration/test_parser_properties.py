@@ -4,30 +4,17 @@ from __future__ import annotations
 
 import json
 import random
+import copy
 from pathlib import Path
-from typing import Any
+
+import pytest
+from jsonschema.exceptions import ValidationError
 
 from deploy.check_portability import _load_denylist
 from deploy.flightctl_release import ReleaseFailure, _validate_frozen_schema
+from tests.contracts.validation import load_schema, validator
 
 from .support import confirmed_inventory, digest, json_bytes, make_release, run_tool
-
-
-def _parse(raw: bytes) -> Any:
-    try:
-        return json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return None
-
-
-def _project_discovery(value: Any) -> dict[str, Any] | None:
-    if not isinstance(value, dict):
-        return None
-    mapped = {}
-    for key in ("schema_version", "site_id", "revision", "controller", "timezone", "identity_mapping", "chat_lane_order", "hosts", "lanes"):
-        if key in value:
-            mapped[key] = value[key]
-    return mapped
 
 
 def test_bounded_parser_properties() -> None:
@@ -41,21 +28,45 @@ def test_bounded_parser_properties() -> None:
             "lanes": [generator.choice([{}, [], None, "lane"]) for _ in range(generator.randrange(3))],
         }
         raw = json.dumps(candidate, separators=(",", ":")).encode("utf-8")
-        parsed = _parse(raw)
-        projection = _project_discovery(parsed)
-        assert projection is None or isinstance(projection, dict)
+        parsed = json.loads(raw)
 
         # Exercise the product's frozen-document parser, not only the local
         # generator helpers. Invalid candidates must be rejected without
         # escaping the bounded loop.
         for kind, document in (
-            ("inventory", projection or candidate),
-            ("policy", parsed if isinstance(parsed, dict) else candidate),
+            ("inventory", parsed),
+            ("policy", parsed),
         ):
             try:
                 _validate_frozen_schema(document, kind)
             except ReleaseFailure:
-                pass
+                continue
+            raise AssertionError(f"{kind} parser accepted a generated invalid candidate")
+
+
+@pytest.mark.parametrize("schema_name,version_field", [
+    ("rpc-envelope-v1.schema.json", "schema"),
+    ("discovery-v1.schema.json", "schema_version"),
+])
+def test_bounded_rpc_and_discovery_schemas(schema_name, version_field) -> None:
+    """Exercise the actual frozen schemas, including a valid control."""
+    generator = random.Random(20260928)
+    check = validator(schema_name)
+    examples = load_schema(schema_name)["x-examples"]["valid"]
+    for example in examples:
+        check.validate(example)
+    # The RPC schema also contains a valid stored idempotency record, which
+    # has no wire-envelope version field.
+    versioned = [example for example in examples if version_field in example]
+    assert versioned
+    for index in range(128):
+        candidate = copy.deepcopy(generator.choice(versioned))
+        if index % 2:
+            candidate.pop(version_field)
+        else:
+            candidate[version_field] = generator.choice([None, "1", 2, -1, [], {}])
+        with pytest.raises(ValidationError):
+            check.validate(json.loads(json.dumps(candidate)))
 
 
 def test_denylist_parser_is_bounded_and_fail_closed(tmp_path) -> None:

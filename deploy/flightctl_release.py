@@ -905,6 +905,16 @@ class ReleaseManager:
         except Exception:
             pass
 
+    def _inspect_empty(self, release_id: str) -> None:
+        observation = self.backend.inspect_empty(release_id)
+        if (
+            not isinstance(observation, Mapping)
+            or observation.get("empty") is not True
+            or not isinstance(observation.get("occupants"), list)
+            or observation["occupants"]
+        ):
+            raise ReleaseFailure("occupancy is not confirmed empty", code="occupancy-unknown")
+
     def _staged_dir(self, release_id: str) -> Path:
         return self.paths.staging_dir / release_id
 
@@ -1071,7 +1081,7 @@ class ReleaseManager:
             self.backend.pause_producers()
             self.backend.drain_workloads(release_id)
             self.backend.drain_chat(release_id)
-            self.backend.inspect_empty(release_id)
+            self._inspect_empty(release_id)
         except Exception as exc:
             self._fail_closed("drain failed")
             if isinstance(exc, ReleaseFailure):
@@ -1086,7 +1096,7 @@ class ReleaseManager:
             self.backend.pause_producers()
             self.backend.drain_workloads(release_id)
             self.backend.drain_chat(release_id)
-            self.backend.inspect_empty(release_id)
+            self._inspect_empty(release_id)
             previous_state = dict(self.backend.snapshot_state(release_id))
             snapshot = {
                 "schema_version": SCHEMA_VERSION,
@@ -1134,6 +1144,9 @@ class ReleaseManager:
         if current != release_id:
             self._fail_closed("smoke release mismatch")
             raise ReleaseFailure("smoke release does not match installed release", code="smoke-refused")
+        if state.get("admission") != "open":
+            self._fail_closed("smoke requires an active release")
+            raise ReleaseFailure("smoke requires an active release", code="smoke-refused")
         rollout = manifest.get("rollout")
         if not isinstance(rollout, Mapping) or not rollout.get("gate_order"):
             self._fail_closed("smoke gate order missing")
@@ -1145,7 +1158,7 @@ class ReleaseManager:
         self.backend.close_admission("smoke")
         passed: list[str] = []
         try:
-            self.backend.inspect_empty(release_id)
+            self._inspect_empty(release_id)
             for gate in gate_order:
                 if gate == "hash":
                     self._verify_staged(self._staged_dir(release_id), manifest)
@@ -1205,7 +1218,7 @@ class ReleaseManager:
             self.backend.pause_producers()
             self.backend.drain_workloads(current)
             self.backend.drain_chat(current)
-            self.backend.inspect_empty(current)
+            self._inspect_empty(current)
             newer_snapshot = dict(self.backend.snapshot_state(current))
             self.backend.disable_legacy_writers()
             self.backend.restore_artifacts(manifest)

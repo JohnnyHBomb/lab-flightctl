@@ -215,11 +215,28 @@ class JsonBridgeFake:
         self.systemd = injected.systemd
         self.gpu_probe = injected.gpu_probe
         self.requests: list[dict[str, Any]] = []
+        self.observations: list[dict[str, Any]] = []
 
     def request(self, envelope: Mapping[str, Any]) -> dict[str, Any]:
         request = dict(envelope)
         validate_instance(request, "rpc-envelope-v1.schema.json")
         self.requests.append(request)
+        self.observations.append(
+            {
+                "clock": {
+                    "utc": self.clock.utc(),
+                    "monotonic": self.clock.monotonic(),
+                    "boot_id": self.clock.boot_id(),
+                },
+                "transport": self.transport.request(
+                    "configured-endpoint",
+                    {"op": request["op"], "request_id": request["request_id"]},
+                    timeout_s=1.0,
+                ),
+                "systemd": self.systemd.inspect("bridge-unit", request["request_id"]),
+                "gpu": self.gpu_probe.inspect("bridge-host"),
+            }
+        )
         response = {
             "schema": 1,
             "request_id": request["request_id"],

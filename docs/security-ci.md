@@ -13,10 +13,14 @@ pins the Gitleaks container by digest and ShellCheck archive by version and
 SHA-256, and `deploy/provision-ci-tools` verifies both before adding them to
 the job. `deploy/requirements-ci.lock` pins the Python tooling set; CI installs
 it with `--no-deps` so an unlisted transitive dependency cannot be pulled in.
+Both workflows require `python -m pip check` immediately after installation;
+missing or incompatible dependencies fail the job. The offline scaffold
+rehearsal does not verify a clean Python 3.12 tool installation or security
+scanner execution; those results must be obtained on the CI runner.
 
 The bounded weekly workflow runs parser properties against the frozen schema
 validator, release-stage inventory admission, denylist parsing, and
-RPC-envelope/discovery-shaped JSON. It has its own ten-minute cap and does not
+RPC-envelope/discovery schema validation. It has its own ten-minute cap and does not
 turn missing assembled packages into a passing result.
 
 The other project's security slice is a separate follow-up. It should select

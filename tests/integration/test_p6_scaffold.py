@@ -25,6 +25,26 @@ from tools.check_portability import scan_text
 from .support import P0BoundaryFakes, JsonBridgeFake, confirmed_inventory, digest, json_bytes, make_release, run_tool, state
 
 
+ASSEMBLED_SCENARIOS = (
+    "one concurrent grant",
+    "reserve-before-token/start",
+    "replay without duplication",
+    "fenced late cleanup",
+    "approval tamper denial",
+    "visible successors",
+    "stream-safe eviction",
+    "no reconnect reload",
+    "retained unknown discovery denied admission",
+)
+
+ASSEMBLED_MUTATIONS = (
+    "confirmation-bypass",
+    "denylist-bypass",
+    "reopen-after-failed-drain",
+    "mixed-rollback-versions",
+    "free-before-unload",
+)
+
 def _trace(state_dir: Path) -> list[str]:
     return state(state_dir).get("trace", [])
 
@@ -208,12 +228,14 @@ def test_release_smoke(tmp_path: Path) -> None:
     failed_drain_bundle = make_release(tmp_path / "releases", "failed-drain")
     failed_drain_state = tmp_path / "failed-drain-state"
     assert run_tool(failed_drain_state, "stage", str(failed_drain_bundle)).returncode == 0
+    assert run_tool(failed_drain_state, "activate", "failed-drain").returncode == 0
     failed_drain_runtime = state(failed_drain_state)
     failed_drain_runtime["fail_step"] = "drain_workloads"
     failed_drain_runtime["smoke"] = {gate: "ok" for gate in ["protocol", "hash", "authentication", "local-deadline", "cleanup"]}
     (failed_drain_state / "state.json").write_text(json.dumps(failed_drain_runtime), encoding="utf-8")
     assert run_tool(failed_drain_state, "drain", "failed-drain").returncode != 0
-    assert run_tool(failed_drain_state, "smoke", "failed-drain").returncode != 0
+    smoke_after_failed_drain = run_tool(failed_drain_state, "smoke", "failed-drain")
+    assert smoke_after_failed_drain.returncode != 0
     assert state(failed_drain_state)["admission"] == "closed"
 
 
@@ -472,6 +494,7 @@ def test_ci_security_configuration() -> None:
     assert "mktemp" in workflow and "chmod 600" in workflow and "printf" in workflow
     assert "test -s" in workflow
     assert "--no-deps" in workflow
+    assert "python -m pip check" in active_lines
     assert "gitleaks version" in workflow
     assert "shellcheck --version" in workflow
     assert "semgrep --version" in workflow
@@ -496,6 +519,8 @@ def test_ci_security_configuration() -> None:
     requirements = (Path(__file__).resolve().parents[2] / "deploy" / "requirements-ci.lock").read_text(encoding="utf-8")
     pinned_requirements = [line for line in requirements.splitlines() if line and not line.startswith("#")]
     assert pinned_requirements and all("==" in line and " " not in line for line in pinned_requirements)
+    assert "importlib-metadata==7.1.0" in pinned_requirements
+    assert "zipp==3.19.2" in pinned_requirements
     tool_lock = (Path(__file__).resolve().parents[2] / "deploy" / "ci-tools.lock").read_text(encoding="utf-8")
     assert "GITLEAKS_VERSION=" in tool_lock and "GITLEAKS_IMAGE=" in tool_lock
     assert re.search(r"@sha256:[0-9a-f]{64}", tool_lock)
@@ -506,6 +531,7 @@ def test_ci_security_configuration() -> None:
     parser_active_lines = [line.strip() for line in parser_workflow.splitlines() if line.strip() and not line.lstrip().startswith("#")]
     assert "test_parser_properties.py" in parser_workflow
     assert "--no-deps" in parser_workflow
+    assert "python -m pip check" in parser_active_lines
     assert "run: python -m pytest -q tests/integration/test_parser_properties.py" in parser_active_lines
     assert any(line.startswith("- uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683") for line in parser_active_lines)
     assert any(line.startswith("- uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38") for line in parser_active_lines)
@@ -522,25 +548,21 @@ def test_p0_injected_boundaries() -> None:
     assert bridge.gpu_probe is fakes.gpu_probe
     response = bridge.request(request)
     assert {"generation", "lane", "occupancy", "reachability", "state"} <= set(response["data"])
+    assert bridge.observations
+    assert fakes.clock.calls
+    assert fakes.transport.calls
+    assert fakes.systemd.calls
+    assert fakes.gpu_probe.calls
 
 
 def test_assembled_scenarios() -> None:
     phase = os.environ.get("FLIGHTCTL_INTEGRATION_PHASE", "scaffold")
-    if phase != "assembled":
+    if phase not in {"scaffold", "assembled"}:
+        pytest.fail(f"unknown integration phase: {phase}")
+    if phase == "scaffold":
         pytest.skip("assembled scenarios unexecuted in scaffold phase; real P1-P5/P7 packages are required")
     required = ["flightctl.authority", "flightctl.auth", "flightctl.store", "flightctl.executor", "flightctl.client", "flightctl.discovery"]
     required_paths = ["roster/run_arm.sh", "ondemand/qwen-od-proxy.sh"]
-    scenarios = [
-        "one concurrent grant",
-        "reserve-before-token/start",
-        "replay without duplication",
-        "fenced late cleanup",
-        "approval tamper denial",
-        "visible successors",
-        "stream-safe eviction",
-        "no reconnect reload",
-        "retained unknown discovery denied admission",
-    ]
     missing = []
     for name in required:
         try:
@@ -548,18 +570,31 @@ def test_assembled_scenarios() -> None:
                 missing.append(name)
         except ModuleNotFoundError:
             missing.append(name)
-    missing.extend(name for name in required_paths if not (Path(__file__).resolve().parents[2] / name).is_file())
     empty = []
+    root = Path(__file__).resolve().parents[2]
+    for name in required_paths:
+        path = root / name
+        if not path.is_file():
+            missing.append(name)
+        elif path.stat().st_size == 0:
+            empty.append(name)
+        elif not os.access(path, os.X_OK):
+            empty.append(f"{name} (not executable)")
     for name in required:
         if name in missing:
             continue
         module = __import__(name, fromlist=["*"])
         if not any(not key.startswith("_") and callable(value) for key, value in vars(module).items()):
             empty.append(name)
-    assert not missing and not empty, (
+
+    # P0-only scaffolding cannot certify behavior from adapter booleans or
+    # seam call counts. Replace this refusal only with P6-owned assertions
+    # against the assembled packages and actual implementation mutations.
+    pytest.fail(
         "assembled acceptance incomplete; missing implementations: "
-        + ", ".join(missing + [f"{name} (empty)" for name in empty])
-        + f"; scenarios not executed: {', '.join(scenarios)}"
+        + (", ".join(missing + [f"{name} (empty)" for name in empty]) or "none detected")
+        + f"; scenarios not executed: {', '.join(ASSEMBLED_SCENARIOS)}"
+        + f"; assembled mutations not executed: {', '.join(ASSEMBLED_MUTATIONS)}"
     )
 
 

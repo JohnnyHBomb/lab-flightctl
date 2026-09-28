@@ -21,7 +21,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install locked CI tools
-        run: python -m pip install --no-deps -r deploy/requirements-ci.lock
+        run: |
+          python -m pip install --no-deps -r deploy/requirements-ci.lock
+          python -m pip check
       - name: Provision and verify pinned security tools
         run: |
           test -f deploy/ci-tools.lock
