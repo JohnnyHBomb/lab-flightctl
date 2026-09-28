@@ -376,10 +376,10 @@ def invoke_bridge(command: list[str], request: dict[str, Any], timeout_s: float)
         return "malformed", None
     if not isinstance(response, dict) or response.get("request_id") != request["request_id"]:
         return "mismatched", response
-    if response.get("schema") != 1:
+    if not isinstance(response.get("schema"), int) or isinstance(response.get("schema"), bool) or response["schema"] != 1:
         return "malformed", response
     status = response.get("status")
-    if status not in {200, 202, 403, 409, 503}:
+    if not isinstance(status, (int, float)) or isinstance(status, bool) or status not in {200, 202, 403, 409, 503}:
         return "malformed", response
     return "response", response
 
@@ -452,7 +452,7 @@ def validate_lane_generation(value: Any) -> None:
         fail("registration response reservation lane is malformed", 3)
     if generation is not None and (not isinstance(generation, int) or isinstance(generation, bool) or generation < 1):
         fail("registration response reservation generation is malformed", 3)
-    if state not in RESERVATION_STATES:
+    if not isinstance(state, str) or state not in RESERVATION_STATES:
         fail("registration response reservation state is malformed", 3)
     if state in ACTIVE_RESERVATION_STATES and (lane is None or generation is None):
         fail("registration response reservation lacks active identity", 3)
@@ -461,9 +461,9 @@ def validate_lane_generation(value: Any) -> None:
 def validate_error(value: Any) -> None:
     if not isinstance(value, dict) or not set(value).issubset(ERROR_KEYS) or not {"code", "message", "retryable", "failure_class"}.issubset(value):
         fail("registration response error is malformed", 3)
-    if value["code"] not in ERROR_CODES or not isinstance(value["message"], str) or not 0 < len(value["message"]) <= 512:
+    if not isinstance(value["code"], str) or value["code"] not in ERROR_CODES or not isinstance(value["message"], str) or not 0 < len(value["message"]) <= 512:
         fail("registration response error diagnostics are malformed", 3)
-    if not isinstance(value["retryable"], bool) or value["failure_class"] not in FAILURE_CLASSES:
+    if not isinstance(value["retryable"], bool) or not isinstance(value["failure_class"], str) or value["failure_class"] not in FAILURE_CLASSES:
         fail("registration response error diagnostics are malformed", 3)
     if "details" in value and not isinstance(value["details"], dict):
         fail("registration response error details are malformed", 3)
@@ -496,7 +496,7 @@ def validate_mutation(value: Any) -> None:
         fail("registration response is not a queue mutation", 3)
     if not is_identifier(value["record_id"]) or not isinstance(value["revision"], int) or isinstance(value["revision"], bool) or value["revision"] < 1:
         fail("registration response mutation identity is malformed", 3)
-    if value["state"] not in {"queued", "eligible"}:
+    if not isinstance(value["state"], str) or value["state"] not in {"queued", "eligible"}:
         fail("registration response did not confirm a queued state", 3)
     validate_lane_generation(value["reservation"])
 
@@ -506,10 +506,10 @@ def validate_registration(response: dict[str, Any], expected_request_id: str) ->
 
     if not isinstance(response, dict) or set(response) != RESPONSE_KEYS:
         fail("registration response envelope is malformed", 3)
-    if response["schema"] != 1 or not is_identifier(response["request_id"]) or response["request_id"] != expected_request_id:
+    if not isinstance(response["schema"], int) or isinstance(response["schema"], bool) or response["schema"] != 1 or not is_identifier(response["request_id"]) or response["request_id"] != expected_request_id:
         fail("registration response envelope identity is malformed", 3)
     status = response["status"]
-    if isinstance(status, bool) or status not in {200, 202, 403, 409, 503}:
+    if not isinstance(status, (int, float)) or isinstance(status, bool) or status not in {200, 202, 403, 409, 503}:
         fail("registration response status is malformed", 3)
     if status == 200:
         if response["error"] is not None:

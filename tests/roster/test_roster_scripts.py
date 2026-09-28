@@ -187,6 +187,19 @@ def test_arm_fresh_lifecycle_uses_stateful_owner_and_injected_hooks(script: Path
     assert not events_named(tmp_path, "claim")
 
 
+def test_arm_forwards_runtime_bounds_to_lifecycle_owner(tmp_path: Path) -> None:
+    result = run_script(
+        ROOT / "roster" / "run_arm.sh",
+        ["lane-a", "purpose", "--est", "7", "--max", "11", "--", "workload"],
+        tmp_path,
+        ROSTER_LIFECYCLE_PLAN=json.dumps(fresh_plan()),
+    )
+    assert result.returncode == 0, result.stderr
+    argv = events_named(tmp_path, "client-argv")[0]["argv"]
+    assert argv[argv.index("--est") + 1] == "7"
+    assert argv[argv.index("--max") + 1] == "11"
+
+
 def test_arm_authenticated_adoption_is_claim_bound_and_releases_same_identity(tmp_path: Path) -> None:
     token = "token-adopt-abcdefghijkl"
     result = run_script(
@@ -299,6 +312,88 @@ def test_delayed_cleanup_requires_matching_confirmation_and_preserves_heartbeat(
     assert state_value(tmp_path)["lanes"]["lane-a"]["state"] == "free"
 
 
+def test_delayed_old_cleanup_cannot_change_the_current_generation(tmp_path: Path) -> None:
+    result = run_script(
+        ROOT / "roster" / "run_arm.sh",
+        ["lane-a", "purpose", "--", "workload"],
+        tmp_path,
+        ROSTER_LIFECYCLE_PLAN=json.dumps(
+            {
+                "acquire": [{"outcome": "success", "generation": 8, "token": "token-current-abcdefghijkl"}],
+                "cleanup": [
+                    {"outcome": "pending", "occupants": ["pid-current"], "advance_s": 1},
+                    {"outcome": "success", "generation": 7, "unit": "unit-old", "invocation": "invocation-old", "occupants": []},
+                ],
+                "heartbeat": [{"outcome": "success"}],
+            }
+        ),
+        ROSTER_CLEANUP_MAX_S="5",
+    )
+    assert result.returncode == 3
+    assert not events_named(tmp_path, "release")
+    assert state_value(tmp_path)["lanes"]["lane-a"]["generation"] == 8
+    assert state_value(tmp_path)["lanes"]["lane-a"]["state"] != "quarantined"
+    assert events_named(tmp_path, "cleanup-attempt")[-1]["identity_checked"] is False
+
+
+def test_competing_acquisition_is_rejected_while_cleanup_is_pending(tmp_path: Path) -> None:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    trace = tmp_path / "trace.jsonl"
+    env = os.environ.copy()
+    env.update(
+        {
+            "FLIGHTCTL_CLIENT": str(CLIENT),
+            "ROSTER_TRACE_FILE": str(trace),
+            "ROSTER_LIFECYCLE_STATE_FILE": str(tmp_path / "lifecycle-state.json"),
+            "ROSTER_PRINCIPAL": "principal-a",
+            "PYTHONPATH": str(ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""),
+            "ROSTER_CLEANUP_HOOK": str(WORKLOAD_HOOK),
+            "ROSTER_WORKLOAD_HOOK_SLEEP_S": "1",
+            "ROSTER_HOOK_TIMEOUT_S": "5",
+            "ROSTER_LIFECYCLE_PLAN": json.dumps(
+                {
+                    "acquire": [{"outcome": "success", "generation": 7, "token": "token-held-abcdefghijkl"}],
+                    "cleanup": [{"outcome": "pending", "occupants": ["pid-held"], "advance_s": 1}, {"outcome": "success", "occupants": []}],
+                    "heartbeat": [{"outcome": "success"}],
+                }
+            ),
+        }
+    )
+    first = subprocess.Popen(
+        [str(ROOT / "roster" / "run_arm.sh"), "lane-a", "purpose", "--", "workload"],
+        cwd=ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        for _ in range(200):
+            if events_named(tmp_path, "cleanup-attempt"):
+                break
+            time.sleep(0.01)
+        else:
+            pytest.fail("first arm did not reach cleanup")
+        second = run_script(
+            ROOT / "roster" / "run_arm.sh",
+            ["lane-a", "purpose", "--", "workload"],
+            tmp_path,
+            ROSTER_ARM_ID="arm-competing",
+            ROSTER_LIFECYCLE_PLAN=json.dumps(fresh_plan()),
+        )
+        assert second.returncode == 1, second.stderr
+        assert len(events_named(tmp_path, "workload")) == 1
+        assert events_named(tmp_path, "rpc-response")[-1]["request_id"] == "arm-competing:acquire"
+    finally:
+        if first.poll() is None:
+            first.terminate()
+        try:
+            first.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            first.kill()
+            first.wait(timeout=5)
+
+
 def test_cleanup_timeout_quarantines_without_fabricating_free(tmp_path: Path) -> None:
     result = run_script(
         ROOT / "roster/run_arm.sh",
@@ -345,6 +440,14 @@ def test_successors_are_visible_before_execution_and_roots_remain_fifo(tmp_path:
     assert next(event for event in events if event["event"] == "queue-observation")["eligible"] == ["arm-a", "arm-root"]
 
 
+def test_reversed_manifest_input_still_waits_for_predecessors(tmp_path: Path) -> None:
+    manifest = one_batch()
+    manifest["arms"] = list(reversed(manifest["arms"]))
+    result = run_queue(manifest, tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert [event["lane"] for event in events_named(tmp_path, "acquire")] == ["lane-a", "lane-b"]
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -377,6 +480,19 @@ def test_registration_validation_is_fail_closed_before_export_or_dispatch(tmp_pa
     assert not events_named(tmp_path, "client-argv")
 
 
+def test_boolean_schema_version_is_rejected_before_real_dispatch(tmp_path: Path) -> None:
+    response = queue_response() | {"schema": True}
+    result = run_queue(
+        one_batch(),
+        tmp_path,
+        ROSTER_BRIDGE_OUTCOMES=json.dumps([{"response": response}]),
+    )
+    assert result.returncode == 3
+    assert result.stdout == ""
+    assert not events_named(tmp_path, "client-argv")
+    assert not events_named(tmp_path, "workload")
+
+
 def test_failure_diagnostics_are_validated_and_secret_details_are_not_exported(tmp_path: Path) -> None:
     response = {
         "schema": 1,
@@ -403,6 +519,38 @@ def test_lost_registration_reply_reuses_identity_and_effect(tmp_path: Path) -> N
     assert requests[0]["request_fingerprint"] == requests[1]["request_fingerprint"]
 
 
+def test_lost_registration_reply_replays_a_durable_effect(tmp_path: Path) -> None:
+    outcome_state = tmp_path / "bridge-outcomes"
+    result = run_queue(
+        one_batch(),
+        tmp_path,
+        ROSTER_BRIDGE_OUTCOMES=json.dumps(["lost-after-effect", "success"]),
+        ROSTER_BRIDGE_OUTCOMES_STATE_FILE=str(outcome_state),
+        ROSTER_REGISTER_ONLY="1",
+    )
+    assert result.returncode == 0, result.stderr
+    assert len(events_named(tmp_path, "bridge-effect")) == 1
+    assert len(events_named(tmp_path, "bridge-replay")) == 1
+    requests = [event["request"] for event in events_named(tmp_path, "bridge-request")]
+    assert len(requests) == 2
+    assert requests[0]["request_id"] == requests[1]["request_id"]
+    assert requests[0]["request_fingerprint"] == requests[1]["request_fingerprint"]
+
+
+def test_lifecycle_success_responses_are_frozen_rpc_envelopes(tmp_path: Path) -> None:
+    result = run_script(
+        ROOT / "roster" / "run_arm.sh",
+        ["lane-a", "purpose", "--", "workload"],
+        tmp_path,
+        ROSTER_LIFECYCLE_PLAN=json.dumps(fresh_plan()),
+    )
+    assert result.returncode == 0, result.stderr
+    responses = [event["response"] for event in events_named(tmp_path, "rpc-envelope")]
+    assert responses
+    for response in responses:
+        validate_instance(response, "rpc-envelope-v1.schema.json")
+
+
 @pytest.mark.parametrize("operation,env", [("acquire", {}), ("claim", {"LANE_TOKEN": "token-adopt-abcdefghijkl", "LANE_GENERATION": "7"})])
 def test_lost_acquire_or_claim_reply_has_one_logical_effect(tmp_path: Path, operation: str, env: dict[str, str]) -> None:
     plan = {operation: [{"outcome": "lost"}], "cleanup": [{"outcome": "success", "occupants": []}]}
@@ -416,6 +564,23 @@ def test_lost_acquire_or_claim_reply_has_one_logical_effect(tmp_path: Path, oper
     assert len(events_named(tmp_path, "workload")) == 1
 
 
+@pytest.mark.parametrize("operation,env", [("acquire", {}), ("claim", {"LANE_TOKEN": "token-adopt-abcdefghijkl", "LANE_GENERATION": "7"})])
+def test_lost_after_effect_persists_acquire_or_claim_before_reply(tmp_path: Path, operation: str, env: dict[str, str]) -> None:
+    plan = {operation: [{"outcome": "lost-after-effect"}]}
+    result = run_script(
+        ROOT / "roster" / "run_arm.sh",
+        ["lane-a", "purpose", "--", "workload"],
+        tmp_path,
+        ROSTER_LIFECYCLE_PLAN=json.dumps(plan),
+        ROSTER_OPERATION_RETRIES="0",
+        **env,
+    )
+    assert result.returncode == 3
+    assert len(events_named(tmp_path, "grant")) == 1
+    assert not events_named(tmp_path, "workload")
+    assert state_value(tmp_path)["lanes"]["lane-a"]["state"] == "running"
+
+
 def test_lost_release_reply_replays_and_releases_once(tmp_path: Path) -> None:
     plan = fresh_plan() | {"release": [{"outcome": "release-lost"}]}
     result = run_script(ROOT / "roster/run_arm.sh", ["lane-a", "purpose", "--", "workload"], tmp_path, ROSTER_LIFECYCLE_PLAN=json.dumps(plan))
@@ -426,11 +591,46 @@ def test_lost_release_reply_replays_and_releases_once(tmp_path: Path) -> None:
     assert state_value(tmp_path)["lanes"]["lane-a"]["state"] == "free"
 
 
+def test_lost_release_effect_is_durable_before_reply_retry(tmp_path: Path) -> None:
+    plan = fresh_plan() | {"release": [{"outcome": "release-lost"}]}
+    result = run_script(
+        ROOT / "roster" / "run_arm.sh",
+        ["lane-a", "purpose", "--", "workload"],
+        tmp_path,
+        ROSTER_LIFECYCLE_PLAN=json.dumps(plan),
+        ROSTER_OPERATION_RETRIES="0",
+    )
+    assert result.returncode == 3
+    assert len(events_named(tmp_path, "release")) == 1
+    assert state_value(tmp_path)["lanes"]["lane-a"]["state"] == "free"
+
+
 def test_unknown_final_release_is_quarantined_and_not_success(tmp_path: Path) -> None:
     plan = fresh_plan() | {"release": [{"outcome": "release-unknown"}]}
     result = run_script(ROOT / "roster/run_arm.sh", ["lane-a", "purpose", "--", "workload"], tmp_path, ROSTER_LIFECYCLE_PLAN=json.dumps(plan))
     assert result.returncode == 3
     assert not events_named(tmp_path, "release")
+    assert state_value(tmp_path)["lanes"]["lane-a"]["state"] == "quarantined"
+
+
+def test_quarantined_lane_rejects_a_subsequent_acquisition(tmp_path: Path) -> None:
+    first = run_script(
+        ROOT / "roster" / "run_arm.sh",
+        ["lane-a", "purpose", "--", "workload"],
+        tmp_path,
+        ROSTER_ARM_ID="arm-first",
+        ROSTER_LIFECYCLE_PLAN=json.dumps(fresh_plan() | {"release": [{"outcome": "release-unknown"}]}),
+    )
+    assert first.returncode == 3
+    second = run_script(
+        ROOT / "roster" / "run_arm.sh",
+        ["lane-a", "purpose", "--", "workload"],
+        tmp_path,
+        ROSTER_ARM_ID="arm-second",
+        ROSTER_LIFECYCLE_PLAN=json.dumps(fresh_plan()),
+    )
+    assert second.returncode == 1
+    assert len(events_named(tmp_path, "workload")) == 1
     assert state_value(tmp_path)["lanes"]["lane-a"]["state"] == "quarantined"
 
 
