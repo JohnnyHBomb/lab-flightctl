@@ -446,6 +446,7 @@ def _normalise_gpu_result(result: object) -> dict[str, Any]:
         reason = reason or "incomplete GPU observation"
     if not complete:
         count = None
+        reason = reason or "incomplete GPU observation"
     first = devices[0]
     return {
         "vendor": first["vendor"],
@@ -716,7 +717,7 @@ class DiscoveryHandler:
             raise DiscoveryError("proposal output directory is not writable")
         if current_path is not None:
             current_resolved = Path(current_path).expanduser().resolve(strict=False)
-            if resolved == current_resolved:
+            if resolved == current_resolved or (resolved.exists() and current_resolved.exists() and resolved.samefile(current_resolved)):
                 raise DiscoveryError("proposal output aliases the current inventory")
         encoded = json.dumps(proposal, sort_keys=True, indent=2, ensure_ascii=True) + "\n"
         fd, temporary_name = tempfile.mkstemp(prefix=".flightctl-proposal-", dir=str(parent), text=True)
@@ -820,12 +821,35 @@ class DiscoveryHandler:
             for item in current.get("hosts", []):
                 if isinstance(item, Mapping):
                     specs.append({"host_id": item.get("host_id"), "ssh_endpoint": item.get("ssh_endpoint"), "ssh_user": item.get("ssh_user"), "source": "current"})
-        deduped: dict[tuple[str, str], dict[str, Any]] = {}
+        current_hosts = {str(host["host_id"]): host for host in current.get("hosts", []) if isinstance(host, Mapping) and host.get("host_id")}
+        deduped: dict[str, dict[str, Any]] = {}
+        endpoint_ids: dict[str, str] = {}
         for spec in specs:
             normal = self._normalise_host_spec(spec, options.get("ssh_user"))
-            key = (str(normal["host_id"]), str(normal["ssh_endpoint"]))
-            if key not in deduped:
-                deduped[key] = normal
+            existing = self._match_current(normal, current_hosts)
+            if existing is not None:
+                # Resolve inventory IDs and endpoint aliases before deduplication
+                # and the host limit, so one machine is probed only once.
+                if normal["ssh_endpoint"] == existing["host_id"]:
+                    normal["ssh_endpoint"] = existing["ssh_endpoint"]
+                normal["host_id"] = existing["host_id"]
+            host_id, endpoint = str(normal["host_id"]), str(normal["ssh_endpoint"])
+            if endpoint in endpoint_ids and endpoint_ids[endpoint] != host_id:
+                raise DiscoveryError("conflicting host IDs for one SSH endpoint")
+            endpoint_ids[endpoint] = host_id
+            previous = deduped.get(host_id)
+            if previous is None:
+                deduped[host_id] = normal
+                continue
+            if previous["ssh_endpoint"] != endpoint:
+                raise DiscoveryError("conflicting SSH endpoints for one host ID")
+            if previous["_ssh_user_explicit"] and normal["_ssh_user_explicit"] and previous["ssh_user"] != normal["ssh_user"]:
+                raise DiscoveryError("conflicting SSH users for one host")
+            if normal["_ssh_user_explicit"]:
+                previous["ssh_user"] = normal["ssh_user"]
+                previous["_ssh_user_explicit"] = True
+            if normal["source"] == "tailnet":
+                previous["source"] = "tailnet"
         ordered = sorted(deduped.values(), key=lambda item: (str(item["host_id"]), str(item["ssh_endpoint"])))
         return ordered[:max_hosts], authoritative
 
@@ -1080,6 +1104,12 @@ class DiscoveryHandler:
         return _json_value({field: device.get(field) for field in _GPU_FIELDS})
 
     @staticmethod
+    def _device_identity_fingerprint(device: Mapping[str, Any]) -> str:
+        """Identify hardware independently of a driver-only observation."""
+
+        return _json_value({field: device.get(field) for field in ("vendor", "model", "vram_bytes")})
+
+    @staticmethod
     def _fresh_device_id(host_id: str, fingerprint: str, occurrence: int, used_ids: set[str]) -> str:
         digest = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()[:16]
         stem = f"{host_id}-gpu-{digest}-{occurrence}"
@@ -1096,29 +1126,54 @@ class DiscoveryHandler:
     def _assign_device_ids(host_id: str, observed: object, old_devices: Sequence[Mapping[str, Any]], used_ids: set[str]) -> list[dict[str, Any]]:
         items = [item for item in observed if isinstance(item, Mapping)] if isinstance(observed, Sequence) and not isinstance(observed, (str, bytes, bytearray)) else []
         old_by_fingerprint: dict[str, list[str]] = {}
+        old_by_identity: dict[str, list[str]] = {}
         for item in old_devices:
             fingerprint = DiscoveryHandler._device_fingerprint(item)
             old_by_fingerprint.setdefault(fingerprint, []).append(str(item.get("device_id")))
+            identity = DiscoveryHandler._device_identity_fingerprint(item)
+            old_by_identity.setdefault(identity, []).append(str(item.get("device_id")))
         for matching in old_by_fingerprint.values():
             matching.sort()
-        items = sorted(items, key=DiscoveryHandler._device_fingerprint)
-        assigned: list[dict[str, Any]] = []
+        for matching in old_by_identity.values():
+            matching.sort()
+        items = sorted(items, key=lambda item: (DiscoveryHandler._device_identity_fingerprint(item), DiscoveryHandler._device_fingerprint(item)))
         local_used = set(used_ids)
         old_ids_in_order = sorted(str(item.get("device_id")) for item in old_devices if item.get("device_id"))
+        assigned_ids: dict[int, str] = {}
+
+        # Reserve exact matches before allocating any positional fallback ID.
+        # A later exact match must not lose its old ID to an earlier new device.
+        for index, item in enumerate(items):
+            matching = old_by_fingerprint.get(DiscoveryHandler._device_fingerprint(item), [])
+            while matching:
+                possible = matching.pop(0)
+                if possible not in local_used:
+                    assigned_ids[index] = possible
+                    local_used.add(possible)
+                    break
+
+        # A driver change is not a new piece of hardware.  Reserve the old ID
+        # using the stable hardware fields before falling back to allocation.
+        for index, item in enumerate(items):
+            if index in assigned_ids:
+                continue
+            matching = old_by_identity.get(DiscoveryHandler._device_identity_fingerprint(item), [])
+            while matching:
+                possible = matching.pop(0)
+                if possible not in local_used:
+                    assigned_ids[index] = possible
+                    local_used.add(possible)
+                    break
+
         occurrences: dict[str, int] = {}
+        assigned: list[dict[str, Any]] = []
         for index, item in enumerate(items):
             fingerprint = DiscoveryHandler._device_fingerprint(item)
             occurrence = occurrences.get(fingerprint, 0)
             occurrences[fingerprint] = occurrence + 1
-            candidate = None
-            matching = old_by_fingerprint.get(fingerprint, [])
-            while matching:
-                possible = matching.pop(0)
-                if possible not in local_used:
-                    candidate = possible
-                    break
-            if candidate is None and index < len(old_ids_in_order) and old_ids_in_order[index] not in local_used:
-                candidate = old_ids_in_order[index]
+            candidate = assigned_ids.get(index)
+            if candidate is None:
+                candidate = next((possible for possible in old_ids_in_order if possible not in local_used), None)
             if candidate is None:
                 candidate = DiscoveryHandler._fresh_device_id(host_id, fingerprint, occurrence, local_used)
             local_used.add(candidate)
@@ -1217,7 +1272,11 @@ class DiscoveryHandler:
         lanes: list[dict[str, Any]] = []
         used_lane_ids: set[str] = set()
         assigned_devices: set[str] = set()
-        old_device_ids_by_host: dict[str, set[str]] = {}
+        # Known devices outside a lane are human configuration, not additions.
+        old_device_ids_by_host = {
+            str(host["host_id"]): {str(device["device_id"]) for device in host.get("devices", [])}
+            for host in current.get("hosts", [])
+        }
         first_gpu_lane_by_host: dict[str, str] = {}
         for old in old_lanes:
             old_host_id = str(old.get("host_id"))
