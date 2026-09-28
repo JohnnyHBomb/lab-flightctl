@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "revision": 1,
+  "pipelines": [
+    {
+      "schema_version": 1,
+      "pipeline_id": "batch",
+      "version": "1.0.0",
+      "revision": 1,
+      "purpose": "batch inference",
+      "content_policy": ["acceptable-use"],
+      "availability": "available",
+      "partner_overrides": { "site-b": "approval_required" },
+      "policy_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "updated_at": "2026-09-27T20:00:00Z"
+    },
+    {
+      "schema_version": 1,
+      "pipeline_id": "interactive",
+      "version": "1.0.0",
+      "revision": 1,
+      "purpose": "interactive inference",
+      "content_policy": ["acceptable-use"],
+      "availability": "approval_required",
+      "partner_overrides": {},
+      "policy_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "updated_at": "2026-09-27T20:00:00Z"
+    },
+    {
+      "schema_version": 1,
+      "pipeline_id": "retired",
+      "version": "1.0.0",
+      "revision": 1,
+      "purpose": "maintenance test",
+      "content_policy": ["acceptable-use"],
+      "availability": "unavailable",
+      "partner_overrides": {},
+      "policy_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "updated_at": "2026-09-27T20:00:00Z"
+    }
+  ]
+}

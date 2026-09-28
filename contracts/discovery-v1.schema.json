@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/discovery-v1.schema.json",
+  "title": "Flightctl discovery proposal v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "site_id", "revision", "stage", "controller", "timezone", "identity_mapping", "chat_lane_order", "policy", "generated_at", "current_revision", "hosts", "lanes", "observations", "diff", "status"],
+  "properties": {
+    "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+    "site_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "stage": { "const": "draft" },
+    "controller": { "$ref": "inventory-v1.schema.json#/$defs/controller" },
+    "timezone": { "type": "string", "minLength": 1 },
+    "identity_mapping": { "type": "array", "items": { "$ref": "inventory-v1.schema.json#/$defs/identity_mapping" }, "uniqueItems": true },
+    "chat_lane_order": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/short_identifier" }, "uniqueItems": true },
+    "policy": { "$ref": "common.schema.json#/$defs/policy" },
+    "generated_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+    "current_revision": { "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+    "hosts": { "type": "array", "items": { "$ref": "#/$defs/proposed_host" } },
+    "lanes": { "type": "array", "items": { "$ref": "#/$defs/proposed_lane" } },
+    "observations": { "type": "array", "items": { "$ref": "#/$defs/observation" } },
+    "diff": { "type": "array", "items": { "$ref": "#/$defs/diff_entry" } },
+    "status": { "enum": ["proposed", "needs_review", "confirmed"] }
+  },
+  "$defs": {
+    "unknown_or_text": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+    "proposed_host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host_id", "ssh_endpoint", "ssh_user", "reachability", "observed_at", "observation_error", "gpu_count", "gpu_count_reason", "devices", "admissible"],
+      "properties": {
+        "host_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "ssh_endpoint": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+        "ssh_user": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+        "reachability": { "enum": ["confirmed", "unreachable", "unknown"] },
+        "observed_at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/utc_time" }, { "type": "null" }] },
+        "observation_error": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+        "gpu_count": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "gpu_count_reason": { "$ref": "#/$defs/unknown_or_text" },
+        "devices": { "type": "array", "items": { "$ref": "#/$defs/proposed_device" } },
+        "admissible": { "type": "boolean" }
+      }
+    },
+    "proposed_device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "vendor", "model", "vram_bytes", "driver", "unknown_reasons"],
+      "properties": {
+        "device_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "vendor": { "$ref": "#/$defs/unknown_or_text" },
+        "model": { "$ref": "#/$defs/unknown_or_text" },
+        "vram_bytes": { "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+        "driver": { "$ref": "#/$defs/unknown_or_text" },
+        "unknown_reasons": { "type": "object", "propertyNames": { "enum": ["vendor", "model", "vram_bytes", "driver"] }, "additionalProperties": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "proposed_lane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lane_id", "host_id", "device_ids", "class", "enabled", "policy", "action"],
+      "properties": {
+        "lane_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "host_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "device_ids": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/short_identifier" }, "uniqueItems": true },
+        "class": { "enum": ["gpu", "cpu"] },
+        "enabled": { "type": "boolean" },
+        "policy": { "$ref": "common.schema.json#/$defs/capability_offer" },
+        "action": { "enum": ["add", "retain", "review", "remove"] }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observation_id", "host_id", "kind", "status", "observed_at", "value", "reason", "source"],
+      "properties": {
+        "observation_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "host_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "kind": { "enum": ["peer", "ssh", "gpu", "driver", "device", "host-missing"] },
+        "status": { "enum": ["confirmed", "unknown"] },
+        "observed_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "value": {},
+        "reason": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+        "source": { "enum": ["operator", "tailnet", "ssh", "nvidia-smi", "sysfs"] }
+      }
+    },
+    "diff_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sort_key", "kind", "id", "change", "before", "after", "review_required"],
+      "properties": {
+        "sort_key": { "$ref": "common.schema.json#/$defs/identifier" },
+        "kind": { "enum": ["host", "device", "lane", "gpu", "driver", "unknown" ] },
+        "id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "change": { "enum": ["added", "removed", "changed", "unknown", "retained"] },
+        "before": {},
+        "after": {},
+        "review_required": { "type": "boolean" }
+      }
+    }
+  },
+  "x-inventory-projection": {
+    "mapped": {
+      "schema_version": "schema_version",
+      "site_id": "site_id",
+      "revision": "revision",
+      "controller": "controller",
+      "timezone": "timezone",
+      "identity_mapping": "identity_mapping",
+      "chat_lane_order": "chat_lane_order",
+      "hosts": ["host_id", "ssh_endpoint", "ssh_user", "reachability", "observed_at", "observation_error", "gpu_count", "gpu_count_reason", "devices"],
+      "lanes": ["lane_id", "host_id", "device_ids", "class", "enabled", "policy"]
+    },
+    "dropped": ["stage", "policy", "generated_at", "current_revision", "observations", "diff", "status", "hosts[].admissible", "lanes[].action"],
+    "promotion_sets": ["stage"]
+  },
+  "x-examples": {
+    "valid": [
+      { "schema_version": 1, "site_id": "site-a", "revision": 2, "stage": "draft", "controller": { "controller_id": "controller-a", "endpoint": "https://controller.site-a.invalid/v1/rpc", "account": "controller", "paths": [], "auth_state": "configured" }, "timezone": "Etc/UTC", "identity_mapping": [], "chat_lane_order": [], "policy": { "schema_version": 1, "policy_id": "default", "revision": 1, "updated_at": "2026-09-27T20:00:00Z", "purpose_rules": ["purpose-required"], "content_rules": ["acceptable-use"], "admission": { "max_clock_skew_s": 30, "heartbeat_s": 60, "queue_refresh_s": 60, "queue_expiry_s": 600, "booking_horizon_s": 1209600, "minimum_booking_s": 900, "agent_max_s": 14400, "operator_max_s": 43200 }, "security_hooks": { "supported_schemes": ["ssh-sk"], "unsupported_supplied_action": "deny" } }, "generated_at": "2026-09-27T20:00:00Z", "current_revision": 1, "hosts": [{ "host_id": "host-1", "ssh_endpoint": "host-1.example", "ssh_user": "runner", "reachability": "confirmed", "observed_at": "2026-09-27T20:00:00Z", "observation_error": null, "gpu_count": 1, "gpu_count_reason": null, "devices": [{ "device_id": "gpu0", "vendor": "nvidia", "model": "Generic Accelerator", "vram_bytes": 17179869184, "driver": "550.1", "unknown_reasons": {} }], "admissible": true }], "lanes": [{ "lane_id": "lane-gpu0", "host_id": "host-1", "device_ids": ["gpu0"], "class": "gpu", "enabled": true, "policy": { "site_id": "site-a", "capability_class": "gpu", "capabilities": ["compute"], "isolation": ["cgroup"], "sanitisation": ["gpu-reset"], "assurance": { "required": [], "offered": ["observed"], "verified": [], "evidence_refs": ["inventory-revision-1"], "unknown": false }, "observed_at": "2026-09-27T20:00:00Z", "provenance": ["operator-confirmed"] }, "action": "add" }], "observations": [{ "observation_id": "obs-a", "host_id": "host-1", "kind": "gpu", "status": "confirmed", "observed_at": "2026-09-27T20:00:00Z", "value": { "count": 1 }, "reason": null, "source": "nvidia-smi" }], "diff": [{ "sort_key": "lane/lane-gpu0", "kind": "lane", "id": "lane-gpu0", "change": "added", "before": null, "after": { "host_id": "host-1" }, "review_required": true }], "status": "needs_review" }
+    ],
+    "invalid": [
+      { "schema_version": 1, "site_id": "site-a", "revision": 2, "stage": "draft", "controller": { "controller_id": "controller-a", "endpoint": "https://controller.site-a.invalid/v1/rpc", "account": "controller", "paths": [], "auth_state": "configured" }, "timezone": "Etc/UTC", "identity_mapping": [], "chat_lane_order": [], "policy": { "schema_version": 1, "policy_id": "default", "revision": 1, "updated_at": "2026-09-27T20:00:00Z", "purpose_rules": ["purpose-required"], "content_rules": ["acceptable-use"], "admission": { "max_clock_skew_s": 30, "heartbeat_s": 60, "queue_refresh_s": 60, "queue_expiry_s": 600, "booking_horizon_s": 1209600, "minimum_booking_s": 900, "agent_max_s": 14400, "operator_max_s": 43200 }, "security_hooks": { "supported_schemes": ["ssh-sk"], "unsupported_supplied_action": "deny" } }, "generated_at": "not-time", "current_revision": null, "hosts": [], "lanes": [], "observations": [], "diff": [], "status": "proposed" }
+    ]
+  }
+}

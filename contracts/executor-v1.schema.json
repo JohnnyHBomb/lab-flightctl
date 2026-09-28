@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/executor-v1.schema.json",
+  "title": "Flightctl executor v1",
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/reply" }
+  ],
+  "$defs": {
+    "kind": { "enum": ["reserve", "start", "beat", "stop", "inspect"] },
+    "executor_deadline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "owner_class", "boot_id", "deadline_s", "utc_anchor", "monotonic_anchor_s"],
+      "properties": {
+        "kind": { "enum": ["heartbeat", "lease", "grace", "max-end"] },
+        "owner_class": { "enum": ["operator", "booked", "batch", "service", "resident", "standby"] },
+        "boot_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "deadline_s": { "type": "number", "minimum": 0 },
+        "utc_anchor": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "monotonic_anchor_s": { "type": "number", "minimum": 0 }
+      }
+    },
+    "execution_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class", "protected", "preemptible", "grace_s", "max_end", "deadline_kind"],
+      "properties": {
+        "class": { "enum": ["operator", "booked", "batch", "service", "resident", "standby"] },
+        "protected": { "type": "boolean" },
+        "preemptible": { "type": "boolean" },
+        "grace_s": { "type": "integer", "minimum": 0 },
+        "max_end": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "deadline_kind": { "enum": ["heartbeat", "lease", "grace", "max-end"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "protected": { "const": true } } },
+          "then": { "properties": { "preemptible": { "const": false } } }
+        },
+        {
+          "if": { "properties": { "preemptible": { "const": true } } },
+          "then": { "properties": { "protected": { "const": false } } }
+        }
+      ]
+    },
+    "reserve_identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["lane", "generation", "token", "instance", "unit", "invocation", "deadline"],
+      "properties": {
+        "lane": { "$ref": "common.schema.json#/$defs/lane_ref" }, "generation": { "type": "integer", "minimum": 1 }, "token": { "type": "string", "minLength": 16, "maxLength": 512 }, "instance": { "$ref": "common.schema.json#/$defs/identifier" }, "unit": { "type": "null" }, "invocation": { "type": "null" }, "deadline": { "$ref": "#/$defs/executor_deadline" }
+      }
+    },
+    "running_identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["lane", "generation", "token", "instance", "unit", "invocation", "deadline"],
+      "properties": {
+        "lane": { "$ref": "common.schema.json#/$defs/lane_ref" }, "generation": { "type": "integer", "minimum": 1 }, "token": { "type": "string", "minLength": 16, "maxLength": 512 }, "instance": { "$ref": "common.schema.json#/$defs/identifier" }, "unit": { "$ref": "common.schema.json#/$defs/identifier" }, "invocation": { "$ref": "common.schema.json#/$defs/identifier" }, "deadline": { "$ref": "#/$defs/executor_deadline" }
+      }
+    },
+    "inspect_identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["lane", "generation", "token", "instance", "unit", "invocation", "deadline"],
+      "properties": {
+        "lane": { "$ref": "common.schema.json#/$defs/lane_ref" }, "generation": { "type": "integer", "minimum": 1 }, "token": { "type": "null" }, "instance": { "$ref": "common.schema.json#/$defs/identifier" }, "unit": { "type": "null" }, "invocation": { "type": "null" }, "deadline": { "type": "null" }
+      }
+    },
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workload_id", "class", "image_digest", "parameters_hash", "manifest_hash"],
+      "properties": {
+        "workload_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "class": { "enum": ["operator", "booked", "batch", "service", "resident", "standby"] },
+        "image_digest": { "$ref": "common.schema.json#/$defs/sha256" },
+        "parameters_hash": { "$ref": "common.schema.json#/$defs/sha256" },
+        "manifest_hash": { "anyOf": [{ "$ref": "common.schema.json#/$defs/sha256" }, { "type": "null" }] }
+      }
+    },
+    "stop_authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "approval_id"],
+      "properties": {
+        "mode": { "enum": ["controller-match", "approved-forced-preemption"] },
+        "approval_id": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] }
+      },
+      "allOf": [
+        { "if": { "properties": { "mode": { "const": "controller-match" } } }, "then": { "properties": { "approval_id": { "type": "null" } } } },
+        { "if": { "properties": { "mode": { "const": "approved-forced-preemption" } } }, "then": { "properties": { "approval_id": { "$ref": "common.schema.json#/$defs/identifier" } } } }
+      ]
+    },
+    "request_base": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["schema_version", "kind", "controller_request_id", "execution_policy"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "kind": { "$ref": "#/$defs/kind" },
+        "controller_request_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "execution_policy": { "$ref": "#/$defs/execution_policy" }
+      }
+    },
+    "reserve_request": {
+      "allOf": [
+        { "$ref": "#/$defs/request_base" },
+        { "type": "object", "properties": { "kind": { "const": "reserve" }, "identity": { "$ref": "#/$defs/reserve_identity" } }, "required": ["identity"] }
+      ],
+      "unevaluatedProperties": false
+    },
+    "start_request": {
+      "allOf": [
+        { "$ref": "#/$defs/request_base" },
+        { "type": "object", "properties": { "kind": { "const": "start" }, "identity": { "$ref": "#/$defs/running_identity" }, "reservation_acknowledged": { "const": true }, "workload": { "$ref": "#/$defs/workload" } }, "required": ["identity", "reservation_acknowledged", "workload"] }
+      ],
+      "unevaluatedProperties": false
+    },
+    "beat_request": {
+      "allOf": [
+        { "$ref": "#/$defs/request_base" },
+        { "type": "object", "properties": { "kind": { "const": "beat" }, "identity": { "$ref": "#/$defs/running_identity" } }, "required": ["identity"] }
+      ],
+      "unevaluatedProperties": false
+    },
+    "stop_request": {
+      "allOf": [
+        { "$ref": "#/$defs/request_base" },
+        { "type": "object", "properties": { "kind": { "const": "stop" }, "identity": { "$ref": "#/$defs/running_identity" }, "stop_authority": { "$ref": "#/$defs/stop_authority" } }, "required": ["identity", "stop_authority"] },
+        { "if": { "properties": { "execution_policy": { "properties": { "protected": { "const": true } } } } }, "then": { "properties": { "stop_authority": { "properties": { "mode": { "const": "approved-forced-preemption" } } } } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "inspect_request": {
+      "allOf": [
+        { "$ref": "#/$defs/request_base" },
+        { "type": "object", "properties": { "kind": { "const": "inspect" }, "identity": { "$ref": "#/$defs/inspect_identity" } }, "required": ["identity"] }
+      ],
+      "unevaluatedProperties": false
+    },
+    "request": {
+      "oneOf": [
+        { "$ref": "#/$defs/reserve_request" },
+        { "$ref": "#/$defs/start_request" },
+        { "$ref": "#/$defs/beat_request" },
+        { "$ref": "#/$defs/stop_request" },
+        { "$ref": "#/$defs/inspect_request" }
+      ]
+    },
+    "echoed_identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["lane", "generation", "token", "instance", "unit", "invocation", "deadline"],
+      "properties": {
+        "lane": { "$ref": "common.schema.json#/$defs/lane_ref" }, "generation": { "type": "integer", "minimum": 1 }, "token": { "anyOf": [{ "type": "string", "minLength": 16, "maxLength": 512 }, { "type": "null" }] }, "instance": { "$ref": "common.schema.json#/$defs/identifier" }, "unit": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] }, "invocation": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] }, "deadline": { "anyOf": [{ "$ref": "#/$defs/executor_deadline" }, { "type": "null" }] }
+      }
+    },
+    "reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "kind", "echoed_identity", "acknowledgement", "ok", "observed_state", "uncertain", "cgroup_occupants", "gpu_tenants", "error"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "kind": { "$ref": "#/$defs/kind" },
+        "echoed_identity": { "$ref": "#/$defs/echoed_identity" },
+        "acknowledgement": { "enum": ["reserved", "started", "beat", "stopped", "inspected", "rejected", "unknown"] },
+        "ok": { "type": "boolean" },
+        "observed_state": { "enum": ["unknown", "free", "starting", "running", "stopping", "quarantined"] },
+        "uncertain": { "type": "boolean" },
+        "cgroup_occupants": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/identifier" }, "uniqueItems": true },
+        "gpu_tenants": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/identifier" }, "uniqueItems": true },
+        "error": { "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 512 }, { "type": "null" }] }
+      },
+      "allOf": [
+        { "if": { "properties": { "uncertain": { "const": true } } }, "then": { "properties": { "ok": { "const": false }, "observed_state": { "enum": ["unknown", "quarantined"] }, "error": { "type": "string", "minLength": 1 } } } },
+        { "if": { "properties": { "ok": { "const": true } } }, "then": { "properties": { "uncertain": { "const": false }, "error": { "type": "null" }, "observed_state": { "enum": ["free", "starting", "running", "stopping"] } } } },
+        { "if": { "properties": { "ok": { "const": false } } }, "then": { "properties": { "error": { "type": "string", "minLength": 1 } } } },
+        { "if": { "properties": { "kind": { "const": "reserve" } } }, "then": { "properties": { "acknowledgement": { "const": "reserved" } } } },
+        { "if": { "properties": { "kind": { "const": "start" } } }, "then": { "properties": { "acknowledgement": { "const": "started" } } } },
+        { "if": { "properties": { "kind": { "const": "beat" } } }, "then": { "properties": { "acknowledgement": { "const": "beat" } } } },
+        { "if": { "properties": { "kind": { "const": "stop" }, "ok": { "const": true } } }, "then": { "properties": { "acknowledgement": { "const": "stopped" }, "observed_state": { "const": "free" }, "cgroup_occupants": { "maxItems": 0 }, "gpu_tenants": { "maxItems": 0 } } } },
+        { "if": { "properties": { "kind": { "const": "inspect" } } }, "then": { "properties": { "acknowledgement": { "const": "inspected" } } } }
+      ]
+    }
+  },
+  "x-examples": {
+    "valid": [
+      { "schema_version": 1, "kind": "reserve", "controller_request_id": "req-a", "execution_policy": { "class": "batch", "protected": true, "preemptible": false, "grace_s": 0, "max_end": "2026-09-27T21:00:00Z", "deadline_kind": "max-end" }, "identity": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 3, "token": "token-abcdefghijklmnop", "instance": "instance-a", "unit": null, "invocation": null, "deadline": { "kind": "max-end", "owner_class": "batch", "boot_id": "boot-a", "deadline_s": 100, "utc_anchor": "2026-09-27T20:00:00Z", "monotonic_anchor_s": 10 } } },
+      { "schema_version": 1, "kind": "start", "controller_request_id": "req-b", "execution_policy": { "class": "batch", "protected": true, "preemptible": false, "grace_s": 0, "max_end": "2026-09-27T21:00:00Z", "deadline_kind": "max-end" }, "reservation_acknowledged": true, "workload": { "workload_id": "job-a", "class": "batch", "image_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "parameters_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "manifest_hash": null }, "identity": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 3, "token": "token-abcdefghijklmnop", "instance": "instance-a", "unit": "unit-a", "invocation": "invoke-a", "deadline": { "kind": "max-end", "owner_class": "batch", "boot_id": "boot-a", "deadline_s": 100, "utc_anchor": "2026-09-27T20:00:00Z", "monotonic_anchor_s": 10 } } },
+      { "schema_version": 1, "kind": "inspect", "controller_request_id": "req-c", "execution_policy": { "class": "standby", "protected": false, "preemptible": true, "grace_s": 300, "max_end": "2026-09-27T21:00:00Z", "deadline_kind": "heartbeat" }, "identity": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 3, "token": null, "instance": "instance-a", "unit": null, "invocation": null, "deadline": null } },
+      { "schema_version": 1, "kind": "inspect", "echoed_identity": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 3, "token": null, "instance": "instance-a", "unit": null, "invocation": null, "deadline": null }, "acknowledgement": "inspected", "ok": true, "observed_state": "free", "uncertain": false, "cgroup_occupants": [], "gpu_tenants": [], "error": null }
+    ],
+    "invalid": [
+      { "schema_version": 1, "kind": "stop", "controller_request_id": "req-a", "execution_policy": { "class": "batch", "protected": true, "preemptible": false, "grace_s": 0, "max_end": "2026-09-27T21:00:00Z", "deadline_kind": "max-end" }, "identity": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 3, "token": "token-abcdefghijklmnop", "instance": "instance-a", "unit": "unit-a", "invocation": "invoke-a", "deadline": { "kind": "max-end", "owner_class": "batch", "boot_id": "boot-a", "deadline_s": 100, "utc_anchor": "2026-09-27T20:00:00Z", "monotonic_anchor_s": 10 }, "unexpected": true }, "stop_authority": { "mode": "controller-match", "approval_id": null } },
+      { "schema_version": 1, "kind": "stop", "echoed_identity": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 3, "token": "token-abcdefghijklmnop", "instance": "instance-a", "unit": "unit-a", "invocation": "invoke-a", "deadline": null }, "acknowledgement": "stopped", "ok": true, "observed_state": "free", "uncertain": false, "cgroup_occupants": ["pid-a"], "gpu_tenants": [], "error": null }
+    ]
+  }
+}

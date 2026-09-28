@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/queue-v1.schema.json",
+  "title": "Flightctl queue entry v1",
+  "$ref": "#/$defs/entry",
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "queue_id", "lane", "reservation", "principal", "class", "purpose", "sequence", "predecessor", "wait_deadline", "last_seen", "state", "eligible"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "queue_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "lane": { "anyOf": [{ "$ref": "common.schema.json#/$defs/lane_ref" }, { "type": "null" }] },
+        "reservation": { "$ref": "common.schema.json#/$defs/lane_generation" },
+        "principal": { "$ref": "common.schema.json#/$defs/principal" },
+        "class": { "enum": ["operator", "booked", "batch", "service", "resident", "standby"] },
+        "purpose": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "predecessor": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] },
+        "wait_deadline": { "$ref": "common.schema.json#/$defs/monotonic_deadline" },
+        "last_seen": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "state": { "enum": ["queued", "eligible", "claimed", "expired", "removed"] },
+        "eligible": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "predecessor": { "type": "string" } } },
+          "then": { "properties": { "eligible": { "const": false } } }
+        },
+        {
+          "if": { "properties": { "state": { "enum": ["expired", "removed"] } } },
+          "then": { "properties": { "eligible": { "const": false } } }
+        }
+      ]
+    }
+  },
+  "x-examples": {
+    "valid": [
+      { "schema_version": 1, "queue_id": "queue-a", "lane": null, "reservation": { "lane": null, "generation": null, "state": "unassigned" }, "principal": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "subject-a" }, "class": "batch", "purpose": "benchmark", "sequence": 1, "predecessor": null, "wait_deadline": { "boot_id": "boot-a", "deadline_s": 600, "utc_anchor": "2026-09-27T20:00:00Z", "monotonic_anchor_s": 10 }, "last_seen": "2026-09-27T20:00:00Z", "state": "queued", "eligible": true }
+    ],
+    "invalid": [
+      { "schema_version": 1, "queue_id": "queue-a", "lane": null, "reservation": { "lane": null, "generation": null, "state": "unassigned" }, "principal": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "subject-a" }, "class": "batch", "purpose": "benchmark", "sequence": 0, "predecessor": null, "wait_deadline": { "boot_id": "boot-a", "deadline_s": 600, "utc_anchor": "2026-09-27T20:00:00Z", "monotonic_anchor_s": 10 }, "last_seen": "2026-09-27T20:00:00Z", "state": "queued", "eligible": true }
+    ]
+  }
+}

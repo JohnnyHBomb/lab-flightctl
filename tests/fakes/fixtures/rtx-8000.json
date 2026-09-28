@@ -1,0 +1,5 @@
+{
+  "family": "nvidia",
+  "raw": "NVIDIA RTX 8000,49152,535.1,nvidia\nNVIDIA RTX 8000,49152,535.1,nvidia\n",
+  "expected": { "vendor": "nvidia", "model": "NVIDIA RTX 8000", "vram_bytes": 51539607552, "driver": "535.1", "count": 2, "devices": [{ "device_id": "gpu0", "vendor": "nvidia", "model": "NVIDIA RTX 8000", "vram_bytes": 51539607552, "driver": "535.1" }, { "device_id": "gpu1", "vendor": "nvidia", "model": "NVIDIA RTX 8000", "vram_bytes": 51539607552, "driver": "535.1" }] }
+}

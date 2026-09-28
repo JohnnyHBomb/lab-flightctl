@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/rpc-ops-v1.schema.json",
+  "title": "Flightctl RPC operations v1",
+  "$ref": "#/$defs/operation",
+  "$defs": {
+    "op_name": { "enum": ["acquire", "renew", "release", "claim", "queue", "book", "cancel", "approval-request", "approve", "preempt", "chat-load", "chat-unload", "cal", "free", "report", "status"] },
+    "class": { "enum": ["operator", "booked", "batch", "service", "resident", "standby"] },
+    "purpose": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "hash": { "$ref": "common.schema.json#/$defs/sha256" },
+    "record_state": { "enum": ["free", "starting", "running", "stopping", "quarantined", "scheduled", "blocked", "claimed", "missed", "completed", "cancelled", "displaced", "queued", "eligible", "expired", "removed", "loading", "draining", "unloaded", "issued", "approved", "consumed", "revoked", "unknown"] },
+    "base": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "request_id", "op", "lane", "args", "idempotency_scope", "request_fingerprint", "admission"],
+      "properties": {
+        "schema": { "type": "integer", "const": 1 },
+        "request_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "op": { "$ref": "#/$defs/op_name" },
+        "lane": { "anyOf": [{ "$ref": "common.schema.json#/$defs/short_identifier" }, { "type": "null" }] },
+        "args": { "type": "object" },
+        "idempotency_scope": { "$ref": "common.schema.json#/$defs/idempotency_scope" },
+        "request_fingerprint": { "$ref": "common.schema.json#/$defs/sha256" },
+        "admission": { "$ref": "common.schema.json#/$defs/admission" }
+      }
+    },
+    "acquire_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["purpose", "class", "est_s", "max_s"],
+      "properties": {
+        "purpose": { "$ref": "#/$defs/purpose" },
+        "class": { "$ref": "#/$defs/class" },
+        "est_s": { "type": "integer", "minimum": 1 },
+        "max_s": { "type": "integer", "minimum": 1 },
+        "booking_id": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] },
+        "queue_id": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] },
+        "pipeline_ref": { "anyOf": [{ "$ref": "common.schema.json#/$defs/short_identifier" }, { "type": "null" }] },
+        "signed_manifest": { "anyOf": [{ "$ref": "common.schema.json#/$defs/signed_manifest" }, { "type": "null" }] }
+      }
+    },
+    "token_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["token"],
+      "properties": {
+        "token": { "type": "string", "minLength": 16, "maxLength": 512 },
+        "instance": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] },
+        "extend_s": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "adoption_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["token", "generation", "generation_source"],
+      "properties": {
+        "token": { "type": "string", "minLength": 16, "maxLength": 512 },
+        "generation": { "type": "integer", "minimum": 1 },
+        "generation_source": { "const": "authenticated-adoption" },
+        "instance": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] }
+      }
+    },
+    "claim_args": {
+      "oneOf": [
+        { "$ref": "#/$defs/adoption_args" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["booking_id", "revision"],
+          "properties": {
+            "booking_id": { "$ref": "common.schema.json#/$defs/identifier" },
+            "revision": { "type": "integer", "minimum": 1 }
+          }
+        }
+      ]
+    },
+    "queue_args": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["action", "purpose", "class", "max_wait_s"],
+          "properties": { "action": { "const": "add" }, "purpose": { "$ref": "#/$defs/purpose" }, "class": { "$ref": "#/$defs/class" }, "max_wait_s": { "type": "integer", "minimum": 1 } }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["action", "queue_id", "max_wait_s"],
+          "properties": { "action": { "const": "refresh" }, "queue_id": { "$ref": "common.schema.json#/$defs/identifier" }, "max_wait_s": { "type": "integer", "minimum": 1 } }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["action", "queue_id"],
+          "properties": { "action": { "const": "remove" }, "queue_id": { "$ref": "common.schema.json#/$defs/identifier" } }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["action"],
+          "properties": { "action": { "const": "list" } }
+        }
+      ]
+    },
+    "book_args": {
+      "type": "object", "additionalProperties": false, "required": ["start", "end", "purpose"],
+      "properties": { "start": { "$ref": "common.schema.json#/$defs/utc_time" }, "end": { "$ref": "common.schema.json#/$defs/utc_time" }, "purpose": { "$ref": "#/$defs/purpose" } }
+    },
+    "cancel_args": {
+      "type": "object", "additionalProperties": false, "required": ["booking_id"],
+      "properties": { "booking_id": { "$ref": "common.schema.json#/$defs/identifier" }, "revision": { "type": "integer", "minimum": 1 } }
+    },
+    "approval_request_args": {
+      "type": "object", "additionalProperties": false,
+      "required": ["action", "booking_id", "revision", "target_generation", "bounds", "reason", "destination_site", "controller_id", "payload_hash", "manifest_hash", "policy_hash"],
+      "properties": {
+        "action": { "enum": ["extension", "forced-preemption", "displacement", "pipeline", "operator-admission"] },
+        "booking_id": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] },
+        "revision": { "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+        "target_generation": { "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+        "bounds": { "type": "object", "additionalProperties": false, "required": ["max_s", "max_end"], "properties": { "max_s": { "type": "integer", "minimum": 1 }, "max_end": { "$ref": "common.schema.json#/$defs/utc_time" } } },
+        "reason": { "$ref": "#/$defs/purpose" },
+        "destination_site": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "controller_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "payload_hash": { "$ref": "#/$defs/hash" },
+        "manifest_hash": { "anyOf": [{ "$ref": "#/$defs/hash" }, { "type": "null" }] },
+        "policy_hash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "approve_args": {
+      "type": "object", "additionalProperties": false, "required": ["approval_id", "proof", "evidence"],
+      "properties": { "approval_id": { "$ref": "common.schema.json#/$defs/identifier" }, "proof": { "$ref": "common.schema.json#/$defs/proof" }, "evidence": { "$ref": "common.schema.json#/$defs/verified_evidence" } }
+    },
+    "preempt_args": {
+      "type": "object", "additionalProperties": false, "required": ["token", "approval_id"],
+      "properties": { "token": { "type": "string", "minLength": 16 }, "approval_id": { "$ref": "common.schema.json#/$defs/identifier" } }
+    },
+    "chat_load_args": {
+      "type": "object", "additionalProperties": false, "required": ["pipeline_ref", "purpose"],
+      "properties": { "pipeline_ref": { "$ref": "common.schema.json#/$defs/short_identifier" }, "purpose": { "$ref": "#/$defs/purpose" } }
+    },
+    "chat_unload_args": {
+      "type": "object", "additionalProperties": false, "required": ["occupant_id", "generation"],
+      "properties": { "occupant_id": { "$ref": "common.schema.json#/$defs/identifier" }, "generation": { "type": "integer", "minimum": 1 } }
+    },
+    "read_args": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/utc_time" }, { "type": "null" }] } }
+    },
+    "operation": {
+      "oneOf": [
+        { "allOf": [{ "$ref": "#/$defs/base" }, { "properties": { "op": { "const": "acquire" }, "args": { "$ref": "#/$defs/acquire_args" } } }] },
+        { "allOf": [{ "$ref": "#/$defs/base" }, { "properties": { "op": { "const": "renew" }, "args": { "$ref": "#/$defs/token_args" } } }] },
+        { "allOf": [{ "$ref": "#/$defs/base" }, { "properties": { "op": { "const": "release" }, "args": { "$ref": "#/$defs/token_args" } } }] },
+        { "allOf": [{ "$ref": "#/$defs/base" }, { "properties": { "op": { "const": "claim" }, "args": { "$ref": "#/$defs/claim_args" } } }] },
+        { "allOf": [{ "$ref": "#/$defs/base" }, { "properties": { "op": { "const": "queue" }, "args": { "$ref": "#/$defs/queue_args" } } }] },
+        { "allOf": [{ "$ref": "#/$defs/base" }, { "properties": { "op": { "const": "book" }, "args": { "$ref": "#/$defs/book_args" } } }] },
+        { "allOf": [{ "$ref": "#/$defs/base" }, { "properties": { "op": { "const": "cancel" }, "args": { "$ref": "#/$defs/cancel_args" } } }] },
+        { "allOf": [{ "$ref": "#/$defs/base" }, { "properties": { "op": { "const": "approval-request" }, "args": { "$ref": "#/$defs/approval_request_args" } } }] },
+        { "allOf": [{ "$ref": "#/$defs/base" }, { "properties": { "op": { "const": "approve" }, "args": { "$ref": "#/$defs/approve_args" } } }] },
+        { "allOf": [{ "$ref": "#/$defs/base" }, { "properties": { "op": { "const": "preempt" }, "args": { "$ref": "#/$defs/preempt_args" } } }] },
+        { "allOf": [{ "$ref": "#/$defs/base" }, { "properties": { "op": { "const": "chat-load" }, "args": { "$ref": "#/$defs/chat_load_args" } } }] },
+        { "allOf": [{ "$ref": "#/$defs/base" }, { "properties": { "op": { "const": "chat-unload" }, "args": { "$ref": "#/$defs/chat_unload_args" } } }] },
+        { "allOf": [{ "$ref": "#/$defs/base" }, { "properties": { "op": { "enum": ["cal", "free", "report", "status"] }, "args": { "$ref": "#/$defs/read_args" } } }] }
+      ]
+    }
+  },
+  "x-examples": {
+    "valid": [
+      {
+        "schema": 1,
+        "request_id": "req-a",
+        "op": "acquire",
+        "lane": "lane-gpu0",
+        "args": { "purpose": "benchmark", "class": "batch", "est_s": 60, "max_s": 600 },
+        "idempotency_scope": { "scope": "authenticated-principal", "controller_id": "controller-a" },
+        "request_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "admission": {
+          "execution": "atomic",
+          "approval": { "approval_id": null, "required": false, "consume_atomically": true },
+          "pipeline": { "pipeline_id": "batch", "version": "1.0.0", "revision": 1, "purpose": "benchmark", "policy_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+          "delegation": null,
+          "ingress": { "actor": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "subject-a" }, "subject": null, "controller_id": "controller-a", "authenticated_peer": "peer-a", "peer_source": "socket-peer", "auth_method": "tailnet-peer", "transport_binding": "transport-independent", "peer_verified": true, "forwarding_headers_ignored": true, "operator_elevation": "none" },
+          "batch": null
+        }
+      },
+      {
+        "schema": 1,
+        "request_id": "req-b",
+        "op": "queue",
+        "lane": null,
+        "args": { "action": "list" },
+        "idempotency_scope": { "scope": "authenticated-principal", "controller_id": "controller-a" },
+        "request_fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "admission": {
+          "execution": "atomic",
+          "approval": { "approval_id": null, "required": false, "consume_atomically": true },
+          "pipeline": null,
+          "delegation": null,
+          "ingress": { "actor": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "subject-a" }, "subject": null, "controller_id": "controller-a", "authenticated_peer": "peer-a", "peer_source": "socket-peer", "auth_method": "tailnet-peer", "transport_binding": "transport-independent", "peer_verified": true, "forwarding_headers_ignored": true, "operator_elevation": "none" },
+          "batch": null
+        }
+      }
+    ],
+    "invalid": [
+      { "schema": 1, "request_id": "req-a", "op": "acquire", "lane": null, "args": { "purpose": "", "class": "batch", "est_s": 0, "max_s": 1 } },
+      { "schema": 1, "request_id": "req-a", "op": "unknown", "lane": null, "args": {} }
+    ]
+  }
+}

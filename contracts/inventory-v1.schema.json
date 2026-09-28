@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/inventory-v1.schema.json",
+  "title": "Flightctl inventory v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "site_id", "revision", "stage", "controller", "timezone", "identity_mapping", "chat_lane_order", "hosts", "lanes"],
+  "properties": {
+    "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+    "site_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "stage": { "enum": ["draft", "confirmed"] },
+    "controller": { "$ref": "#/$defs/controller" },
+    "timezone": { "type": "string", "pattern": "^(?:UTC|[A-Za-z0-9._+-]+(?:/[A-Za-z0-9._+-]+)+)$" },
+    "identity_mapping": { "type": "array", "items": { "$ref": "#/$defs/identity_mapping" }, "uniqueItems": true },
+    "chat_lane_order": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/short_identifier" }, "uniqueItems": true },
+    "hosts": { "type": "array", "items": { "$ref": "#/$defs/host" } },
+    "lanes": { "type": "array", "items": { "$ref": "#/$defs/lane" } }
+  },
+  "$defs": {
+    "nullable_text": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+    "controller": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["controller_id", "endpoint", "account", "paths", "auth_state"],
+      "properties": {
+        "controller_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "endpoint": { "$ref": "#/$defs/nullable_text" },
+        "account": { "$ref": "#/$defs/nullable_text" },
+        "paths": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "auth_state": { "enum": ["unresolved", "configured"] }
+      }
+    },
+    "identity_mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["external_id", "principal", "roles"],
+      "properties": {
+        "external_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "principal": { "$ref": "common.schema.json#/$defs/principal" },
+        "roles": { "type": "array", "items": { "enum": ["operator", "agent", "service"] }, "uniqueItems": true }
+      }
+    },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host_id", "ssh_endpoint", "ssh_user", "reachability", "observed_at", "observation_error", "gpu_count", "gpu_count_reason", "devices"],
+      "properties": {
+        "host_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "ssh_endpoint": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+        "ssh_user": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+        "reachability": { "enum": ["confirmed", "unreachable", "unknown"] },
+        "observed_at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/utc_time" }, { "type": "null" }] },
+        "observation_error": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+        "gpu_count": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "gpu_count_reason": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+        "devices": { "type": "array", "items": { "$ref": "#/$defs/device" } }
+      },
+      "allOf": [
+        { "if": { "properties": { "gpu_count": { "type": "null" } } }, "then": { "properties": { "gpu_count_reason": { "type": "string", "minLength": 1 } } } },
+        { "if": { "properties": { "observed_at": { "type": "null" } } }, "then": { "properties": { "observation_error": { "type": "string", "minLength": 1 } } } }
+      ]
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "vendor", "model", "vram_bytes", "driver", "unknown_reasons"],
+      "properties": {
+        "device_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "vendor": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] },
+        "model": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+        "vram_bytes": { "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+        "driver": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+        "unknown_reasons": { "type": "object", "propertyNames": { "enum": ["vendor", "model", "vram_bytes", "driver"] }, "additionalProperties": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "lane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lane_id", "host_id", "device_ids", "class", "enabled", "policy"],
+      "properties": {
+        "lane_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "host_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "device_ids": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/short_identifier" }, "minItems": 1, "uniqueItems": true },
+        "class": { "enum": ["gpu", "cpu"] },
+        "enabled": { "type": "boolean" },
+        "policy": { "$ref": "common.schema.json#/$defs/capability_offer" }
+      }
+    }
+  },
+  "x-examples": {
+    "valid": [
+      {
+        "schema_version": 1,
+        "site_id": "site-a",
+        "revision": 1,
+        "stage": "draft",
+        "controller": { "controller_id": "controller-a", "endpoint": null, "account": null, "paths": [], "auth_state": "unresolved" },
+        "timezone": "Europe/London",
+        "identity_mapping": [],
+        "chat_lane_order": [],
+        "hosts": [{ "host_id": "host-1", "ssh_endpoint": "host-1.example", "ssh_user": "runner", "reachability": "confirmed", "observed_at": "2026-09-27T20:00:00Z", "observation_error": null, "gpu_count": 0, "gpu_count_reason": "confirmed no GPU", "devices": [] }],
+        "lanes": []
+      }
+    ],
+    "invalid": [
+      {
+        "schema_version": 1,
+        "site_id": "site-a",
+        "revision": 1,
+        "stage": "draft",
+        "controller": { "controller_id": "controller-a", "endpoint": null, "account": null, "paths": [], "auth_state": "unresolved" },
+        "timezone": "Europe/London",
+        "identity_mapping": [],
+        "chat_lane_order": [],
+        "hosts": [{ "host_id": "host-1", "ssh_endpoint": "host-1.example", "ssh_user": "runner", "reachability": "confirmed", "observed_at": "2026-09-27T20:00:00Z", "observation_error": null, "gpu_count": null, "gpu_count_reason": null, "devices": [] }],
+        "lanes": []
+      }
+    ]
+  }
+}

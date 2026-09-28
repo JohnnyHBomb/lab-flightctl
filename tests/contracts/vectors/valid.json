@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "records": {
+    "principals": [{ "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "subject-a" }],
+    "states": ["free", "starting", "running", "stopping", "quarantined"],
+    "classes": ["operator", "booked", "batch", "service", "resident", "standby"],
+    "statuses": [200, 202, 403, 409, 503],
+    "pipeline_availability": ["available", "unavailable", "approval_required"],
+    "utc": ["2026-09-27T20:00:00Z", "2026-09-28T20:00:00Z"]
+  },
+  "rules": {
+    "unknown_measurements": { "value": null, "reason_required": true },
+    "no_gpu": { "gpu_count": 0, "reason": "confirmed no GPU" },
+    "redacted_exports": { "token_redacted": true, "raw_token_allowed": false },
+    "idempotency": { "same_request_and_args": "same persisted result", "same_request_changed_args": "409 conflict" },
+    "signed_manifest": { "image_digest_required": true, "image_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+    "event_states": { "approval": ["issued", "approved", "consumed", "revoked"], "booking": ["recovery"] }
+  }
+}

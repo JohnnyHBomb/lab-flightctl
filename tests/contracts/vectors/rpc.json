@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "request_defaults": {
+    "idempotency_scope": { "scope": "authenticated-principal", "controller_id": "controller-a" },
+    "request_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "admission": {
+      "execution": "atomic",
+      "approval": { "approval_id": null, "required": false, "consume_atomically": true },
+      "pipeline": null,
+      "delegation": null,
+      "ingress": { "actor": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "subject-a" }, "subject": null, "controller_id": "controller-a", "authenticated_peer": "peer-a", "peer_source": "socket-peer", "auth_method": "tailnet-peer", "transport_binding": "transport-independent", "peer_verified": true, "forwarding_headers_ignored": true, "operator_elevation": "none" },
+      "batch": null
+    }
+  },
+  "requests": [
+    { "schema": 1, "request_id": "req-a", "op": "acquire", "lane": null, "args": { "purpose": "benchmark", "class": "batch", "est_s": 60, "max_s": 600 } },
+    { "schema": 1, "request_id": "req-b", "op": "claim", "lane": "lane-gpu0", "args": { "booking_id": "booking-a", "revision": 1 } },
+    { "schema": 1, "request_id": "req-c", "op": "release", "lane": "lane-gpu0", "args": { "token": "token-abcdefghijklmnop" } },
+    { "schema": 1, "request_id": "req-d", "op": "renew", "lane": "lane-gpu0", "args": { "token": "token-abcdefghijklmnop", "extend_s": 60 } },
+    { "schema": 1, "request_id": "req-e", "op": "queue", "lane": "lane-gpu0", "args": { "action": "add", "purpose": "benchmark", "class": "batch", "max_wait_s": 300 } },
+    { "schema": 1, "request_id": "req-f", "op": "queue", "lane": "lane-gpu0", "args": { "action": "refresh", "queue_id": "queue-a", "max_wait_s": 300 } },
+    { "schema": 1, "request_id": "req-g", "op": "queue", "lane": "lane-gpu0", "args": { "action": "remove", "queue_id": "queue-a" } },
+    { "schema": 1, "request_id": "req-h", "op": "queue", "lane": null, "args": { "action": "list" } },
+    { "schema": 1, "request_id": "req-i", "op": "book", "lane": "lane-gpu0", "args": { "start": "2026-09-28T10:00:00Z", "end": "2026-09-28T11:00:00Z", "purpose": "benchmark" } },
+    { "schema": 1, "request_id": "req-j", "op": "cancel", "lane": "lane-gpu0", "args": { "booking_id": "booking-a", "revision": 1 } },
+    { "schema": 1, "request_id": "req-k", "op": "approval-request", "lane": null, "args": { "action": "pipeline", "booking_id": null, "revision": 1, "target_generation": null, "bounds": { "max_s": 60, "max_end": "2026-09-28T11:00:00Z" }, "reason": "pipeline approval", "destination_site": "site-a", "controller_id": "controller-a", "payload_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "manifest_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "policy_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } },
+    { "schema": 1, "request_id": "req-l", "op": "approve", "lane": null, "args": { "approval_id": "approval-a", "proof": { "scheme": "ssh-sk", "key_id": "key-a", "namespace": "flightctl/approval/v1", "encoding": "openssh-ssh-sk-signature/base64", "signature_b64": "c2ln" }, "evidence": { "verifier": "controller-a", "verified_at": "2026-09-27T20:01:00Z", "user_presence": "verified", "user_verification": "verified" } } },
+    { "schema": 1, "request_id": "req-m", "op": "preempt", "lane": "lane-gpu0", "args": { "token": "token-abcdefghijklmnop", "approval_id": "approval-a" } },
+    { "schema": 1, "request_id": "req-n", "op": "chat-load", "lane": "lane-gpu0", "args": { "pipeline_ref": "interactive", "purpose": "interactive inference" } },
+    { "schema": 1, "request_id": "req-o", "op": "chat-unload", "lane": "lane-gpu0", "args": { "occupant_id": "occupant-a", "generation": 2 } },
+    { "schema": 1, "request_id": "req-p", "op": "cal", "lane": null, "args": {} },
+    { "schema": 1, "request_id": "req-q", "op": "free", "lane": "lane-gpu0", "args": {} },
+    { "schema": 1, "request_id": "req-r", "op": "report", "lane": "lane-gpu0", "args": {} },
+    { "schema": 1, "request_id": "req-s", "op": "status", "lane": "lane-gpu0", "args": {} }
+  ],
+  "operation_expectations": [
+    { "op": "acquire", "result_kind": "grant", "state": "starting" },
+    { "op": "renew", "result_kind": "mutation", "state": "running" },
+    { "op": "release", "result_kind": "mutation", "state": "free" },
+    { "op": "claim", "result_kind": "grant", "state": "starting" },
+    { "op": "queue", "result_kind": "queue", "state": "queued" },
+    { "op": "book", "result_kind": "booking", "state": "scheduled" },
+    { "op": "cancel", "result_kind": "mutation", "state": "cancelled" },
+    { "op": "approval-request", "result_kind": "approval", "state": "issued" },
+    { "op": "approve", "result_kind": "approval", "state": "approved" },
+    { "op": "preempt", "result_kind": "mutation", "state": "stopping" },
+    { "op": "chat-load", "result_kind": "mutation", "state": "loading" },
+    { "op": "chat-unload", "result_kind": "mutation", "state": "unloaded" },
+    { "op": "cal", "result_kind": "projection", "state": "booked" },
+    { "op": "free", "result_kind": "projection", "state": "free" },
+    { "op": "report", "result_kind": "report", "state": "committed" },
+    { "op": "status", "result_kind": "status", "state": "unknown" }
+  ],
+  "responses": [
+    { "schema": 1, "request_id": "req-a", "status": 200, "data": { "kind": "status", "lane": null, "state": "running", "generation": 7, "occupancy": { "certainty": "confirmed", "reason": null }, "reachability": { "certainty": "confirmed", "reason": null } }, "error": null },
+    { "schema": 1, "request_id": "req-grant", "status": 200, "data": { "kind": "grant", "operation": "acquire", "token": "token-abcdefghijklmnop", "generation": 7, "lease": { "schema_version": 1, "lease_id": "lease-a", "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 7, "reservation": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 7, "state": "starting" }, "token": "token-abcdefghijklmnop", "instance": "instance-a", "principal": { "site_id": "site-a", "tenant_id": "tenant-a", "issuer": "issuer-a", "subject": "subject-a" }, "class": "batch", "purpose": "benchmark", "estimated_s": 60, "started_at": "2026-09-27T20:00:00Z", "max_end": "2026-09-27T21:00:00Z", "approved_max_end": "2026-09-27T21:00:00Z", "heartbeat_at": "2026-09-27T20:01:00Z", "deadline": { "boot_id": "boot-a", "deadline_s": 3600, "utc_anchor": "2026-09-27T20:00:00Z", "monotonic_anchor_s": 10 }, "booking_id": null, "unit": "unit-a", "invocation": "invoke-a", "state": "starting" }, "reservation": { "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu0" }, "generation": 7, "state": "starting" }, "adoption": { "mode": "fresh-acquire", "principal_bound": true, "generation_bound": true, "token_source": "controller-grant" } }, "error": null },
+    { "schema": 1, "request_id": "req-w", "status": 202, "data": { "kind": "pending", "operation": "acquire", "request_id": "req-w", "queue_id": "queue-a", "retry_after_s": 60, "wait_deadline": { "boot_id": "boot-a", "deadline_s": 600, "utc_anchor": "2026-09-27T20:00:00Z", "monotonic_anchor_s": 10 }, "reason": "lane is occupied" }, "error": null },
+    { "schema": 1, "request_id": "req-x", "status": 403, "data": null, "error": { "code": "denied", "message": "purpose rejected", "retryable": false, "failure_class": "policy" } },
+    { "schema": 1, "request_id": "req-y", "status": 409, "data": null, "error": { "code": "conflict", "message": "request ID arguments changed", "retryable": false, "failure_class": "conflict" } },
+    { "schema": 1, "request_id": "req-z", "status": 503, "data": null, "error": { "code": "unknown", "message": "host state unknown", "retryable": true, "failure_class": "state" } }
+  ],
+  "negative_requests": [
+    { "schema": 1, "request_id": "req-bad", "op": "release", "lane": "lane-gpu0", "args": { "token": "token-abcdefghijklmnop", "generation": 7, "generation_source": "caller-supplied" } },
+    { "schema": 1, "request_id": "req-bad2", "op": "queue", "lane": "lane-gpu0", "args": { "action": "list", "lane": "lane-other" } },
+    { "schema": 1, "request_id": "req-bad3", "op": "approval-request", "lane": null, "args": { "action": "pipeline", "booking_id": null, "revision": 1, "target_generation": null, "bounds": { "max_s": 60, "max_end": "2026-09-28T11:00:00Z" }, "reason": "pipeline approval", "challenge_id": "caller-challenge", "nonce": "caller-nonce", "expires": "2026-09-27T21:00:00Z", "destination_site": "site-a", "controller_id": "controller-a", "payload_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "manifest_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "policy_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } }
+  ],
+  "idempotency": {
+    "scope": "authenticated principal plus controller plus request_id",
+    "persisted_result": ["request_id", "idempotency_scope", "request_fingerprint", "status", "data", "error", "stored_at"],
+    "record": { "schema_version": 1, "request_id": "req-a", "idempotency_scope": { "scope": "authenticated-principal", "controller_id": "controller-a" }, "request_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "stored_at": "2026-09-27T20:00:00Z", "status": 503, "data": null, "error": { "code": "unknown", "message": "host state unknown", "retryable": true, "failure_class": "state" } }
+  }
+}

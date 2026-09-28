@@ -1,0 +1,6 @@
+{
+  "family": "nvidia",
+  "raw": "unparseable output",
+  "discovery_raw": { "tailnet_status": "{\"Peer\":null}", "ssh_probe": "timeout" },
+  "expected": { "vendor": null, "model": null, "vram_bytes": null, "driver": null, "count": null, "reason": "unparsable nvidia-smi row" }
+}

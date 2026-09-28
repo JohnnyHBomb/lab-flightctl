@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "policy_id": "default",
+  "revision": 1,
+  "updated_at": "2026-09-27T20:00:00Z",
+  "purpose_rules": ["purpose-required", "acceptable-use-current"],
+  "content_rules": ["content-policy-current"],
+  "admission": {
+    "max_clock_skew_s": 30,
+    "heartbeat_s": 60,
+    "queue_refresh_s": 60,
+    "queue_expiry_s": 600,
+    "booking_horizon_s": 1209600,
+    "minimum_booking_s": 900,
+    "agent_max_s": 14400,
+    "operator_max_s": 43200
+  },
+  "security_hooks": {
+    "supported_schemes": ["ssh-sk"],
+    "unsupported_supplied_action": "deny"
+  }
+}

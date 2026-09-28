@@ -1,0 +1,12 @@
+# lab-flightctl contracts
+
+This repository freezes portable Flightctl v1 contracts for parallel controller work. It intentionally contains schemas, typed dependency-injection protocols, side-effect-free fakes, examples, vectors, and checks; it does not contain a controller runtime, deployment, federation, credentials, real host calls, or GPU work.
+
+Run the acceptance checks with Python 3.12 and the declared test dependencies:
+
+```sh
+python -m pytest -q
+python tools/check_portability.py .
+```
+
+The contract index is in [contracts/README.md](contracts/README.md). JSON Schema documents are in `contracts/`; neutral templates are in `config/`; fake implementations and fixtures are in `tests/fakes/`; executable contract vectors are in `tests/contracts/vectors/`. `ROSTER-REPORT.md` records the local verification evidence and any environment blockers.
