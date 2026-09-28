@@ -503,7 +503,7 @@ def test_ci_security_configuration() -> None:
     assert any(line.startswith("- uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683") for line in active_lines)
     assert any(line.startswith("- uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38") for line in active_lines)
     for command in (
-        "run: shellcheck deploy/pre-commit-denylist deploy/provision-ci-tools",
+        "run: shellcheck -x deploy/pre-commit-denylist deploy/provision-ci-tools",
         "run: gitleaks detect --source . --no-banner --redact --exit-code 1",
         "run: pip-audit --strict --no-deps -r deploy/requirements-ci.lock",
         "run: semgrep scan --error --config p/python --config p/shell deploy tests",

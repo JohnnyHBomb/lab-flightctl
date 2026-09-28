@@ -53,7 +53,7 @@ jobs:
       - name: Portability
         run: python tools/check_portability.py .
       - name: ShellCheck
-        run: shellcheck deploy/pre-commit-denylist deploy/provision-ci-tools
+        run: shellcheck -x deploy/pre-commit-denylist deploy/provision-ci-tools
       - name: Gitleaks
         run: gitleaks detect --source . --no-banner --redact --exit-code 1
       - name: pip-audit

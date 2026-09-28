@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root="$(git rev-parse --show-toplevel)"
-# shellcheck source=ci-tools.lock
+# shellcheck source=deploy/ci-tools.lock
 source "$root/deploy/ci-tools.lock"
 
 tool_root="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/flightctl-ci-tools"
