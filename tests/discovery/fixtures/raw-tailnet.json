@@ -1,0 +1,9 @@
+{
+  "Peer": {
+    "node-amd": {"HostName": "amd", "DNSName": "amd.example", "Online": true},
+    "node-none": {"HostName": "no-gpu", "DNSName": "no-gpu.example", "Online": true},
+    "node-rtx": {"HostName": "rtx-8000", "DNSName": "rtx-8000.example", "Online": true},
+    "node-t4": {"HostName": "t4", "DNSName": "t4.example", "Online": true},
+    "node-titan": {"HostName": "titan-rtx", "DNSName": "titan-rtx.example", "Online": true}
+  }
+}
