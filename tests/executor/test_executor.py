@@ -135,11 +135,15 @@ class DelayedStart(IsolatedSystemd):
         super().__init__()
         self.entered = threading.Event()
         self.resume = threading.Event()
+        self.completed = threading.Event()
 
     def start(self, unit: str, invocation: str):
         self.entered.set()
         assert self.resume.wait(2)
-        return super().start(unit, invocation)
+        try:
+            return super().start(unit, invocation)
+        finally:
+            self.completed.set()
 
 
 def test_pending_start_stop_serializes_host_effects(tmp_path: Path) -> None:
@@ -171,6 +175,66 @@ def test_pending_start_stop_serializes_host_effects(tmp_path: Path) -> None:
     assert executor.state_snapshot(LANE_A)["state"] == "free"
     persisted = json.loads((tmp_path / "executor-state.json").read_text(encoding="utf-8"))
     assert persisted["lanes"]["site-a/host-1/lane-gpu0"]["state"] == "free"
+
+
+def test_deadline_stop_serializes_pending_start(tmp_path: Path) -> None:
+    systemd = DelayedStart()
+    executor, clock, _, gpu, trusted = make_executor(tmp_path, systemd=systemd, operation_timeout_s=1)
+    reserved = identity(deadline_s=2)
+    running = identity(unit="unit-deadline", invocation="invoke-deadline", deadline_s=2)
+    assert executor.handle(request("reserve", reserved, policy()), authenticated_controller=trusted)["ok"] is True
+    start_replies: list[dict[str, object]] = []
+    thread = threading.Thread(
+        target=lambda: start_replies.append(
+            executor.handle(request("start", running, policy(), reservation_acknowledged=True, workload=workload()), authenticated_controller=trusted)
+        )
+    )
+    thread.start()
+    assert systemd.entered.wait(1)
+    clock.advance(monotonic_s=2)
+    gpu.scripted.append({"ok": True, "status": "ok", "gpu_tenants": []})
+    tick = executor.enforce_deadlines()
+    assert tick and tick[-1]["ok"] is False
+    assert not [call for call in systemd.calls if call["method"] == "stop"]
+    assert executor.state_snapshot(LANE_A)["state"] == "stopping"
+    systemd.resume.set()
+    thread.join(3)
+    assert not thread.is_alive()
+    assert start_replies[0]["ok"] is False
+    assert systemd.calls == [
+        {"method": "start", "unit": "unit-deadline", "invocation": "invoke-deadline"},
+        {"method": "stop", "unit": "unit-deadline", "invocation": "invoke-deadline"},
+        {"method": "inspect", "unit": "unit-deadline", "invocation": "invoke-deadline"},
+    ]
+    assert executor.state_snapshot(LANE_A)["state"] == "free"
+
+
+def test_timed_out_start_retains_fence_until_worker_returns(tmp_path: Path) -> None:
+    systemd = DelayedStart()
+    executor, _, _, gpu, trusted = make_executor(tmp_path, systemd=systemd, operation_timeout_s=0.02)
+    running = identity(unit="unit-timeout", invocation="invoke-timeout")
+    assert executor.handle(request("reserve", identity(), policy()), authenticated_controller=trusted)["ok"] is True
+    systemd.queue("unit-timeout", "invoke-timeout", "inspect", "success", state="inactive", active=False)
+    timed_out = executor.handle(
+        request("start", running, policy(), reservation_acknowledged=True, workload=workload()),
+        authenticated_controller=trusted,
+    )
+    assert timed_out["ok"] is False and timed_out["uncertain"] is True
+    gpu.scripted.append({"ok": True, "status": "ok", "gpu_tenants": []})
+    queued = executor.handle(
+        request("stop", running, policy(), stop_authority={"mode": "controller-match", "approval_id": None}),
+        authenticated_controller=trusted,
+    )
+    assert queued["ok"] is False and queued["uncertain"] is True
+    assert not [call for call in systemd.calls if call["method"] == "stop"]
+    assert executor.state_snapshot(LANE_A)["state"] == "stopping"
+    systemd.resume.set()
+    assert systemd.completed.wait(1)
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline and executor.state_snapshot(LANE_A)["state"] != "free":
+        time.sleep(0.01)
+    assert executor.state_snapshot(LANE_A)["state"] == "free"
+    assert [call["method"] for call in systemd.calls] == ["start", "stop", "inspect"]
 
 
 def test_unique_unit_and_invocation_ownership(tmp_path: Path) -> None:
@@ -559,6 +623,47 @@ def test_reboot_reconcile_rejects_partial_and_reanchors_deadline(tmp_path: Path)
     assert executor.state_snapshot(LANE_A)["state"] == "free"
 
 
+def test_repeated_reboots_preserve_absolute_deadline(tmp_path: Path) -> None:
+    clock = FakeClock()
+    executor, _, systemd, gpu, trusted = make_executor(tmp_path, clock=clock)
+    start_one(executor, trusted, unit="unit-repeat", invocation="invoke-repeat", deadline_s=1000)
+
+    clock.advance(utc_s=100, monotonic_s=100)
+    clock.reboot(boot_id="boot-b")
+    assert executor.enforce_deadlines() == []
+    gpu.scripted.append({"ok": True, "status": "ok", "gpu_tenants": [], "complete": True})
+    first = executor.reconcile()["site-a/host-1/lane-gpu0"]
+    assert first["ok"] is True
+    first_deadline = executor.state_snapshot(LANE_A)["identity"]["deadline"]
+    assert first_deadline["boot_id"] == "boot-b"
+    assert first_deadline["deadline_s"] == 900
+    assert first_deadline["utc_anchor"] == "2026-09-27T20:01:40Z"
+
+    clock.advance(utc_s=100, monotonic_s=100)
+    clock.reboot(boot_id="boot-c")
+    assert executor.enforce_deadlines() == []
+    gpu.scripted.append({"ok": True, "status": "ok", "gpu_tenants": [], "complete": True})
+    second = executor.reconcile()["site-a/host-1/lane-gpu0"]
+    assert second["ok"] is True
+    second_deadline = executor.state_snapshot(LANE_A)["identity"]["deadline"]
+    assert second_deadline["boot_id"] == "boot-c"
+    assert second_deadline["deadline_s"] == 800
+    assert second_deadline["utc_anchor"] == "2026-09-27T20:03:20Z"
+
+    clock.advance(utc_s=700, monotonic_s=700)
+    current_identity = executor.state_snapshot(LANE_A)["identity"]
+    heartbeat = executor.handle(request("beat", current_identity, policy()), authenticated_controller=trusted)
+    assert heartbeat["ok"] is True
+    gpu.scripted.append({"ok": True, "status": "ok", "gpu_tenants": []})
+    assert executor.enforce_deadlines() == []
+    assert executor.state_snapshot(LANE_A)["state"] == "running"
+    clock.advance(utc_s=100, monotonic_s=100)
+    gpu.scripted.append({"ok": True, "status": "ok", "gpu_tenants": []})
+    assert executor.enforce_deadlines()[-1]["ok"] is True
+    assert [call["method"] for call in systemd.calls].count("stop") == 1
+    assert executor.state_snapshot(LANE_A)["state"] == "free"
+
+
 def test_clock_skew_freezes_free_lane_admission(tmp_path: Path) -> None:
     clock = FakeClock()
     executor, _, systemd, _, trusted = make_executor(tmp_path, clock=clock)
@@ -590,6 +695,36 @@ def test_stale_thresholds_and_resident_standby_graces(tmp_path: Path) -> None:
         first = executor.enforce_deadlines()
         assert first and first[-1]["ok"] is False
         clock.advance(monotonic_s=grace - 1)
+        assert not [call for call in systemd.calls if call["method"] == "stop"]
+        clock.advance(monotonic_s=1)
+        gpu.scripted.append({"ok": True, "status": "ok", "gpu_tenants": []})
+        final = executor.enforce_deadlines()
+        assert final and final[-1]["ok"] is True
+        assert [call["method"] for call in systemd.calls].count("stop") == 1
+
+
+def test_deadline_enforcement_calls_before_and_at_boundaries(tmp_path: Path) -> None:
+    clock = FakeClock()
+    executor, _, systemd, gpu, trusted = make_executor(tmp_path / "preemptible", clock=clock)
+    start_one(executor, trusted, pol=policy("batch", protected=False, preemptible=True), deadline_s=10000)
+    clock.advance(monotonic_s=179)
+    assert executor.enforce_deadlines() == []
+    assert not [call for call in systemd.calls if call["method"] == "stop"]
+    clock.advance(monotonic_s=1)
+    gpu.scripted.append({"ok": True, "status": "ok", "gpu_tenants": []})
+    assert executor.enforce_deadlines()[-1]["ok"] is True
+    assert [call["method"] for call in systemd.calls].count("stop") == 1
+
+    for owner_class, grace in (("service", 120), ("resident", 120), ("standby", 300)):
+        clock = FakeClock()
+        executor, _, systemd, gpu, trusted = make_executor(tmp_path / owner_class, clock=clock)
+        start_one(executor, trusted, pol=policy(owner_class), unit=f"unit-{owner_class}", invocation=f"invoke-{owner_class}", deadline_s=1)
+        clock.advance(monotonic_s=1)
+        first = executor.enforce_deadlines()
+        assert first and first[-1]["ok"] is False
+        clock.advance(monotonic_s=grace - 1)
+        before = executor.enforce_deadlines()
+        assert before and before[-1]["ok"] is False
         assert not [call for call in systemd.calls if call["method"] == "stop"]
         clock.advance(monotonic_s=1)
         gpu.scripted.append({"ok": True, "status": "ok", "gpu_tenants": []})

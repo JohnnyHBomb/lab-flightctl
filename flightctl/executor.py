@@ -154,6 +154,7 @@ class Executor:
         self._clock_skew_s = float(clock_skew_s)
         self._lock = threading.RLock()
         self._inflight_starts: set[tuple[str, int]] = set()
+        self._start_operations: dict[tuple[str, int], dict[str, object]] = {}
         self._inflight_stops: set[tuple[str, int]] = set()
         self._state_error: str | None = None
         try:
@@ -409,6 +410,7 @@ class Executor:
         policy = _dict(request.get("execution_policy"))
         workload = _dict(request.get("workload"))
         inspect_existing = False
+        generation_key = (key, int(identity["generation"]))
         with self._lock:
             if self._clock_frozen_locked():
                 return self._reply(request, "rejected", False, self._lane_state(key), False, "clock uncertainty freezes admission")
@@ -430,7 +432,6 @@ class Executor:
                 if not inspect_existing:
                     return self._reply(request, "rejected", False, str(record.get("state", "unknown")), False, "generation is closed")
             elif record.get("start_attempted"):
-                generation_key = (key, int(identity["generation"]))
                 if generation_key in self._inflight_starts:
                     return self._reply(request, "started", False, "quarantined", True, "start is already in progress")
                 uncertain = bool(record.get("start_uncertain"))
@@ -454,6 +455,13 @@ class Executor:
                 unit = str(identity["unit"])
                 invocation = str(identity["invocation"])
                 self._inflight_starts.add((key, int(identity["generation"])))
+                self._start_operations[generation_key] = {
+                    "identity": copy.deepcopy(identity),
+                    "unit": unit,
+                    "invocation": invocation,
+                    "finished": False,
+                    "timed_out": False,
+                }
                 inspect_needed = False
 
         if inspect_existing:
@@ -467,29 +475,48 @@ class Executor:
         if inspect_needed:
             return self._recover_start(request, key, unit, invocation)
 
-        result = self._bounded_call(self.systemd.start, unit, invocation)
-        self._inflight_starts.discard((key, int(identity["generation"])))
+        result = self._bounded_call(
+            self.systemd.start,
+            unit,
+            invocation,
+            on_complete=lambda completed: self._start_operation_finished(generation_key, unit, invocation, completed),
+        )
+        if self._mark_start_timeout(generation_key, identity):
+            return self._reply(
+                request,
+                "unknown",
+                False,
+                "quarantined",
+                True,
+                "systemd start operation timed out; completion remains fenced",
+            )
+        with self._lock:
+            operation = self._start_operations.get(generation_key)
+            if operation is not None and operation.get("finished"):
+                self._start_operations.pop(generation_key, None)
+                self._inflight_starts.discard(generation_key)
         if self._valid_systemd_success(result, unit, invocation):
             cleanup_snapshot: dict[str, object] | None = None
             keep_quarantined = False
             with self._lock:
                 current = self._state["lanes"].get(key)
-                if isinstance(current, dict) and current.get("generation") == identity.get("generation") and current.get("identity") == identity:
-                    current["start_in_flight"] = False
-                    current["start_result_ok"] = True
-                    current["start_uncertain"] = False
-                    if current.get("stop_requested") or current.get("state") == "stopping":
-                        current["state"] = "stopping"
-                        cleanup_snapshot = copy.deepcopy(current)
-                    elif current.get("state") == "starting":
-                        current["state"] = "running"
-                        now = self._read_clock()
-                        current["last_heartbeat_mono"] = now[1]
-                        current["last_heartbeat_utc"] = _utc_text(now[0])
-                        current["last_heartbeat_boot_id"] = now[2]
-                    else:
-                        keep_quarantined = True
-                    self._save_locked()
+                if not isinstance(current, dict) or current.get("generation") != identity.get("generation") or current.get("identity") != identity:
+                    return self._reply(request, "started", False, self._lane_state(key), True, "start fence changed before completion")
+                current["start_in_flight"] = False
+                current["start_result_ok"] = True
+                current["start_uncertain"] = False
+                if current.get("stop_requested") or current.get("state") == "stopping":
+                    current["state"] = "stopping"
+                    cleanup_snapshot = copy.deepcopy(current)
+                elif current.get("state") == "starting":
+                    current["state"] = "running"
+                    now = self._read_clock()
+                    current["last_heartbeat_mono"] = now[1]
+                    current["last_heartbeat_utc"] = _utc_text(now[0])
+                    current["last_heartbeat_boot_id"] = now[2]
+                else:
+                    keep_quarantined = True
+                self._save_locked()
             if cleanup_snapshot is not None:
                 cleanup = self._stop_record(key, cleanup_snapshot, reason="stop requested during start", internal=False)
                 if cleanup.get("ok") is True:
@@ -517,6 +544,68 @@ class Executor:
                 self._save_locked()
         self._quarantine(key, f"systemd start failed: {status}")
         return self._reply(request, "unknown", False, "quarantined", True, f"systemd start failed: {status}", result=result)
+
+    def _mark_start_timeout(self, generation_key: tuple[str, int], identity: Mapping[str, object]) -> bool:
+        """Retain the fence when the bounded wrapper outlives its caller."""
+
+        with self._lock:
+            operation = self._start_operations.get(generation_key)
+            if operation is None or operation.get("finished"):
+                return False
+            operation["timed_out"] = True
+            current = self._state.get("lanes", {}).get(generation_key[0])
+            if isinstance(current, dict) and current.get("generation") == generation_key[1] and current.get("identity") == dict(identity):
+                current["start_in_flight"] = True
+                current["start_uncertain"] = True
+                current["quarantine_reason"] = "systemd start operation timed out; completion remains fenced"
+                if current.get("stop_requested") or current.get("state") == "stopping":
+                    current["state"] = "stopping"
+                else:
+                    current["state"] = "quarantined"
+                self._close_record_locked(current)
+                self._save_locked()
+            return True
+
+    def _start_operation_finished(
+        self,
+        generation_key: tuple[str, int],
+        unit: str,
+        invocation: str,
+        result: Mapping[str, object],
+    ) -> None:
+        cleanup_snapshot: dict[str, object] | None = None
+        with self._lock:
+            operation = self._start_operations.get(generation_key)
+            if operation is None:
+                return
+            operation["finished"] = True
+            operation["result"] = copy.deepcopy(dict(result))
+            self._inflight_starts.discard(generation_key)
+            if not operation.get("timed_out"):
+                return
+            self._start_operations.pop(generation_key, None)
+            current = self._state.get("lanes", {}).get(generation_key[0])
+            identity = _dict(operation.get("identity"))
+            if not isinstance(current, dict) or current.get("generation") != generation_key[1] or current.get("identity") != identity:
+                return
+            current["start_in_flight"] = False
+            if self._valid_systemd_success(result, unit, invocation):
+                current["start_result_ok"] = True
+                current["start_uncertain"] = False
+                if current.get("stop_requested") or current.get("state") == "stopping":
+                    current["state"] = "stopping"
+                    cleanup_snapshot = copy.deepcopy(current)
+                else:
+                    current["state"] = "quarantined"
+                    current["quarantine_reason"] = "start completed after timeout; exact cleanup is required"
+            else:
+                current["start_result_ok"] = False
+                current["start_uncertain"] = True
+                current["state"] = "quarantined"
+                current["quarantine_reason"] = f"systemd start completed uncertainly: {result.get('status', 'unknown')}"
+            self._save_locked()
+        if cleanup_snapshot is not None:
+            self._stop_record(generation_key[0], cleanup_snapshot, reason="stop requested during late start completion", internal=False)
 
     def _recover_start(self, request: Mapping[str, object], key: str, unit: str, invocation: str) -> dict[str, object]:
         result = self._bounded_call(self.systemd.inspect, unit, invocation)
@@ -590,8 +679,9 @@ class Executor:
             record["last_heartbeat_mono"] = now[1]
             record["last_heartbeat_utc"] = _utc_text(now[0])
             record["last_heartbeat_boot_id"] = now[2]
-            record["grace_started_mono"] = None
-            record["grace_reason"] = None
+            if self._deadline_reason(record, now[1]) is None:
+                record["grace_started_mono"] = None
+                record["grace_reason"] = None
             self._save_locked()
             state = str(record.get("state", "running"))
         return self._reply(request, "beat", True, state, False, None)
@@ -677,6 +767,12 @@ class Executor:
                 return self._internal_result(key, "quarantined", "stop fence changed")
             if current.get("state") == "free":
                 return self._internal_result(key, "free", "already released")
+            if current.get("start_in_flight") or generation_key in self._inflight_starts:
+                current["state"] = "stopping"
+                current["stop_requested"] = True
+                current["closed_generation"] = max(int(current.get("closed_generation", 0)), int(current.get("generation", 0)))
+                self._save_locked()
+                return self._internal_result(key, "quarantined", "stop queued until start outcome is known")
             if generation_key in self._inflight_stops:
                 return self._internal_result(key, "quarantined", "stop is already in progress")
             if current.get("stop_attempted"):
@@ -790,6 +886,7 @@ class Executor:
         if remaining <= 0:
             return "deadline expired before reboot reconciliation"
         deadline["boot_id"] = now[2]
+        deadline["utc_anchor"] = _utc_text(now[0])
         deadline["monotonic_anchor_s"] = now[1]
         deadline["deadline_s"] = now[1] + remaining
         identity_copy = copy.deepcopy(dict(identity))
@@ -851,7 +948,12 @@ class Executor:
     def _save_locked(self) -> None:
         self._store.save(self._state)
 
-    def _bounded_call(self, function: Callable[..., object], *args: object) -> Mapping[str, object]:
+    def _bounded_call(
+        self,
+        function: Callable[..., object],
+        *args: object,
+        on_complete: Callable[[Mapping[str, object]], None] | None = None,
+    ) -> Mapping[str, object]:
         """Call an injected host operation with a finite wait.
 
         The injected interface has no timeout parameter.  A daemon worker keeps
@@ -862,12 +964,26 @@ class Executor:
 
         result: list[object] = []
         failure: list[BaseException] = []
+        completed: dict[str, object] = {
+            "ok": False,
+            "status": "unknown",
+            "unit": args[0] if args else None,
+            "invocation": args[1] if len(args) > 1 else None,
+        }
 
         def invoke() -> None:
             try:
-                result.append(function(*args))
+                observed = function(*args)
+                if isinstance(observed, Mapping):
+                    completed.update(dict(observed))
+                    result.append(dict(observed))
+                else:
+                    failure.append(TypeError("host operation returned a non-mapping result"))
             except BaseException as exc:  # pragma: no cover - adapter-specific
                 failure.append(exc)
+            finally:
+                if on_complete is not None:
+                    on_complete(completed)
 
         worker = threading.Thread(target=invoke, name="flightctl-host-call", daemon=True)
         worker.start()
@@ -1141,10 +1257,8 @@ class Executor:
     def _cleanup_systemd_observation(self, result: Mapping[str, object], unit: str, invocation: str) -> tuple[bool, str | None, list[str], list[str]]:
         if not isinstance(result, Mapping) or result.get("unit") != unit or result.get("invocation") != invocation:
             return False, "contradictory cleanup identity", [], []
-        cgroup_value = result.get("cgroup_occupants", result.get("occupants", _MISSING))
-        cgroup = _strict_string_list(cgroup_value)
-        gpu_value = result.get("gpu_occupants", result.get("gpu_tenants", []))
-        gpu = _strict_string_list(gpu_value)
+        cgroup = _occupancy_fields(result, ("cgroup_occupants", "occupants"))
+        gpu = _occupancy_fields(result, ("gpu_occupants", "gpu_tenants"), required=False)
         status = result.get("status")
         if result.get("ok") is not True or status not in _KNOWN_SUCCESS_STATUSES:
             return False, f"systemd cleanup inspection is {status or 'unknown'}", cgroup or [], gpu or []
@@ -1179,10 +1293,9 @@ class Executor:
             nested = result[nested_key]
             if not isinstance(nested, Mapping) or nested.get("ok") is not True or nested.get("status") not in _KNOWN_SUCCESS_STATUSES:
                 return False, "GPU cleanup operation failed", _list_strings(result.get("gpu_tenants", result.get("tenants", [])))
-        tenant_key = next((key for key in ("gpu_tenants", "tenants", "active_tenants", "occupants") if key in result), None)
-        if tenant_key is None or _strict_string_list(result.get(tenant_key)) is None:
+        tenants = _occupancy_fields(result, ("gpu_tenants", "tenants", "active_tenants", "occupants"))
+        if tenants is None:
             return False, "GPU cleanup output is missing or partial", []
-        tenants = _strict_string_list(result[tenant_key]) or []
         if tenants:
             return False, "GPU has unexplained tenants", tenants
         if result.get("complete") is False or result.get("certainty") == "unknown":
@@ -1201,16 +1314,16 @@ class Executor:
     def _active_gpu_observation(self, result: Mapping[str, object]) -> tuple[bool, str | None, list[str]]:
         if not isinstance(result, Mapping):
             return False, "GPU reconcile output is missing", []
-        tenant_key = next((key for key in ("gpu_tenants", "tenants", "active_tenants", "occupants") if key in result), None)
-        if tenant_key is None or _strict_string_list(result.get(tenant_key)) is None:
+        tenants = _occupancy_fields(result, ("gpu_tenants", "tenants", "active_tenants", "occupants"))
+        if tenants is None:
             return False, "GPU reconcile output is missing or partial", []
         if result.get("ok") is not True or result.get("status") not in _KNOWN_SUCCESS_STATUSES:
-            return False, "GPU reconcile output is uncertain", _strict_string_list(result[tenant_key]) or []
+            return False, "GPU reconcile output is uncertain", tenants
         if result.get("complete") is False or ("complete" in result and result.get("complete") is not True):
-            return False, "GPU reconcile output is incomplete", _strict_string_list(result[tenant_key]) or []
+            return False, "GPU reconcile output is incomplete", tenants
         if "certainty" in result and result.get("certainty") not in {"known", "complete"}:
-            return False, "GPU reconcile certainty is unknown", _strict_string_list(result[tenant_key]) or []
-        return True, None, _strict_string_list(result[tenant_key]) or []
+            return False, "GPU reconcile certainty is unknown", tenants
+        return True, None, tenants
 
 
 def _dict(value: object) -> dict[str, Any]:
@@ -1248,6 +1361,21 @@ def _strict_string_list(value: object) -> list[str] | None:
     if any(not isinstance(item, str) or not item for item in values):
         return None
     return values
+
+
+def _occupancy_fields(result: Mapping[str, object], keys: tuple[str, ...], *, required: bool = True) -> list[str] | None:
+    """Keep every reported occupant; an empty alias cannot mask uncertainty."""
+
+    present = [key for key in keys if key in result]
+    if not present and required:
+        return None
+    occupants: set[str] = set()
+    for key in present:
+        values = _strict_string_list(result[key])
+        if values is None:
+            return None
+        occupants.update(values)
+    return sorted(occupants)
 
 
 def _echo_identity(identity: Mapping[str, object]) -> dict[str, object]:
