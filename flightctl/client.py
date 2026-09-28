@@ -117,6 +117,24 @@ _RECORD_STATES = {
 }
 _LANE_STATES = {"unassigned", "reserved", "starting", "running", "stopping", "released", "quarantined", "unknown"}
 _LEASE_STATES = {"starting", "running", "stopping", "quarantined"}
+_RESULT_KINDS_BY_OPERATION = {
+    "acquire": {"grant", "pending"},
+    "renew": {"mutation"},
+    "release": {"mutation"},
+    "claim": {"grant", "pending"},
+    "queue": {"mutation", "pending", "queue"},
+    "book": {"booking", "pending"},
+    "cancel": {"booking", "mutation"},
+    "approval-request": {"approval"},
+    "approve": {"approval", "mutation"},
+    "preempt": {"mutation"},
+    "chat-load": {"grant", "mutation", "pending"},
+    "chat-unload": {"mutation"},
+    "cal": {"projection"},
+    "free": {"projection"},
+    "report": {"report"},
+    "status": {"status"},
+}
 
 
 class ClientError(ValueError):
@@ -193,6 +211,16 @@ def _deepcopy(value: Mapping[str, object]) -> dict[str, object]:
 
 def _invalid(error_cls: type[ClientError], message: str) -> None:
     raise error_cls(message)
+
+
+def _enum(value: object, field: str, allowed: set[str], error_cls: type[ClientError] = InvalidRequest) -> None:
+    if not isinstance(value, str) or value not in allowed:
+        _invalid(error_cls, f"{field} is invalid")
+
+
+def _schema_version(value: object, field: str, error_cls: type[ClientError] = InvalidRequest) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value != 1:
+        _invalid(error_cls, f"{field} is invalid")
 
 
 def _object(
@@ -294,8 +322,7 @@ def _validate_lane_generation(value: object, field: str, error_cls: type[ClientE
 def _validate_measurement(value: object, field: str, error_cls: type[ClientError] = InvalidRequest) -> None:
     measurement = _object(value, field, {"certainty", "reason"}, error_cls=error_cls)
     certainty = measurement.get("certainty")
-    if certainty not in {"confirmed", "estimate", "unknown"}:
-        _invalid(error_cls, f"{field}.certainty is invalid")
+    _enum(certainty, f"{field}.certainty", {"confirmed", "estimate", "unknown"}, error_cls)
     reason = measurement.get("reason")
     if reason is not None and (not isinstance(reason, str) or not reason or len(reason) > 512):
         _invalid(error_cls, f"{field}.reason is invalid")
@@ -376,8 +403,8 @@ def _validate_evidence(value: object, field: str, error_cls: type[ClientError] =
     evidence = _object(value, field, {"verifier", "verified_at", "user_presence", "user_verification"}, error_cls=error_cls)
     _identifier(evidence.get("verifier"), f"{field}.verifier", error_cls)
     _utc_time(evidence.get("verified_at"), f"{field}.verified_at", error_cls)
-    if evidence.get("user_presence") not in {"verified", "not_required"} or evidence.get("user_verification") not in {"verified", "not_required"}:
-        _invalid(error_cls, f"{field} user verification is invalid")
+    _enum(evidence.get("user_presence"), f"{field}.user_presence", {"verified", "not_required"}, error_cls)
+    _enum(evidence.get("user_verification"), f"{field}.user_verification", {"verified", "not_required"}, error_cls)
 
 
 def _validate_assurance(value: object, field: str, error_cls: type[ClientError] = InvalidRequest) -> None:
@@ -421,8 +448,10 @@ def _validate_canonical_binding(value: object, field: str, error_cls: type[Clien
         if isinstance(depth, bool) or not isinstance(depth, int) or not 0 <= depth <= 8:
             _invalid(error_cls, f"{field}.attenuation.max_depth is invalid")
         operations = attenuation.get("allowed_operations")
-        if not isinstance(operations, list) or not _unique(operations) or any(item not in {"acquire", "renew", "release", "claim", "queue", "book", "cancel", "preempt", "run", "chat-load", "chat-unload"} for item in operations):
+        if not isinstance(operations, list) or not _unique(operations):
             _invalid(error_cls, f"{field}.attenuation.allowed_operations is invalid")
+        for index, operation in enumerate(operations):
+            _enum(operation, f"{field}.attenuation.allowed_operations[{index}]", {"acquire", "renew", "release", "claim", "queue", "book", "cancel", "preempt", "run", "chat-load", "chat-unload"}, error_cls)
         _validate_resource_ceiling(attenuation.get("resource_ceiling"), f"{field}.attenuation.resource_ceiling", error_cls)
 
 
@@ -434,8 +463,10 @@ def _validate_delegation(value: object, field: str, error_cls: type[ClientError]
     _short_identifier(delegation.get("destination_site"), f"{field}.destination_site", error_cls)
     operations = delegation.get("allowed_operations")
     allowed_operations = {"acquire", "renew", "release", "claim", "queue", "book", "cancel", "preempt", "run", "chat-load", "chat-unload"}
-    if not isinstance(operations, list) or not _unique(operations) or any(item not in allowed_operations for item in operations):
+    if not isinstance(operations, list) or not _unique(operations):
         _invalid(error_cls, f"{field}.allowed_operations is invalid")
+    for index, operation in enumerate(operations):
+        _enum(operation, f"{field}.allowed_operations[{index}]", allowed_operations, error_cls)
     pipelines = delegation.get("allowed_pipelines")
     if not isinstance(pipelines, list) or not _unique(pipelines):
         _invalid(error_cls, f"{field}.allowed_pipelines is invalid")
@@ -471,6 +502,12 @@ def _validate_batch(value: object, field: str, error_cls: type[ClientError] = In
             _identifier(dependency, f"{field}.arms[{index}].dependencies[{dep_index}]", error_cls)
     if not _unique(arm_ids):
         _invalid(error_cls, f"{field}.arms contains duplicate arm IDs")
+    registered = set(arm_ids)
+    for arm in arms:
+        if arm["predecessor"] is not None and arm["predecessor"] not in registered:
+            _invalid(error_cls, f"{field} predecessor was not registered")
+        if not set(arm["dependencies"]).issubset(registered):
+            _invalid(error_cls, f"{field} dependency was not registered")
     dependencies = batch.get("dependencies")
     if not isinstance(dependencies, list) or not _unique(dependencies):
         _invalid(error_cls, f"{field}.dependencies is invalid")
@@ -483,8 +520,7 @@ def _validate_batch(value: object, field: str, error_cls: type[ClientError] = In
 def _validate_manifest_parameter(value: object, field: str, error_cls: type[ClientError] = InvalidRequest) -> None:
     parameter = _object(value, field, {"type", "value"}, error_cls=error_cls)
     kind = parameter.get("type")
-    if kind not in {"string", "integer", "number", "boolean", "string-list"}:
-        _invalid(error_cls, f"{field}.type is invalid")
+    _enum(kind, f"{field}.type", {"string", "integer", "number", "boolean", "string-list"}, error_cls)
     actual = parameter.get("value")
     if kind == "string" and not isinstance(actual, str):
         _invalid(error_cls, f"{field}.value must be a string")
@@ -511,10 +547,8 @@ def _validate_signed_receipt(value: object, field: str, error_cls: type[ClientEr
 
 def _validate_transfer_hook(value: object, field: str, error_cls: type[ClientError] = InvalidRequest) -> None:
     transfer = _object(value, field, {"interface_version", "mode", "destination", "object_hash", "authenticated_context_ref", "key_rotation_ref"}, error_cls=error_cls)
-    if transfer.get("interface_version") != 1:
-        _invalid(error_cls, f"{field}.interface_version is invalid")
-    if transfer.get("mode") not in {"local", "object-reference", "stream"}:
-        _invalid(error_cls, f"{field}.mode is invalid")
+    _schema_version(transfer.get("interface_version"), f"{field}.interface_version", error_cls)
+    _enum(transfer.get("mode"), f"{field}.mode", {"local", "object-reference", "stream"}, error_cls)
     _identifier(transfer.get("destination"), f"{field}.destination", error_cls)
     _valid_hash(transfer.get("object_hash"), f"{field}.object_hash", error_cls)
     _identifier(transfer.get("authenticated_context_ref"), f"{field}.authenticated_context_ref", error_cls)
@@ -536,8 +570,7 @@ def _validate_output_policy(value: object, field: str, error_cls: type[ClientErr
 def _validate_signed_manifest(value: object, field: str, error_cls: type[ClientError] = InvalidRequest) -> None:
     required = {"schema_version", "job_id", "request_id", "origin_site", "destination_site", "principal", "nonce", "expires", "pipeline_id", "pipeline_version", "image_digest", "parameters", "input_hashes", "output_policy", "resource_ceiling", "deadline_s", "policy_hash", "required_assurance", "canonical_payload_hash", "proof", "key_rotation_ref"}
     manifest = _object(value, field, required, error_cls=error_cls)
-    if manifest.get("schema_version") != 1:
-        _invalid(error_cls, f"{field}.schema_version is invalid")
+    _schema_version(manifest.get("schema_version"), f"{field}.schema_version", error_cls)
     for key in ("job_id", "request_id", "nonce"):
         _identifier(manifest.get(key), f"{field}.{key}", error_cls)
     for key in ("origin_site", "destination_site", "pipeline_id"):
@@ -581,12 +614,10 @@ def _validate_ingress(ingress: object) -> None:
         raise InvalidRequest("admission peer_source must be socket-peer")
     if ingress_value.get("transport_binding") != "transport-independent":
         raise InvalidRequest("admission transport binding is invalid")
-    if ingress_value.get("auth_method") not in {"local", "tailnet-peer", "ssh-sk", "webauthn"}:
-        raise InvalidRequest("admission auth method is invalid")
+    _enum(ingress_value.get("auth_method"), "admission auth method", {"local", "tailnet-peer", "ssh-sk", "webauthn"})
     if ingress_value.get("peer_verified") is not True or ingress_value.get("forwarding_headers_ignored") is not True:
         raise InvalidRequest("admission peer assertions are invalid")
-    if ingress_value.get("operator_elevation") not in {"none", "approval-only"}:
-        raise InvalidRequest("admission operator elevation is invalid")
+    _enum(ingress_value.get("operator_elevation"), "admission operator elevation", {"none", "approval-only"})
 
 
 def _default_admission(controller_id: str) -> dict[str, object]:
@@ -662,8 +693,7 @@ def validate_operation(message: Mapping[str, object]) -> None:
         if extra:
             detail.append("unexpected " + ", ".join(sorted(extra)))
         raise InvalidRequest("invalid RPC envelope: " + "; ".join(detail))
-    if message.get("schema") != 1:
-        raise InvalidRequest("unsupported RPC schema")
+    _schema_version(message.get("schema"), "schema")
     _identifier(message.get("request_id"), "request_id")
     op = message.get("op")
     if not isinstance(op, str) or op not in _OPS:
@@ -674,9 +704,8 @@ def validate_operation(message: Mapping[str, object]) -> None:
     args = message.get("args")
     if not isinstance(args, Mapping):
         raise InvalidRequest("args must be an object")
-    scope = message.get("idempotency_scope")
-    if not isinstance(scope, Mapping) or scope.get("scope") not in {"authenticated-principal", "controller"}:
-        raise InvalidRequest("invalid idempotency scope")
+    scope = _object(message.get("idempotency_scope"), "idempotency_scope", {"scope", "controller_id"})
+    _enum(scope.get("scope"), "idempotency scope", {"authenticated-principal", "controller"})
     _identifier(scope.get("controller_id"), "idempotency controller_id")
     _valid_hash(message.get("request_fingerprint"), "request_fingerprint")
     _validate_admission(message.get("admission"))
@@ -697,8 +726,7 @@ def _validate_args(op: str, lane: object, args: Mapping[str, object]) -> None:
     if op == "acquire":
         _require_exact_keys(args, {"purpose", "class", "est_s", "max_s", "booking_id", "queue_id", "pipeline_ref", "signed_manifest"}, {"purpose", "class", "est_s", "max_s"})
         _purpose(args.get("purpose"))
-        if args.get("class") not in _CLASSES:
-            raise InvalidRequest("invalid acquire class")
+        _enum(args.get("class"), "acquire class", _CLASSES)
         _positive_int(args.get("est_s"), "est_s")
         _positive_int(args.get("max_s"), "max_s")
         if int(args["est_s"]) > int(args["max_s"]):
@@ -740,6 +768,8 @@ def _validate_args(op: str, lane: object, args: Mapping[str, object]) -> None:
             _positive_int(args.get("generation"), "generation")
             if args.get("generation_source") != "authenticated-adoption":
                 raise InvalidRequest("generation source is not authenticated")
+            if args.get("instance") is not None:
+                _identifier(args["instance"], "instance")
         else:
             _require_exact_keys(args, {"booking_id", "revision"}, {"booking_id", "revision"})
             _identifier(args.get("booking_id"), "booking_id")
@@ -750,8 +780,7 @@ def _validate_args(op: str, lane: object, args: Mapping[str, object]) -> None:
         if action == "add":
             _require_exact_keys(args, {"action", "purpose", "class", "max_wait_s"}, {"action", "purpose", "class", "max_wait_s"})
             _purpose(args.get("purpose"))
-            if args.get("class") not in _CLASSES:
-                raise InvalidRequest("invalid queue class")
+            _enum(args.get("class"), "queue class", _CLASSES)
             _positive_int(args.get("max_wait_s"), "max_wait_s")
         elif action == "refresh":
             _require_exact_keys(args, {"action", "queue_id", "max_wait_s"}, {"action", "queue_id", "max_wait_s"})
@@ -783,8 +812,7 @@ def _validate_args(op: str, lane: object, args: Mapping[str, object]) -> None:
         return
     if op == "approval-request":
         _require_exact_keys(args, {"action", "booking_id", "revision", "target_generation", "bounds", "reason", "destination_site", "controller_id", "payload_hash", "manifest_hash", "policy_hash"}, {"action", "booking_id", "revision", "target_generation", "bounds", "reason", "destination_site", "controller_id", "payload_hash", "manifest_hash", "policy_hash"})
-        if args.get("action") not in {"extension", "forced-preemption", "displacement", "pipeline", "operator-admission"}:
-            raise InvalidRequest("invalid approval action")
+        _enum(args.get("action"), "approval action", {"extension", "forced-preemption", "displacement", "pipeline", "operator-admission"})
         for key in ("booking_id", "revision", "target_generation"):
             if args.get(key) is not None:
                 _positive_int(args[key], key) if key != "booking_id" else _identifier(args[key], key)
@@ -829,8 +857,6 @@ def _validate_args(op: str, lane: object, args: Mapping[str, object]) -> None:
         _positive_int(args.get("generation"), "generation")
         return
     if op in {"cal", "free", "report", "status"}:
-        if op != "cal" and lane is None:
-            raise InvalidRequest(f"{op} requires a lane")
         _require_exact_keys(args, {"at"}, set())
         if "at" in args and args["at"] is not None:
             _utc_time(args["at"], "at")
@@ -867,9 +893,7 @@ def _validate_response_lease(value: object, field: str, *, read: bool = False) -
             raise InvalidResponse(f"{field} contains a raw token")
         if lease.get("token_redacted") is not True:
             raise InvalidResponse(f"{field}.token_redacted must be true")
-        state = lease.get("state")
-        if state not in _LEASE_STATES:
-            raise InvalidResponse(f"{field}.state is invalid")
+        _enum(lease.get("state"), f"{field}.state", _LEASE_STATES, InvalidResponse)
     else:
         lease = _object(value, field, {"schema_version", "lease_id", "lane", "generation", "reservation", "token", "instance", "principal", "class", "purpose", "estimated_s", "started_at", "max_end", "approved_max_end", "heartbeat_at", "deadline", "booking_id", "unit", "invocation", "state"}, error_cls=InvalidResponse)
         _response_token(lease.get("token"), f"{field}.token")
@@ -882,10 +906,8 @@ def _validate_response_lease(value: object, field: str, *, read: bool = False) -
             _identifier(booking_id, f"{field}.booking_id", InvalidResponse)
         _identifier(lease.get("unit"), f"{field}.unit", InvalidResponse)
         _identifier(lease.get("invocation"), f"{field}.invocation", InvalidResponse)
-        if lease.get("state") not in _LEASE_STATES:
-            raise InvalidResponse(f"{field}.state is invalid")
-    if lease.get("schema_version") != 1:
-        raise InvalidResponse(f"{field}.schema_version is invalid")
+        _enum(lease.get("state"), f"{field}.state", _LEASE_STATES, InvalidResponse)
+    _schema_version(lease.get("schema_version"), f"{field}.schema_version", InvalidResponse)
     _identifier(lease.get("lease_id"), f"{field}.lease_id", InvalidResponse)
     _validate_lane_ref(lease.get("lane"), f"{field}.lane", InvalidResponse)
     _positive_int(lease.get("generation"), f"{field}.generation", InvalidResponse)
@@ -904,16 +926,16 @@ def _validate_response_occupant(value: object, field: str) -> None:
         raise InvalidResponse(f"{field} contains a raw token")
     required = {"schema_version", "occupant_id", "lane", "reservation", "generation", "instance", "principal", "class", "pipeline_ref", "purpose", "loaded_at", "last_activity", "request_accounting", "state", "unit", "invocation", "deadline", "token_redacted"}
     occupant = _object(value, field, required, error_cls=InvalidResponse)
-    if occupant.get("schema_version") != 1 or occupant.get("token_redacted") is not True:
-        raise InvalidResponse(f"{field} redaction is invalid")
+    _schema_version(occupant.get("schema_version"), f"{field}.schema_version", InvalidResponse)
+    if occupant.get("token_redacted") is not True:
+        raise InvalidResponse(f"{field}.token_redacted must be true")
     _identifier(occupant.get("occupant_id"), f"{field}.occupant_id", InvalidResponse)
     _validate_lane_ref(occupant.get("lane"), f"{field}.lane", InvalidResponse)
     _validate_lane_generation(occupant.get("reservation"), f"{field}.reservation", InvalidResponse)
     _positive_int(occupant.get("generation"), f"{field}.generation", InvalidResponse)
     _identifier(occupant.get("instance"), f"{field}.instance", InvalidResponse)
     _validate_principal(occupant.get("principal"), f"{field}.principal", InvalidResponse)
-    if occupant.get("class") not in {"service", "resident", "standby"}:
-        raise InvalidResponse(f"{field}.class is invalid")
+    _enum(occupant.get("class"), f"{field}.class", {"service", "resident", "standby"}, InvalidResponse)
     _short_identifier(occupant.get("pipeline_ref"), f"{field}.pipeline_ref", InvalidResponse)
     _purpose(occupant.get("purpose"), InvalidResponse)
     _utc_time(occupant.get("loaded_at"), f"{field}.loaded_at", InvalidResponse)
@@ -925,8 +947,7 @@ def _validate_response_occupant(value: object, field: str) -> None:
         _utc_time(accounting.get("last_completed_at"), f"{field}.request_accounting.last_completed_at", InvalidResponse)
     if accounting.get("activity_basis") != "completed-user-request":
         raise InvalidResponse(f"{field}.request_accounting.activity_basis is invalid")
-    if occupant.get("state") not in {"loading", "running", "draining", "unloaded", "quarantined"}:
-        raise InvalidResponse(f"{field}.state is invalid")
+    _enum(occupant.get("state"), f"{field}.state", {"loading", "running", "draining", "unloaded", "quarantined"}, InvalidResponse)
     _identifier(occupant.get("unit"), f"{field}.unit", InvalidResponse)
     _identifier(occupant.get("invocation"), f"{field}.invocation", InvalidResponse)
     _validate_deadline(occupant.get("deadline"), f"{field}.deadline", InvalidResponse)
@@ -934,8 +955,7 @@ def _validate_response_occupant(value: object, field: str) -> None:
 
 def _validate_response_booking(value: object, field: str) -> None:
     booking = _object(value, field, {"schema_version", "booking_id", "revision", "lane", "reservation", "principal", "purpose", "start", "end", "state", "checked_in_at", "created_at", "displacement", "recovery"}, error_cls=InvalidResponse)
-    if booking.get("schema_version") != 1:
-        raise InvalidResponse(f"{field}.schema_version is invalid")
+    _schema_version(booking.get("schema_version"), f"{field}.schema_version", InvalidResponse)
     _identifier(booking.get("booking_id"), f"{field}.booking_id", InvalidResponse)
     _positive_int(booking.get("revision"), f"{field}.revision", InvalidResponse)
     if booking.get("lane") is not None:
@@ -945,16 +965,14 @@ def _validate_response_booking(value: object, field: str) -> None:
     _purpose(booking.get("purpose"), InvalidResponse)
     _utc_time(booking.get("start"), f"{field}.start", InvalidResponse)
     _utc_time(booking.get("end"), f"{field}.end", InvalidResponse)
-    if booking.get("state") not in {"scheduled", "blocked", "claimed", "missed", "completed", "cancelled", "displaced", "recovery"}:
-        raise InvalidResponse(f"{field}.state is invalid")
+    _enum(booking.get("state"), f"{field}.state", {"scheduled", "blocked", "claimed", "missed", "completed", "cancelled", "displaced", "recovery"}, InvalidResponse)
     if booking.get("checked_in_at") is not None:
         _utc_time(booking.get("checked_in_at"), f"{field}.checked_in_at", InvalidResponse)
     _utc_time(booking.get("created_at"), f"{field}.created_at", InvalidResponse)
     if booking.get("displacement") is not None:
         _identifier(booking.get("displacement"), f"{field}.displacement", InvalidResponse)
     recovery = _object(booking.get("recovery"), f"{field}.recovery", {"state", "at", "reason"}, error_cls=InvalidResponse)
-    if recovery.get("state") not in {"none", "blocked-check-in", "no-show-reopened", "overrun-delayed"}:
-        raise InvalidResponse(f"{field}.recovery.state is invalid")
+    _enum(recovery.get("state"), f"{field}.recovery.state", {"none", "blocked-check-in", "no-show-reopened", "overrun-delayed"}, InvalidResponse)
     if recovery.get("at") is not None:
         _utc_time(recovery.get("at"), f"{field}.recovery.at", InvalidResponse)
     if recovery.get("reason") is not None and (not isinstance(recovery.get("reason"), str) or not recovery["reason"] or len(recovery["reason"]) > 512):
@@ -968,12 +986,10 @@ def _validate_response_booking(value: object, field: str) -> None:
 def _validate_response_approval(value: object, field: str) -> None:
     required = {"schema_version", "id", "challenge_id", "challenge_nonce", "action", "requester", "lane", "booking_id", "revision", "target_generation", "bounds", "reason", "nonce", "expires", "approver", "approved_at", "proof", "verified_evidence", "consumed_at", "destination_site", "controller_id", "payload_hash", "manifest_hash", "policy_hash", "challenge_policy_hash", "challenge_manifest_hash", "canonicalization", "canonical_encoding", "hash_algorithm", "domain", "signed_fields", "state"}
     approval = _object(value, field, required, error_cls=InvalidResponse)
-    if approval.get("schema_version") != 1:
-        raise InvalidResponse(f"{field}.schema_version is invalid")
+    _schema_version(approval.get("schema_version"), f"{field}.schema_version", InvalidResponse)
     for key in ("id", "challenge_id", "challenge_nonce", "nonce", "controller_id"):
         _identifier(approval.get(key), f"{field}.{key}", InvalidResponse)
-    if approval.get("action") not in {"extension", "forced-preemption", "displacement", "pipeline", "operator-admission"}:
-        raise InvalidResponse(f"{field}.action is invalid")
+    _enum(approval.get("action"), f"{field}.action", {"extension", "forced-preemption", "displacement", "pipeline", "operator-admission"}, InvalidResponse)
     _validate_principal(approval.get("requester"), f"{field}.requester", InvalidResponse)
     if approval.get("lane") is not None:
         _validate_lane_ref(approval.get("lane"), f"{field}.lane", InvalidResponse)
@@ -1010,21 +1026,19 @@ def _validate_response_approval(value: object, field: str) -> None:
     signed_fields = ["id", "action", "requester", "lane", "booking_id", "revision", "target_generation", "bounds", "reason", "nonce", "expires", "destination_site", "controller_id", "payload_hash", "manifest_hash", "policy_hash", "challenge_id", "challenge_nonce"]
     if approval.get("signed_fields") != signed_fields:
         raise InvalidResponse(f"{field}.signed_fields is invalid")
-    if approval.get("state") not in {"issued", "approved", "consumed", "expired", "revoked"}:
-        raise InvalidResponse(f"{field}.state is invalid")
+    _enum(approval.get("state"), f"{field}.state", {"issued", "approved", "consumed", "expired", "revoked"}, InvalidResponse)
 
 
 def _validate_response_event(value: object, field: str) -> None:
     event = _object(value, field, {"schema_version", "event_id", "occurred_at", "kind", "state", "request_id", "job_id", "actor", "subject", "site_id", "controller_id", "correlation_id", "lane", "generation", "reason", "data"}, error_cls=InvalidResponse)
-    if event.get("schema_version") != 1:
-        raise InvalidResponse(f"{field}.schema_version is invalid")
+    _schema_version(event.get("schema_version"), f"{field}.schema_version", InvalidResponse)
     for key in ("event_id", "request_id", "controller_id", "correlation_id"):
         _identifier(event.get(key), f"{field}.{key}", InvalidResponse)
     if event.get("job_id") is not None:
         _identifier(event.get("job_id"), f"{field}.job_id", InvalidResponse)
     _utc_time(event.get("occurred_at"), f"{field}.occurred_at", InvalidResponse)
-    if event.get("kind") not in {"acquire", "renew", "release", "claim", "queue", "book", "cancel", "approval-request", "approval", "preempt", "chat-load", "chat-unload", "reconcile", "discovery"} or event.get("state") not in _RECORD_STATES | {"recovery"}:
-        raise InvalidResponse(f"{field} discriminator is invalid")
+    _enum(event.get("kind"), f"{field}.kind", {"acquire", "renew", "release", "claim", "queue", "book", "cancel", "approval-request", "approval", "preempt", "chat-load", "chat-unload", "reconcile", "discovery"}, InvalidResponse)
+    _enum(event.get("state"), f"{field}.state", _RECORD_STATES | {"recovery"}, InvalidResponse)
     _validate_principal(event.get("actor"), f"{field}.actor", InvalidResponse)
     if event.get("subject") is not None:
         _validate_principal(event.get("subject"), f"{field}.subject", InvalidResponse)
@@ -1046,29 +1060,72 @@ def _validate_response_event(value: object, field: str) -> None:
         raise InvalidResponse(f"{field}.data.token_redacted must be true")
 
 
-def _validate_response_result(data: object) -> None:
+def _validate_projection_window(value: object, field: str) -> None:
+    """Validate the projection-window schema, whose reason is independent of measurement."""
+
+    window = _object(value, field, {"start", "end", "state", "certainty", "reason"}, error_cls=InvalidResponse)
+    _utc_time(window.get("start"), f"{field}.start", InvalidResponse)
+    _utc_time(window.get("end"), f"{field}.end", InvalidResponse)
+    _enum(window.get("state"), f"{field}.state", {"free", "booked", "occupied", "unknown"}, InvalidResponse)
+    certainty = window.get("certainty")
+    _enum(certainty, f"{field}.certainty", {"confirmed", "estimate", "unknown"}, InvalidResponse)
+    reason = window.get("reason")
+    if reason is not None and (not isinstance(reason, str) or not reason):
+        raise InvalidResponse(f"{field}.reason is invalid")
+    if certainty in {"estimate", "unknown"} and not isinstance(reason, str):
+        raise InvalidResponse(f"{field}.reason is required for uncertain projections")
+
+
+def _require_response_lane(value: object, field: str, lane: str | None) -> None:
+    if lane is not None and value is not None and (not isinstance(value, Mapping) or value.get("lane_id") != lane):
+        raise InvalidResponse(f"{field} is not bound to the requested lane")
+
+
+def _validate_response_result(data: object, *, operation: str | None = None, lane: str | None = None) -> None:
     if not isinstance(data, Mapping):
         raise InvalidResponse("successful response is not an object")
     kind = data.get("kind")
+    if operation is not None:
+        allowed = _RESULT_KINDS_BY_OPERATION.get(operation)
+        if allowed is None or not isinstance(kind, str) or kind not in allowed:
+            raise InvalidResponse(f"response kind is not valid for {operation}")
     if kind == "grant":
         grant = _object(data, "response.data", {"kind", "operation", "token", "generation", "lease", "reservation", "adoption"}, error_cls=InvalidResponse)
-        if grant.get("kind") != "grant" or grant.get("operation") not in {"acquire", "claim", "chat-load"}:
+        if grant.get("kind") != "grant":
             raise InvalidResponse("grant discriminator is invalid")
+        _enum(grant.get("operation"), "grant.operation", {"acquire", "claim", "chat-load"}, InvalidResponse)
+        if operation is not None and grant.get("operation") != operation:
+            raise InvalidResponse("grant operation does not match request")
         _response_token(grant.get("token"), "grant.token")
         _positive_int(grant.get("generation"), "grant.generation", InvalidResponse)
         _validate_response_lease(grant.get("lease"), "grant.lease")
         _validate_lane_generation(grant.get("reservation"), "grant.reservation", InvalidResponse)
         adoption = _object(grant.get("adoption"), "grant.adoption", {"mode", "principal_bound", "generation_bound", "token_source"}, error_cls=InvalidResponse)
-        if adoption.get("mode") not in {"fresh-acquire", "authenticated-adoption"} or adoption.get("principal_bound") is not True or adoption.get("generation_bound") is not True:
+        _enum(adoption.get("mode"), "grant.adoption.mode", {"fresh-acquire", "authenticated-adoption"}, InvalidResponse)
+        if adoption.get("principal_bound") is not True or adoption.get("generation_bound") is not True:
             raise InvalidResponse("grant adoption binding is invalid")
         expected_source = "controller-grant" if adoption.get("mode") == "fresh-acquire" else "authenticated-adoption"
         if adoption.get("token_source") != expected_source:
             raise InvalidResponse("grant token source is not bound")
+        lease = grant.get("lease")
+        reservation = grant.get("reservation")
+        lease_reservation = lease.get("reservation") if isinstance(lease, Mapping) else None
+        lease_lane = lease.get("lane") if isinstance(lease, Mapping) else None
+        lease_reservation_lane = lease_reservation.get("lane") if isinstance(lease_reservation, Mapping) else None
+        reservation_lane = reservation.get("lane") if isinstance(reservation, Mapping) else None
+        if not all(isinstance(value, Mapping) for value in (lease_lane, lease_reservation_lane, reservation_lane)):
+            raise InvalidResponse("grant lane binding is incomplete")
+        if dict(lease_lane) != dict(lease_reservation_lane) or dict(lease_lane) != dict(reservation_lane):
+            raise InvalidResponse("grant reservation lane identities disagree")
+        _require_response_lane(lease_lane, "grant.lease.lane", lane)
         return
     if kind == "pending":
         pending = _object(data, "response.data", {"kind", "operation", "request_id", "queue_id", "retry_after_s", "wait_deadline", "reason"}, error_cls=InvalidResponse)
-        if pending.get("kind") != "pending" or pending.get("operation") not in {"acquire", "claim", "queue", "book", "chat-load"}:
+        if pending.get("kind") != "pending":
             raise InvalidResponse("pending discriminator is invalid")
+        _enum(pending.get("operation"), "pending.operation", {"acquire", "claim", "queue", "book", "chat-load"}, InvalidResponse)
+        if operation is not None and pending.get("operation") != operation:
+            raise InvalidResponse("pending operation does not match request")
         _identifier(pending.get("request_id"), "pending.request_id", InvalidResponse)
         if pending.get("queue_id") is not None:
             _identifier(pending.get("queue_id"), "pending.queue_id", InvalidResponse)
@@ -1079,10 +1136,12 @@ def _validate_response_result(data: object) -> None:
         return
     if kind == "reachability":
         result = _object(data, "response.data", {"kind", "lane", "host_id", "reachability", "observation", "error"}, error_cls=InvalidResponse)
-        if result.get("kind") != "reachability" or result.get("reachability") not in {"confirmed", "unreachable", "unknown"}:
+        if result.get("kind") != "reachability":
             raise InvalidResponse("reachability result is invalid")
+        _enum(result.get("reachability"), "reachability.reachability", {"confirmed", "unreachable", "unknown"}, InvalidResponse)
         if result.get("lane") is not None:
             _validate_lane_ref(result.get("lane"), "reachability.lane", InvalidResponse)
+        _require_response_lane(result.get("lane"), "reachability.lane", lane)
         _short_identifier(result.get("host_id"), "reachability.host_id", InvalidResponse)
         _validate_measurement(result.get("observation"), "reachability.observation", InvalidResponse)
         if result.get("error") is not None and (not isinstance(result.get("error"), str) or not result["error"]):
@@ -1090,9 +1149,11 @@ def _validate_response_result(data: object) -> None:
         return
     if kind == "occupancy":
         result = _object(data, "response.data", {"kind", "lane", "state", "generation", "lease", "occupant", "observation"}, error_cls=InvalidResponse)
-        if result.get("kind") != "occupancy" or result.get("state") not in {"free", "starting", "running", "stopping", "quarantined", "unknown"}:
+        if result.get("kind") != "occupancy":
             raise InvalidResponse("occupancy result is invalid")
+        _enum(result.get("state"), "occupancy.state", {"free", "starting", "running", "stopping", "quarantined", "unknown"}, InvalidResponse)
         _validate_lane_ref(result.get("lane"), "occupancy.lane", InvalidResponse)
+        _require_response_lane(result.get("lane"), "occupancy.lane", lane)
         if result.get("generation") is not None:
             _positive_int(result.get("generation"), "occupancy.generation", InvalidResponse)
         if result.get("lease") is not None:
@@ -1103,28 +1164,29 @@ def _validate_response_result(data: object) -> None:
         return
     if kind == "projection":
         result = _object(data, "response.data", {"kind", "scope", "lane", "windows", "observation"}, error_cls=InvalidResponse)
-        if result.get("kind") != "projection" or result.get("scope") not in {"calendar", "free"}:
+        if result.get("kind") != "projection":
             raise InvalidResponse("projection result is invalid")
+        _enum(result.get("scope"), "projection.scope", {"calendar", "free"}, InvalidResponse)
+        if operation in {"cal", "free"} and result.get("scope") != {"cal": "calendar", "free": "free"}[operation]:
+            raise InvalidResponse("projection scope does not match request")
         if result.get("lane") is not None:
             _validate_lane_ref(result.get("lane"), "projection.lane", InvalidResponse)
+        _require_response_lane(result.get("lane"), "projection.lane", lane)
         windows = result.get("windows")
         if not isinstance(windows, list):
             raise InvalidResponse("projection.windows is invalid")
         for index, item in enumerate(windows):
-            window = _object(item, f"projection.windows[{index}]", {"start", "end", "state", "certainty", "reason"}, error_cls=InvalidResponse)
-            _utc_time(window.get("start"), f"projection.windows[{index}].start", InvalidResponse)
-            _utc_time(window.get("end"), f"projection.windows[{index}].end", InvalidResponse)
-            if window.get("state") not in {"free", "booked", "occupied", "unknown"}:
-                raise InvalidResponse(f"projection.windows[{index}].state is invalid")
-            _validate_measurement({"certainty": window.get("certainty"), "reason": window.get("reason")}, f"projection.windows[{index}]", InvalidResponse)
+            _validate_projection_window(item, f"projection.windows[{index}]")
         _validate_measurement(result.get("observation"), "projection.observation", InvalidResponse)
         return
     if kind == "status":
         result = _object(data, "response.data", {"kind", "lane", "state", "generation", "occupancy", "reachability"}, error_cls=InvalidResponse)
-        if result.get("kind") != "status" or result.get("state") not in {"free", "starting", "running", "stopping", "quarantined", "unknown"}:
+        if result.get("kind") != "status":
             raise InvalidResponse("status result is invalid")
+        _enum(result.get("state"), "status.state", {"free", "starting", "running", "stopping", "quarantined", "unknown"}, InvalidResponse)
         if result.get("lane") is not None:
             _validate_lane_ref(result.get("lane"), "status.lane", InvalidResponse)
+        _require_response_lane(result.get("lane"), "status.lane", lane)
         if result.get("generation") is not None:
             _positive_int(result.get("generation"), "status.generation", InvalidResponse)
         _validate_measurement(result.get("occupancy"), "status.occupancy", InvalidResponse)
@@ -1132,11 +1194,14 @@ def _validate_response_result(data: object) -> None:
         return
     if kind == "mutation":
         result = _object(data, "response.data", {"kind", "operation", "record_type", "record_id", "state", "revision", "reservation"}, error_cls=InvalidResponse)
-        if result.get("kind") != "mutation" or result.get("operation") not in _OPS or result.get("record_type") not in {"lease", "booking", "queue", "occupant", "approval", "event"}:
+        if result.get("kind") != "mutation":
             raise InvalidResponse("mutation result is invalid")
+        _enum(result.get("operation"), "mutation.operation", _OPS, InvalidResponse)
+        _enum(result.get("record_type"), "mutation.record_type", {"lease", "booking", "queue", "occupant", "approval", "event"}, InvalidResponse)
+        if operation is not None and result.get("operation") != operation:
+            raise InvalidResponse("mutation operation does not match request")
         _identifier(result.get("record_id"), "mutation.record_id", InvalidResponse)
-        if result.get("state") not in _RECORD_STATES:
-            raise InvalidResponse("mutation.state is invalid")
+        _enum(result.get("state"), "mutation.state", _RECORD_STATES, InvalidResponse)
         _positive_int(result.get("revision"), "mutation.revision", InvalidResponse)
         _validate_lane_generation(result.get("reservation"), "mutation.reservation", InvalidResponse)
         return
@@ -1146,25 +1211,25 @@ def _validate_response_result(data: object) -> None:
             raise InvalidResponse("queue result is invalid")
         for index, item in enumerate(result["entries"]):
             entry = _object(item, f"queue.entries[{index}]", {"schema_version", "queue_id", "lane", "reservation", "principal", "class", "purpose", "sequence", "predecessor", "wait_deadline", "last_seen", "state", "eligible"}, error_cls=InvalidResponse)
-            if entry.get("schema_version") != 1:
-                raise InvalidResponse(f"queue.entries[{index}].schema_version is invalid")
+            _schema_version(entry.get("schema_version"), f"queue.entries[{index}].schema_version", InvalidResponse)
             _identifier(entry.get("queue_id"), f"queue.entries[{index}].queue_id", InvalidResponse)
             if entry.get("lane") is not None:
                 _validate_lane_ref(entry.get("lane"), f"queue.entries[{index}].lane", InvalidResponse)
+                _require_response_lane(entry.get("lane"), f"queue.entries[{index}].lane", lane)
             _validate_lane_generation(entry.get("reservation"), f"queue.entries[{index}].reservation", InvalidResponse)
             _validate_principal(entry.get("principal"), f"queue.entries[{index}].principal", InvalidResponse)
-            if entry.get("class") not in _CLASSES:
-                raise InvalidResponse(f"queue.entries[{index}].class is invalid")
+            _enum(entry.get("class"), f"queue.entries[{index}].class", _CLASSES, InvalidResponse)
             _purpose(entry.get("purpose"), InvalidResponse)
             _positive_int(entry.get("sequence"), f"queue.entries[{index}].sequence", InvalidResponse)
             if entry.get("predecessor") is not None:
                 _identifier(entry.get("predecessor"), f"queue.entries[{index}].predecessor", InvalidResponse)
             _validate_deadline(entry.get("wait_deadline"), f"queue.entries[{index}].wait_deadline", InvalidResponse)
             _utc_time(entry.get("last_seen"), f"queue.entries[{index}].last_seen", InvalidResponse)
-            if entry.get("state") not in {"queued", "eligible", "claimed", "expired", "removed"} or not isinstance(entry.get("eligible"), bool):
+            if not isinstance(entry.get("eligible"), bool):
                 raise InvalidResponse(f"queue.entries[{index}] state is invalid")
+            _enum(entry.get("state"), f"queue.entries[{index}].state", {"queued", "eligible", "claimed", "expired", "removed"}, InvalidResponse)
         return
-    if kind in {"booking", "approval", "report"}:
+    if isinstance(kind, str) and kind in {"booking", "approval", "report"}:
         required = {"kind", "booking"} if kind == "booking" else {"kind", "approval"} if kind == "approval" else {"kind", "events", "next_cursor"}
         result = _object(data, "response.data", required, error_cls=InvalidResponse)
         if result.get("kind") != kind:
@@ -1184,37 +1249,48 @@ def _validate_response_result(data: object) -> None:
     raise InvalidResponse("successful response has an unknown result kind")
 
 
-def validate_response(response: Mapping[str, object], request_id: str) -> None:
+def validate_response(
+    response: Mapping[str, object],
+    request_id: str,
+    *,
+    operation: str | None = None,
+    lane: str | None = None,
+) -> None:
     """Check the frozen response envelope and its complete typed result."""
 
     if not isinstance(response, Mapping):
         raise InvalidResponse("response is not an object")
     if set(response) != {"schema", "request_id", "status", "data", "error"}:
         raise InvalidResponse("response envelope fields are not frozen")
-    if response.get("schema") != 1 or response.get("request_id") != request_id:
+    _schema_version(response.get("schema"), "response.schema", InvalidResponse)
+    if response.get("request_id") != request_id:
         raise InvalidResponse("response request identity does not match")
     status = response.get("status")
-    if status not in _STATUSES:
+    if isinstance(status, bool) or not isinstance(status, int) or status not in _STATUSES:
         raise InvalidResponse("response status is invalid")
     data = response.get("data")
     error = response.get("error")
     if status == 200:
         if error is not None:
             raise InvalidResponse("successful response must have a null error")
-        _validate_response_result(data)
+        if not isinstance(data, Mapping) or data.get("kind") == "pending":
+            raise InvalidResponse("successful response cannot be pending")
+        _validate_response_result(data, operation=operation, lane=lane)
         return
     if status == 202:
         if error is not None:
             raise InvalidResponse("pending response is not a typed pending result")
-        _validate_response_result(data)
-        if not isinstance(data, Mapping) or data.get("request_id") != request_id:
+        if not isinstance(data, Mapping) or data.get("kind") != "pending":
+            raise InvalidResponse("pending response must contain a pending result")
+        _validate_response_result(data, operation=operation, lane=lane)
+        if data.get("request_id") != request_id:
             raise InvalidResponse("pending response request identity does not match")
         return
     if data is not None or not isinstance(error, Mapping):
         raise InvalidResponse("failure response has invalid data/error")
     error = _object(error, "failure response error", {"code", "message", "retryable", "failure_class"}, {"details"}, error_cls=InvalidResponse)
-    if error.get("code") not in _ERROR_CODES or error.get("failure_class") not in _FAILURE_CLASSES:
-        raise InvalidResponse("failure response error is invalid")
+    _enum(error.get("code"), "failure response error.code", _ERROR_CODES, InvalidResponse)
+    _enum(error.get("failure_class"), "failure response error.failure_class", _FAILURE_CLASSES, InvalidResponse)
     if not isinstance(error.get("message"), str) or not error["message"]:
         raise InvalidResponse("failure response message is invalid")
     if not isinstance(error.get("retryable"), bool):
@@ -1384,7 +1460,21 @@ class RpcClient:
             try:
                 raw = self.transport.request(self.endpoint, frozen_message, timeout_s)
                 response = _normalise_transport_result(raw)
-                validate_response(response, request_id)
+                validate_response(
+                    response,
+                    request_id,
+                    operation=str(frozen_message["op"]),
+                    lane=frozen_message["lane"] if isinstance(frozen_message["lane"], str) else None,
+                )
+                if response["status"] == 200 and response["data"].get("kind") == "grant":
+                    grant = self.validate_grant(
+                        response, frozen_message["lane"], str(frozen_message["op"]),
+                        admission=frozen_message["admission"],
+                    )
+                    args = frozen_message["args"]
+                    if frozen_message["op"] == "claim" and "token" in args:
+                        if grant.token != args["token"] or grant.generation != args["generation"]:
+                            raise InvalidResponse("adoption grant does not match the authenticated claim")
                 return dict(response)
             except TransportFailure as exc:
                 last_error = str(exc)
@@ -1426,9 +1516,12 @@ class RpcClient:
             raise InvalidRequest("token lookup returned an invalid token")
         return token
 
-    def validate_grant(self, response: Mapping[str, object], lane: str, operation: str) -> Grant:
+    def validate_grant(
+        self, response: Mapping[str, object], lane: str | None, operation: str,
+        *, admission: Mapping[str, object] | None = None,
+    ) -> Grant:
         request_id = str(response.get("request_id", ""))
-        validate_response(response, request_id)
+        validate_response(response, request_id, operation=operation, lane=lane)
         if response.get("status") != 200:
             raise InvalidResponse("grant response is not complete")
         data = response.get("data")
@@ -1445,7 +1538,7 @@ class RpcClient:
         if not isinstance(lease, Mapping) or not isinstance(reservation, Mapping) or not isinstance(adoption, Mapping):
             raise InvalidResponse("grant binding is incomplete")
         lease_lane = lease.get("lane")
-        if not isinstance(lease_lane, Mapping) or lease_lane.get("lane_id") != lane:
+        if not isinstance(lease_lane, Mapping) or (lane is not None and lease_lane.get("lane_id") != lane):
             raise InvalidResponse("grant lane is not bound")
         if lease.get("generation") != generation or reservation.get("generation") != generation:
             raise InvalidResponse("grant generation is not bound")
@@ -1457,12 +1550,13 @@ class RpcClient:
         if lease_reservation.get("generation") != generation:
             raise InvalidResponse("lease reservation generation is not bound")
         reservation_lane = lease_reservation.get("lane")
-        if not isinstance(reservation_lane, Mapping) or reservation_lane.get("lane_id") != lane:
+        if not isinstance(reservation_lane, Mapping) or (lane is not None and reservation_lane.get("lane_id") != lane):
             raise InvalidResponse("lease reservation lane is not bound")
         reservation_lane = reservation.get("lane")
-        if isinstance(reservation_lane, Mapping) and reservation_lane.get("lane_id") != lane:
+        if lane is not None and isinstance(reservation_lane, Mapping) and reservation_lane.get("lane_id") != lane:
             raise InvalidResponse("grant reservation lane is not bound")
-        expected_principal = self.admission.get("ingress", {}).get("actor") if isinstance(self.admission.get("ingress"), Mapping) else None
+        selected_admission = self.admission if admission is None else admission
+        expected_principal = selected_admission.get("ingress", {}).get("actor") if isinstance(selected_admission.get("ingress"), Mapping) else None
         actual_principal = lease.get("principal")
         if not isinstance(expected_principal, Mapping) or not isinstance(actual_principal, Mapping) or dict(actual_principal) != dict(expected_principal):
             raise InvalidResponse("grant principal is not bound")

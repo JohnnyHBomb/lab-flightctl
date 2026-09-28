@@ -469,6 +469,8 @@ def _human_message(
     status = response.get("status")
     data = response.get("data")
     error = response.get("error")
+    if isinstance(data, Mapping) and data.get("kind") == "pending":
+        return f"pending: {data.get('reason', 'request is pending')}"
     if status != 200:
         if isinstance(error, Mapping):
             return str(error.get("message", "request failed"))
@@ -490,8 +492,6 @@ def _human_message(
         op = str(data.get("operation", command or "mutation"))
         state = data.get("state")
         return f"{op} {state}"
-    if kind == "pending":
-        return f"pending: {data.get('reason', 'request is pending')}"
     if kind == "projection":
         observation = data.get("observation")
         certainty = observation.get("certainty") if isinstance(observation, Mapping) else "unknown"

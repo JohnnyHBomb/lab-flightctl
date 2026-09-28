@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
 
-from flightctl.client import InvalidResponse, validate_operation, validate_response
+from flightctl.client import InvalidResponse, RpcClient, _fingerprint, rpc_stdin, validate_operation, validate_response
 from flightctl.flightctl import main
 import pytest
 
@@ -27,7 +27,7 @@ class VectorClock:
         return "boot-a"
 
 
-def _mutation(operation: str = "queue") -> dict[str, object]:
+def _mutation(operation: str = "queue", state: str = "queued") -> dict[str, object]:
     return {
         "schema": 1,
         "request_id": "vector-request",
@@ -37,7 +37,7 @@ def _mutation(operation: str = "queue") -> dict[str, object]:
             "operation": operation,
             "record_type": "queue",
             "record_id": "queue-a",
-            "state": "queued",
+            "state": state,
             "revision": 1,
             "reservation": {"lane": None, "generation": None, "state": "unassigned"},
         },
@@ -73,6 +73,8 @@ def test_all_cli_vectors(monkeypatch: pytest.MonkeyPatch):
                 responses.append(_grant(vector, "acquire", 0))
             elif case["name"].startswith("run authenticated") and index == 0:
                 responses.append(_grant(vector, "claim", 11))
+            elif case["name"].startswith("run authenticated") and index == 1:
+                responses.append(_mutation("release", "free"))
             elif request["op"] == "queue" and request["args"].get("action") == "add" and len(expected) > 1:
                 responses.append(_mutation())
             elif case["name"] == "yield":
@@ -112,12 +114,42 @@ def test_all_cli_vectors(monkeypatch: pytest.MonkeyPatch):
         assert actual_args == expected_args, case["name"]
         for call in transport.calls:
             assert set(call) == {"schema", "request_id", "op", "lane", "args", "idempotency_scope", "request_fingerprint", "admission"}
+            assert call["schema"] == 1
+            assert call["idempotency_scope"] == {"scope": "authenticated-principal", "controller_id": "controller-a"}
+            assert call["request_fingerprint"] == _fingerprint(call["op"], call["lane"], call["args"])
+            assert call["admission"]["execution"] == "atomic"
             validate_operation(call)
-        if case["name"] == "yield" or case["exit"] == 0:
-            assert stdout.getvalue().strip()
-            assert not stderr.getvalue()
+        expected_messages = {
+            "lane-first positional acquire quoted purpose": "acquired lane-gpu0 generation=7 token=token-abcdefghijklmnop\n",
+            "lane-first positional release with server generation lookup": "release free\n",
+            "lane-first positional renew TTL minutes to seconds": "flightctl: approved maximum reached\n",
+            "lane-first wait converts TTL and wait minutes": "flightctl: pending: lane is occupied\n",
+            "default TTL and bounded wait": "flightctl: pending: lane is occupied\n",
+            "bounded wait timeout": "flightctl: bounded wait expired\n",
+            "calendar projection": "calendar certainty=estimate timezone=UTC reason=future schedule projection\n",
+            "cancel": "cancel cancelled\n",
+            "book": "flightctl: approval required\n",
+            "run fresh acquire and release sequence": "release free\n",
+            "run authenticated adoption and release sequence": "release free\n",
+            "approve": "approve approved\n",
+            "chat load": "chat-load loading\n",
+            "preempt unknown": "flightctl: lane state unknown\n",
+            "yield": "queue queued\n",
+        }
+        if case["name"] == "json free read":
+            expected_json = copy.deepcopy(responses[-1])
+            expected_json["request_id"] = transport.calls[-1]["request_id"]
+            assert json.loads(stdout.getvalue()) == expected_json
+            assert stderr.getvalue() == ""
+        elif case["name"] == "yield":
+            assert stdout.getvalue() == expected_messages[case["name"]]
+            assert stderr.getvalue() == ""
+        elif case["exit"] == 0:
+            assert stdout.getvalue() == expected_messages[case["name"]]
+            assert stderr.getvalue() == ""
         else:
-            assert stderr.getvalue().startswith("flightctl:")
+            assert stdout.getvalue() == ""
+            assert stderr.getvalue() == expected_messages[case["name"]]
 
 
 @pytest.mark.parametrize("status", [200, 202, 403, 409, 503])
@@ -148,7 +180,17 @@ def test_status_exit_json_is_an_unchanged_envelope(status):
 
     transport = Transport()
     stdout, stderr = StringIO(), StringIO()
-    code = main(["--json", "status", "lane-gpu0"], transport=transport, clock=VectorClock(), stdout=stdout, stderr=stderr)
+    if status == 202:
+        request = RpcClient(clock=VectorClock()).make_request("queue", "lane-gpu0", {"action": "list"})
+        code = rpc_stdin(
+            transport=transport,
+            clock=VectorClock(),
+            stream_in=StringIO(json.dumps(request)),
+            stream_out=stdout,
+            stream_err=stderr,
+        )
+    else:
+        code = main(["--json", "status", "lane-gpu0"], transport=transport, clock=VectorClock(), stdout=stdout, stderr=stderr)
     assert code == {200: 0, 202: 5, 403: 2, 409: 1, 503: 3}[status]
     expected = copy.deepcopy(template)
     expected["request_id"] = transport.calls[0]["request_id"]
@@ -156,6 +198,26 @@ def test_status_exit_json_is_an_unchanged_envelope(status):
         expected["data"]["request_id"] = expected["request_id"]
     assert json.loads(stdout.getvalue()) == expected
     assert stderr.getvalue() == ""
+
+
+def test_pending_release_remains_a_frozen_contract_gap():
+    response = {
+        "schema": 1,
+        "request_id": "req-release",
+        "status": 202,
+        "data": {
+            "kind": "pending",
+            "operation": "release",
+            "request_id": "req-release",
+            "queue_id": None,
+            "retry_after_s": 60,
+            "wait_deadline": {"boot_id": "boot-a", "deadline_s": 60, "utc_anchor": "2026-09-27T20:00:00Z", "monotonic_anchor_s": 10},
+            "reason": "release is pending",
+        },
+        "error": None,
+    }
+    with pytest.raises(InvalidResponse):
+        validate_response(response, "req-release", operation="release", lane="lane-gpu0")
 
 
 def test_malformed_or_mismatched_json_response_is_unavailable():

@@ -4,6 +4,8 @@ import json
 import os
 import subprocess
 import copy
+import shutil
+import sys
 from io import StringIO
 from pathlib import Path
 from typing import Mapping
@@ -100,21 +102,22 @@ def _run(argv, transport, *, clock=None, handoff=None, **kwargs):
 @pytest.mark.parametrize(
     ("argv", "expected"),
     [
-        (["acquire", "lane-gpu0", "quoted purpose", "2"], {"op": "acquire", "est_s": 120, "max_s": 120}),
-        (["acquire", "lane-gpu0", "quoted purpose"], {"op": "acquire", "est_s": 14400, "max_s": 14400}),
-        (["renew", "lane-gpu0", "token-abcdefghijklmnop", "15"], {"op": "renew", "extend_s": 900}),
-        (["renew", "lane-gpu0", "token-abcdefghijklmnop"], {"op": "renew", "extend_s": 14400}),
-        (["release", "lane-gpu0", "token-abcdefghijklmnop"], {"op": "release", "token": "token-abcdefghijklmnop"}),
+        (["acquire", "lane-gpu0", "quoted purpose", "2"], {"op": "acquire", "est_s": 120, "max_s": 120, "message": "acquired lane-gpu0 generation=7 token=token-abcdefghijklmnop\n"}),
+        (["acquire", "lane-gpu0", "quoted purpose"], {"op": "acquire", "est_s": 14400, "max_s": 14400, "message": "acquired lane-gpu0 generation=7 token=token-abcdefghijklmnop\n"}),
+        (["renew", "lane-gpu0", "token-abcdefghijklmnop", "15"], {"op": "renew", "extend_s": 900, "message": "renew free\n"}),
+        (["renew", "lane-gpu0", "token-abcdefghijklmnop"], {"op": "renew", "extend_s": 14400, "message": "renew free\n"}),
+        (["release", "lane-gpu0", "token-abcdefghijklmnop"], {"op": "release", "token": "token-abcdefghijklmnop", "message": "release free\n"}),
     ],
 )
 def test_positional_compatibility(argv, expected):
-    transport = ScriptedTransport(lambda message, _: _mutation(message, str(message["op"])))
-    code, _, err = _run(argv, transport)
-    assert code in {0, 1}
+    transport = ScriptedTransport(lambda message, _: _grant(message) if message["op"] == "acquire" else _mutation(message, str(message["op"])))
+    code, out, err = _run(argv, transport)
+    assert code == 0
     assert not err
+    assert out == expected["message"]
     assert transport.calls[0]["op"] == expected["op"]
     for key, value in expected.items():
-        if key != "op":
+        if key not in {"op", "message"}:
             assert transport.calls[0]["args"][key] == value
 
 
@@ -351,8 +354,27 @@ def test_malformed_rpc_stdin_makes_zero_calls():
     assert transport.calls == []
 
 
+@pytest.mark.parametrize("mutation", ["extra_scope", "boolean_schema", "array_auth_method"])
+def test_rpc_stdin_rejects_malformed_frozen_scalars(mutation):
+    from flightctl.client import rpc_stdin
+
+    request = RpcClient(admission=_vector_admission()).make_request("queue", "lane-gpu0", {"action": "list"})
+    if mutation == "extra_scope":
+        request["idempotency_scope"]["unexpected"] = True
+    elif mutation == "boolean_schema":
+        request["schema"] = True
+    else:
+        request["admission"]["ingress"]["auth_method"] = []
+    transport = ScriptedTransport(lambda message, _: pytest.fail("transport called"))
+    out, err = StringIO(), StringIO()
+    code = rpc_stdin(transport=transport, stream_in=StringIO(json.dumps(request)), stream_out=out, stream_err=err)
+    assert code == 2
+    assert transport.calls == []
+
+
 def test_discover_dispatch(tmp_path):
-    proposal = {"schema_version": 1, "status": "needs_review"}
+    discovery_schema = json.loads((Path(__file__).parents[2] / "contracts" / "discovery-v1.schema.json").read_text(encoding="utf-8"))
+    proposal = copy.deepcopy(discovery_schema["x-examples"]["valid"][0])
     received = []
 
     def handler(options):
@@ -365,6 +387,7 @@ def test_discover_dispatch(tmp_path):
     assert code == 0
     assert received == [{"output": str(output), "current": "inventory.json"}]
     assert json.loads(output.read_text()) == proposal
+    assert output.read_text(encoding="utf-8").endswith("\n")
     assert err == ""
     assert "proposal written to" in out
 
@@ -379,7 +402,7 @@ def test_discover_dispatch_without_handler_is_unavailable():
 
 
 def test_client_mutations():
-    transport = ScriptedTransport(lambda message, _: _mutation(message, str(message["op"])))
+    transport = ScriptedTransport(lambda message, _: _grant(message) if message["op"] == "acquire" else _mutation(message, str(message["op"])))
     code, _, _ = _run(["acquire", "lane-gpu0", "purpose", "2"], transport)
     assert code == 0
     assert transport.calls[0]["args"]["est_s"] == 120
@@ -397,6 +420,65 @@ def test_client_mutations():
     assert code == 3
     assert handoffs == []
     assert [call["op"] for call in failed_transport.calls] == ["acquire"]
+
+
+def test_client_mutation_evidence(tmp_path):
+    root = Path(__file__).parents[2]
+    mutations = [
+        (
+            "minutes",
+            Path("flightctl/flightctl.py"),
+            "seconds = int(value) * 60",
+            "seconds = int(value)",
+            "tests/client/test_client.py::test_positional_compatibility",
+        ),
+        (
+            "claim",
+            Path("flightctl/flightctl.py"),
+            "        if inherited_token:\n            token = _token(inherited_token)",
+            "        if False:\n            token = _token(inherited_token)",
+            "tests/client/test_client.py::test_fresh_and_adopt",
+        ),
+        (
+            "replay-id",
+            Path("flightctl/client.py"),
+            "        for attempt in range(attempts):",
+            "        for attempt in range(attempts):\n            if attempt:\n                frozen_message[\"request_id\"] = \"req-retry\"",
+            "tests/client/test_client.py::test_transport_failure_replay",
+        ),
+        (
+            "unknown-calendar",
+            Path("flightctl/flightctl.py"),
+            "state={window.get('state')}",
+            "state={'free' if window.get('state') == 'unknown' else window.get('state')}",
+            "tests/client/test_review3.py::test_unknown_calendar_window_stays_unknown",
+        ),
+        (
+            "failed-release",
+            Path("flightctl/client.py"),
+            "        if response.get(\"status\") != 200:\n            return response",
+            "        if response.get(\"status\") != 200:\n            self.call(\"release\", lane, {\"token\": \"token-abcdefghijklmnop\"})\n            return response",
+            "tests/client/test_client.py::test_failed_acquire_has_no_workload_or_release",
+        ),
+    ]
+    for name, relative, old, new, nodeid in mutations:
+        mutant_root = tmp_path / name
+        shutil.copytree(root, mutant_root, ignore=shutil.ignore_patterns(".git", "__pycache__", ".pytest_cache"))
+        source_path = mutant_root / relative
+        source = source_path.read_text(encoding="utf-8")
+        assert source.count(old) == 1, name
+        source_path.write_text(source.replace(old, new, 1), encoding="utf-8")
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", nodeid],
+            cwd=mutant_root,
+            env={**os.environ, "PYTHONPATH": str(mutant_root)},
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        assert result.returncode == 1, f"mutant {name} did not fail a test:\n{result.stdout}\n{result.stderr}"
+        assert f"FAILED {nodeid}" in result.stdout, f"mutant {name} failed outside its regression:\n{result.stdout}\n{result.stderr}"
 
 
 def test_shell_quoting(tmp_path):
@@ -437,6 +519,29 @@ def test_shell_quoting(tmp_path):
     assert run_result.returncode == 0
     run_payload = json.loads(run_result.stdout)
     assert run_payload["handoffs"][0][1] == workload
+    assert not marker.exists()
+
+
+def test_shell_quoting_mutant_is_caught(tmp_path):
+    wrapper = Path(__file__).parents[2] / "lanes.sh"
+    mutant = tmp_path / "lanes-mutant.sh"
+    source = wrapper.read_text(encoding="utf-8")
+    assert source.count('"$@"') == 1
+    mutant.write_text(source.replace('"$@"', '"$*"'), encoding="utf-8")
+    mutant.chmod(0o700)
+    shim = Path(__file__).with_name("cli_shim.py")
+    marker = tmp_path / "SHOULD_NOT_EXIST"
+    purpose = f'spaces "quotes" ; $(touch {marker}) *'
+    result = subprocess.run(
+        [str(mutant), "acquire", "lane-gpu0", purpose, "2"],
+        cwd=wrapper.parent,
+        env={**os.environ, "FLIGHTCTL_PYTHON": str(shim), "PYTHONPATH": str(wrapper.parent)},
+        text=True,
+        capture_output=True,
+        timeout=5,
+        check=False,
+    )
+    assert result.returncode != 0
     assert not marker.exists()
 
 
@@ -484,6 +589,62 @@ def test_unbound_grant_never_handoffs_or_releases(binding):
     assert code == 3
     assert handoffs == []
     assert [call["op"] for call in transport.calls] == ["acquire"]
+
+
+def test_grant_response_binds_complete_reservation_lane_identity():
+    def handler(message, _):
+        grant = _grant(message)
+        grant["data"]["reservation"]["lane"] = {**grant["data"]["reservation"]["lane"], "host_id": "different-host"}
+        return grant
+
+    transport = ScriptedTransport(handler)
+    handoffs = []
+    code, _, _ = _run(["run", "lane-gpu0", "purpose", "--", "workload"], transport, handoff=lambda *args: handoffs.append(args))
+    assert code == 3
+    assert handoffs == []
+    assert [call["op"] for call in transport.calls] == ["acquire"]
+
+
+def test_response_kind_is_bound_to_read_operation():
+    secret = "token-abcdefghijklmnop"
+    transport = ScriptedTransport(lambda message, _: _grant(message))
+    code, out, err = _run(["--json", "status", "lane-gpu0"], transport)
+    assert code == 3
+    assert secret not in out
+    assert json.loads(out)["status"] == 503
+    assert err == ""
+
+    transport = ScriptedTransport(lambda message, _: _grant(message, "claim"))
+    handoffs = []
+    code, out, err = _run(["run", "lane-gpu0", "purpose", "--", "workload"], transport, handoff=lambda *args: handoffs.append(args))
+    assert code == 3
+    assert out == ""
+    assert err.startswith("flightctl: unavailable:")
+    assert handoffs == []
+    assert [call["op"] for call in transport.calls] == ["acquire"]
+
+
+def test_pending_result_cannot_be_reported_as_complete():
+    pending = {
+        "kind": "pending",
+        "operation": "acquire",
+        "request_id": "placeholder",
+        "queue_id": "queue-a",
+        "retry_after_s": 60,
+        "wait_deadline": {"boot_id": "boot-a", "deadline_s": 60, "utc_anchor": "2026-09-27T20:00:00Z", "monotonic_anchor_s": 10},
+        "reason": "lane is occupied",
+    }
+
+    def handler(message, _):
+        response = _response(message, pending)
+        response["data"]["request_id"] = message["request_id"]
+        return response
+
+    transport = ScriptedTransport(handler)
+    code, out, err = _run(["acquire", "lane-gpu0", "purpose"], transport)
+    assert code == 3
+    assert out == ""
+    assert "successful response cannot be pending" in err
 
 
 def test_token_bearing_read_and_incomplete_status_are_unavailable():
@@ -644,6 +805,15 @@ def test_calendar_renders_windows_and_configured_timezone(monkeypatch):
     assert err == ""
     assert "calendar certainty=unknown timezone=Europe/London" in out
     assert "window 2026-09-28T11:00:00+01:00..2026-09-28T12:00:00+01:00 state=booked" in out
+
+    confirmed = copy.deepcopy(response)
+    confirmed["data"]["windows"][0]["certainty"] = "confirmed"
+    confirmed["data"]["windows"][0]["reason"] = "observed"
+    transport = ScriptedTransport(lambda message, _: {**confirmed, "request_id": message["request_id"]})
+    code, out, err = _run(["cal", "lane-gpu0"], transport)
+    assert code == 0
+    assert err == ""
+    assert "certainty=confirmed" in out
 
 
 def test_p0_fake_transport_failures_never_handoff_or_release():
