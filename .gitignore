@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+# Site configuration lives outside the repo; only *.example files are tracked.
+config/*.json
+!config/*.example
+ROSTER-REPORT.md
