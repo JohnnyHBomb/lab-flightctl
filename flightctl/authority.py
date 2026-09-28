@@ -342,7 +342,7 @@ class Authority:
                 )
 
     def _quarantine_active_tx(self, connection: sqlite3.Connection, reason: str) -> None:
-        rows = connection.execute("SELECT lease_id,record_json FROM leases WHERE state IN ('starting','running','stopping')").fetchall()
+        rows = connection.execute("SELECT lease_id,record_json FROM leases WHERE state IN ('starting','running','stopping') AND reservation_status IN ('pending','acknowledged')").fetchall()
         for row in rows:
             record = json.loads(row[1])
             record["state"] = "quarantined"
@@ -370,7 +370,8 @@ class Authority:
         return self._response(request_id, reject.status, error=self._error(reject.code, reject.message, retryable=reject.retryable, failure_class=reject.failure_class, details=reject.details))
 
     def _mutation(self, op: str, record_type: str, record_id: str, state: str, lane: Mapping[str, Any] | None, generation: int | None) -> dict[str, Any]:
-        return {"kind": "mutation", "operation": op, "record_type": record_type, "record_id": record_id, "state": state, "revision": 1, "reservation": {"lane": dict(lane) if lane else None, "generation": generation, "state": "unassigned" if generation is None else state}}
+        reservation_state = {"free": "released", "unloaded": "released", "cancelled": "released", "loading": "starting", "draining": "stopping"}.get(state, state)
+        return {"kind": "mutation", "operation": op, "record_type": record_type, "record_id": record_id, "state": state, "revision": 1, "reservation": {"lane": dict(lane) if lane else None, "generation": generation, "state": "unassigned" if generation is None else reservation_state}}
 
     def _event(self, *, kind: str, state: str, request_id: str, context: _Context, lane: Mapping[str, Any] | None, generation: int | None, reason: str, data: Mapping[str, Any] | None = None) -> dict[str, Any]:
         return {
@@ -499,25 +500,9 @@ class Authority:
         if pipeline_ref is None and manifest is None:
             return None, None
         if manifest is not None:
-            if not isinstance(manifest, Mapping):
-                raise _Reject(403, "denied", "unsupported manifest", failure_class="policy")
-            if manifest.get("destination_site") != self.site_id or not _same_principal(manifest.get("principal"), context.principal):
-                raise _Reject(403, "denied", "manifest identity or destination mismatch", failure_class="policy")
-            if _parse_time(str(manifest.get("expires"))) <= self._utc():
-                raise _Reject(403, "denied", "manifest expired", failure_class="policy")
-            proof = manifest.get("proof")
-            if not isinstance(proof, Mapping) or proof.get("scheme") not in set(self.policy["security_hooks"].get("supported_schemes", ())):
-                raise _Reject(403, "denied", "unsupported supplied security hook", failure_class="policy")
-            signed_manifest = {key: value for key, value in manifest.items() if key not in {"proof", "canonical_payload_hash"}}
-            manifest_digest = hashlib.sha256(canonical_bytes(signed_manifest)).digest()
-            if manifest.get("canonical_payload_hash") != hashlib.sha256(canonical_bytes(signed_manifest)).hexdigest():
-                raise _Reject(403, "denied", "manifest payload hash mismatch", failure_class="policy")
-            try:
-                self.approval_verifier.verify(proof, manifest_digest, evidence=None, now=self._utc(), require_evidence=False)
-            except AuthError as exc:
-                raise _Reject(403, "denied", "manifest proof verification failed", failure_class="policy") from exc
-            if pipeline_ref is None:
-                pipeline_ref = manifest.get("pipeline_id")
+            # P1 has no manifest execution/ceiling or federation trust model.
+            # A signature alone cannot establish those unsupported semantics.
+            raise _Reject(403, "denied", "signed manifests are not supported", failure_class="policy")
         pipeline = self.pipelines.get(str(pipeline_ref)) if pipeline_ref is not None else None
         if pipeline is None:
             raise _Reject(403, "denied", "pipeline is unavailable", failure_class="policy")
@@ -555,27 +540,7 @@ class Authority:
         delegation = admission.get("delegation") if isinstance(admission, Mapping) else None
         if delegation is None:
             return
-        if not isinstance(delegation, Mapping):
-            raise _Reject(403, "denied", "invalid delegation", failure_class="policy")
-        if not _same_principal(delegation.get("delegate"), context.principal) or delegation.get("destination_site") != self.site_id or self.controller_id != delegation.get("audience"):
-            raise _Reject(403, "denied", "delegation audience or principal mismatch", failure_class="policy")
-        if op not in set(delegation.get("allowed_operations", ())):
-            raise _Reject(403, "denied", "delegation does not allow operation", failure_class="policy")
-        if pipeline_id is not None and pipeline_id not in set(delegation.get("allowed_pipelines", ())):
-            raise _Reject(403, "denied", "delegation does not allow pipeline", failure_class="policy")
-        if _parse_time(str(delegation.get("expires"))) <= self._utc() or int(delegation.get("max_depth", 0)) < 0:
-            raise _Reject(403, "denied", "delegation expired or invalid", failure_class="policy")
-        binding = delegation.get("binding")
-        if not isinstance(binding, Mapping) or binding.get("audience") != delegation.get("audience") or binding.get("nonce") != delegation.get("nonce"):
-            raise _Reject(403, "denied", "delegation binding mismatch", failure_class="policy")
-        proof = binding.get("proof")
-        if not isinstance(proof, Mapping):
-            raise _Reject(403, "denied", "supplied delegation has no verifiable proof", failure_class="policy")
-        signed_binding = {key: value for key, value in binding.items() if key != "proof"}
-        try:
-            self.approval_verifier.verify(proof, hashlib.sha256(canonical_bytes(signed_binding)).digest(), evidence=None, now=self._utc(), require_evidence=False)
-        except AuthError as exc:
-            raise _Reject(403, "denied", "delegation proof verification failed", failure_class="policy") from exc
+        raise _Reject(403, "denied", "delegation is not supported", failure_class="policy")
 
     def _validate_batch(self, batch: Mapping[str, Any]) -> list[Mapping[str, Any]]:
         arms = list(batch.get("arms", ()))
@@ -708,6 +673,8 @@ class Authority:
         entries = self.store.all_queue(lane_id=lane_id, connection=connection)
         active: list[dict[str, Any]] = []
         by_id = {str(entry["queue_id"]): entry for entry in entries}
+        completed = {(lease["lane"]["lane_id"], lease["generation"])
+                     for lease, status in self.store.leases(connection=connection) if status == "released"}
         for entry in entries:
             if entry.get("state") in ACTIVE_QUEUE_STATES and now >= float(entry["wait_deadline"]["deadline_s"]):
                 entry["state"] = "expired"
@@ -731,7 +698,10 @@ class Authority:
                 if not dependencies and entry.get("predecessor") is not None:
                     dependencies = [str(entry["predecessor"])]
                 dependency_records = [by_id.get(item) for item in dependencies]
-                all_complete = bool(dependencies) and all(item is not None and item.get("state") == "claimed" for item in dependency_records)
+                all_complete = bool(dependencies) and all(
+                    item is not None and item.get("state") == "claimed"
+                    and (item.get("lane", {}).get("lane_id"), item.get("reservation", {}).get("generation")) in completed
+                    for item in dependency_records)
                 if dependencies and not all_complete:
                     entry["eligible"] = False
                     self.store.put_queue(entry, connection=connection)
@@ -768,13 +738,22 @@ class Authority:
             raise _Reject(409, "busy", "queue entry is not eligible", retryable=True, failure_class="conflict")
         return candidate
 
+    def _current_booking(self, connection: sqlite3.Connection, lane_id: str, now: datetime, *, exclude_booking_id: str | None = None) -> dict[str, Any] | None:
+        for booking in self.store.all_bookings(lane_id=lane_id, connection=connection):
+            if booking.get("booking_id") == exclude_booking_id or booking.get("state") not in {"scheduled", "blocked", "claimed"}:
+                continue
+            if _parse_time(str(booking["start"])) <= now < _parse_time(str(booking["end"])):
+                return booking
+        return None
+
     def _choose_lane(self, connection: sqlite3.Connection, requested: str | None, requested_class: str) -> dict[str, Any]:
         if requested is not None:
             lane = self.store.get_lane(requested, connection=connection)
             if lane is None:
                 raise _Reject(403, "denied", "unknown lane", failure_class="policy")
             return lane
-        candidates = [lane for lane in self.store.all_lanes(connection=connection) if lane.get("state") == "free" and lane.get("enabled") and lane.get("reachability") == "confirmed"]
+        now = self._utc()
+        candidates = [lane for lane in self.store.all_lanes(connection=connection) if lane.get("state") == "free" and lane.get("enabled") and lane.get("reachability") == "confirmed" and self._current_booking(connection, str(lane["lane_id"]), now) is None]
         candidates.sort(key=lambda item: (CLASS_RANK.get(requested_class, 99), item["lane_id"]))
         if not candidates:
             raise _Reject(409, "busy", "no eligible lane", retryable=True, failure_class="conflict")
@@ -829,14 +808,12 @@ class Authority:
             checks.append(("lane", lane))
         if generation is not None:
             checks.append(("target_generation", generation))
-        if booking_id is not None:
-            checks.append(("booking_id", booking_id))
+        checks.append(("booking_id", booking_id))
         if revision is not None:
             checks.append(("revision", revision))
         if payload_hash is not None:
             checks.append(("payload_hash", payload_hash))
-        if manifest_hash is not None:
-            checks.append(("manifest_hash", manifest_hash))
+        checks.append(("manifest_hash", manifest_hash))
         if policy_hash is not None:
             checks.append(("policy_hash", policy_hash))
         for field, expected in checks:
@@ -933,7 +910,11 @@ class Authority:
             elif isinstance(selected_approval, Mapping) and selected_approval.get("required"):
                 if approval_id is None:
                     raise _Reject(403, "denied", "unexpected approval selection", failure_class="policy")
-            lane = self._choose_lane(connection, request.get("lane"), effective_class)
+            now = self._utc()
+            requested_lane = request.get("lane")
+            if requested_lane is None and booking is not None:
+                requested_lane = booking.get("lane", {}).get("lane_id")
+            lane = self._choose_lane(connection, requested_lane, effective_class)
             self._assert_lane_available(lane)
             self._assert_quota(connection, lane)
             if booking_id:
@@ -943,28 +924,32 @@ class Authority:
                     raise _Reject(403, "denied", "booking lane mismatch", failure_class="policy")
                 if args.get("purpose") != booking.get("purpose"):
                     raise _Reject(403, "denied", "booking purpose mismatch", failure_class="policy")
-                now = self._utc()
                 start = _parse_time(str(booking["start"]))
                 end = _parse_time(str(booking["end"]))
                 if now < start - timedelta(minutes=15):
                     raise _Reject(403, "denied", "booking claim window has not opened", failure_class="policy")
                 if now >= end:
                     raise _Reject(409, "conflict", "booking has ended", failure_class="conflict")
+                if now + timedelta(seconds=int(args["est_s"])) > end:
+                    raise _Reject(409, "conflict", "estimate exceeds booking end", retryable=False, failure_class="conflict", details={"booking_end": booking["end"], "fitting_max_s": max(0, int((end - now).total_seconds()))})
+            current_booking = self._current_booking(connection, lane["lane_id"], now, exclude_booking_id=str(booking_id) if booking_id else None)
+            if current_booking is not None:
+                raise _Reject(409, "conflict", "lane is reserved by a current booking", retryable=True, failure_class="conflict", details={"booking_id": current_booking["booking_id"], "booking_end": current_booking["end"]})
             active_queue = self._queue_active(connection, lane["lane_id"])
             queue_id = args.get("queue_id")
             queue_entry = self._queue_eligible(active_queue, str(queue_id) if queue_id else None, effective_class, str(args["purpose"]), context)
             if queue_id and queue_entry is None:
                 raise _Reject(409, "busy", "queue entry is not eligible", retryable=True, failure_class="conflict")
-            future = [item for item in self.store.all_bookings(lane_id=lane["lane_id"], connection=connection) if item.get("state") in {"scheduled", "blocked"} and item.get("booking_id") != booking_id and _parse_time(item["start"]) > self._utc()]
+            future = [item for item in self.store.all_bookings(lane_id=lane["lane_id"], connection=connection) if item.get("state") in {"scheduled", "blocked"} and item.get("booking_id") != booking_id and _parse_time(item["start"]) > now]
             future.sort(key=lambda item: item["start"])
             if future:
                 next_start = _parse_time(future[0]["start"])
-                estimate_end = self._utc() + timedelta(seconds=int(args["est_s"]))
+                estimate_end = now + timedelta(seconds=int(args["est_s"]))
                 if estimate_end > next_start:
-                    raise _Reject(409, "conflict", "estimate crosses next booking", retryable=False, failure_class="conflict", details={"next_booking_id": future[0]["booking_id"], "next_start": future[0]["start"], "fitting_max_s": max(0, int((next_start - self._utc()).total_seconds()))})
+                    raise _Reject(409, "conflict", "estimate crosses next booking", retryable=False, failure_class="conflict", details={"next_booking_id": future[0]["booking_id"], "next_start": future[0]["start"], "fitting_max_s": max(0, int((next_start - now).total_seconds()))})
             generation = int(lane.get("generation", 0)) + 1
             if approval_id:
-                desired_end = self._utc() + timedelta(seconds=int(args["max_s"]))
+                desired_end = now + timedelta(seconds=int(args["max_s"]))
                 selected_approval = self.store.get_approval(approval_id, connection=connection)
                 approval_lane = lane["lane"] if selected_approval and selected_approval.get("lane") is not None else None
                 approval = self._approval_row(
@@ -986,6 +971,9 @@ class Authority:
             else:
                 approval = None
                 approved_max_end = None
+            if booking_id:
+                booking_end = _parse_time(str(booking["end"]))
+                approved_max_end = booking_end if approved_max_end is None else min(approved_max_end, booking_end)
             if batch_arms is not None:
                 self._persist_batch_queues(connection, batch, batch_arms, lane, context)
             lease = self._make_lease(lane, context, args, effective_class, generation, booking_id=str(booking_id) if booking_id else None, approved_max_end=approved_max_end)
@@ -1043,10 +1031,12 @@ class Authority:
                     booking["revision"] = int(booking.get("revision", 1)) + 1
                     booking["reservation"] = {"lane": lane["lane"], "generation": generation, "state": "starting"}
                     self.store.put_booking(booking, connection=connection)
-            data = self._grant_data(final_lease, operation)
+            data = (self._register_chat_occupant(connection, request, context, final_lease)
+                    if operation == "chat-load" else self._grant_data(final_lease, operation))
             response = self._response(str(request["request_id"]), 200, data=data)
             self._remember(connection, request, context, fingerprint, response)
-            self.store.put_event(self._event(kind=operation, state="starting", request_id=str(request["request_id"]), context=context, lane=final_lease["lane"], generation=final_lease["generation"], reason="reserve acknowledged", data={"lease_id": final_lease["lease_id"], "token_redacted": True}), connection=connection)
+            if operation != "chat-load":
+                self.store.put_event(self._event(kind=operation, state="starting", request_id=str(request["request_id"]), context=context, lane=final_lease["lane"], generation=final_lease["generation"], reason="reserve acknowledged", data={"lease_id": final_lease["lease_id"], "token_redacted": True}), connection=connection)
             return response
 
     def _lookup_token(self, connection: sqlite3.Connection, request: Mapping[str, Any], context: _Context, *, allow_preempt: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -1124,12 +1114,14 @@ class Authority:
                 self.store.put_event(self._event(kind="reconcile", state="quarantined", request_id=str(request["request_id"]), context=context, lane=lease["lane"], generation=lease["generation"], reason=why, data={"lease_id": lease["lease_id"]}), connection=connection)
                 return response
             lease_current["state"] = "stopping"
+            lease_current["reservation"]["state"] = "released"
             lane_new = dict(lane)
             lane_new["state"] = "free"
-            self.store.put_lease(lease_current, reservation_status="acknowledged", connection=connection)
+            # The executor has proved the lane empty.  Keep the contract's
+            # stopping lease record for audit, but retire its reservation so a
+            # confirmed-empty lease no longer consumes shared-device quota.
+            self.store.put_lease(lease_current, reservation_status="released", connection=connection)
             self.store.put_lane(lane_new, connection=connection)
-            if lane_new["state"] == "free":
-                lease_current["state"] = "stopping"
             data = self._mutation("preempt" if preempt else "release", "lease", lease_current["lease_id"], "free" if lane_new["state"] == "free" else "quarantined", lease_current["lane"], lease_current["generation"])
             response = self._response(str(request["request_id"]), 200, data=data)
             self._remember(connection, request, context, fingerprint, response)
@@ -1321,7 +1313,7 @@ class Authority:
                     "purpose": str(args.get("purpose", "")),
                     "sequence": sequence,
                     "predecessor": None,
-                    "wait_deadline": self._deadline(int(args.get("max_wait_s", 600))),
+                    "wait_deadline": self._deadline(min(int(args.get("max_wait_s", 600)), int(self.policy["admission"]["queue_expiry_s"]))),
                     "last_seen": _time_text(self._utc()),
                     "state": "queued",
                     "eligible": not active,
@@ -1337,10 +1329,15 @@ class Authority:
             if entry is None or not _same_principal(entry.get("principal"), context.principal) or entry.get("lane", {}).get("lane_id") != lane_id:
                 raise _Reject(403, "denied", "queue identity mismatch", failure_class="policy")
             if action == "refresh":
+                self._queue_active(connection, str(lane_id))
+                entry = self.store.get_queue(str(queue_id), connection=connection)
+                if entry.get("state") not in ACTIVE_QUEUE_STATES:
+                    # Expiry is an observation that must survive rejection.
+                    response = self._reject_response(str(request["request_id"]), _Reject(409, "conflict", "inactive queue entry cannot refresh", failure_class="conflict"))
+                    self._remember(connection, request, context, fingerprint, response)
+                    return response
                 entry["last_seen"] = _time_text(self._utc())
-                entry["wait_deadline"] = self._deadline(int(args.get("max_wait_s", 600)))
-                if entry.get("state") == "expired":
-                    raise _Reject(409, "conflict", "expired queue entry cannot refresh", failure_class="conflict")
+                entry["wait_deadline"] = self._deadline(min(int(args.get("max_wait_s", 600)), int(self.policy["admission"]["queue_expiry_s"])))
                 self.store.put_queue(entry, connection=connection)
                 data = self._mutation("queue", "queue", entry["queue_id"], entry["state"], entry["lane"], None)
                 response = self._response(str(request["request_id"]), 200, data=data)
@@ -1561,11 +1558,11 @@ class Authority:
         args = request.get("args", {})
         acquire_args = {"purpose": args.get("purpose"), "class": "service", "est_s": 1, "max_s": 600, "pipeline_ref": args.get("pipeline_ref")}
         acquire_request = dict(request, op="acquire", args=acquire_args)
-        result = self._acquire(acquire_request, context, fingerprint, operation="chat-load")
-        if result.get("status") != 200:
-            return result
-        grant = result["data"]
-        lease = grant["lease"]
+        return self._acquire(acquire_request, context, fingerprint, operation="chat-load")
+
+    def _register_chat_occupant(self, connection: sqlite3.Connection, request: Mapping[str, Any], context: _Context, lease: Mapping[str, Any]) -> dict[str, Any]:
+        """Commit occupant registration with the reservation result and replay record."""
+        args = request["args"]
         occupant = {
             "schema_version": 1,
             "occupant_id": f"occupant-{uuid.uuid4().hex}",
@@ -1586,15 +1583,9 @@ class Authority:
             "invocation": lease.get("invocation"),
             "deadline": lease["deadline"],
         }
-        with self.store.transaction() as connection:
-            self.store.put_occupant(occupant, connection=connection)
-            data = self._mutation("chat-load", "occupant", occupant["occupant_id"], "loading", occupant["lane"], occupant["generation"])
-            result = self._response(str(request["request_id"]), 200, data=data)
-            # The acquire path already owns the idempotency record; replace its
-            # typed data with the chat mutation while preserving one record.
-            self._remember(connection, request, context, fingerprint, result)
-            self.store.put_event(self._event(kind="chat-load", state="loading", request_id=str(request["request_id"]), context=context, lane=occupant["lane"], generation=occupant["generation"], reason="service occupant registered", data={"occupant_id": occupant["occupant_id"], "token_redacted": True}), connection=connection)
-            return result
+        self.store.put_occupant(occupant, connection=connection)
+        self.store.put_event(self._event(kind="chat-load", state="loading", request_id=str(request["request_id"]), context=context, lane=occupant["lane"], generation=occupant["generation"], reason="service occupant registered", data={"lease_id": lease["lease_id"], "token_redacted": True}), connection=connection)
+        return self._mutation("chat-load", "occupant", occupant["occupant_id"], "loading", occupant["lane"], occupant["generation"])
 
     def _chat_unload(self, request: Mapping[str, Any], context: _Context, fingerprint: str) -> dict[str, Any]:
         args = request.get("args", {})
@@ -1607,33 +1598,49 @@ class Authority:
             occupant = self.store.get_occupant(str(args.get("occupant_id")), connection=connection)
             if occupant is None or not _same_principal(occupant.get("principal"), context.principal) or int(args.get("generation", 0)) != int(occupant.get("generation", -1)):
                 raise _Reject(403, "denied", "occupant identity mismatch", failure_class="policy")
+            if request.get("lane") != occupant["lane"]["lane_id"]:
+                raise _Reject(403, "denied", "occupant lane mismatch", failure_class="policy")
             lease_row = self.store.get_lease(token=occupant.get("token"), connection=connection)
             if lease_row is None:
                 raise _Reject(503, "unknown", "occupant lease unavailable", retryable=True, failure_class="state")
-            lease, _status = lease_row
+            lease, status = lease_row
             lane = self.store.get_lane(occupant["lane"]["lane_id"], connection=connection)
+            if occupant.get("state") in {"draining", "unloaded", "quarantined"} or status != "acknowledged" or lease.get("state") not in {"starting", "running"} or lane is None or lane.get("generation") != lease["generation"] or lane.get("state") not in {"starting", "running"}:
+                raise _Reject(409, "conflict", "occupant is not the active reservation", failure_class="conflict")
             occupant["state"] = "draining"
+            lease["state"] = "stopping"
+            lease["reservation"]["state"] = "stopping"
+            lane["state"] = "stopping"
+            self.store.put_lease(lease, reservation_status="acknowledged", connection=connection)
+            self.store.put_lane(lane, connection=connection)
             self.store.put_occupant(occupant, connection=connection)
         ok, _reply, why = self._executor_call(lane or {}, lease, "stop")
         with self.store.transaction() as connection:
             if not ok:
                 occupant["state"] = "quarantined"
                 self.store.put_occupant(occupant, connection=connection)
+                lease["state"] = "quarantined"
+                lease["reservation"]["state"] = "quarantined"
+                self.store.put_lease(lease, reservation_status="uncertain", connection=connection)
+                lane["state"] = "quarantined"
+                lane["uncertainty_reason"] = why
+                self.store.put_lane(lane, connection=connection)
                 response = self._response(str(request["request_id"]), 503, error=self._error("unknown", why, retryable=True, failure_class="state"))
                 self._remember(connection, request, context, fingerprint, response)
+                self.store.put_event(self._event(kind="reconcile", state="quarantined", request_id=str(request["request_id"]), context=context, lane=lease["lane"], generation=lease["generation"], reason=why, data={"lease_id": lease["lease_id"], "token_redacted": True}), connection=connection)
                 return response
             occupant["state"] = "unloaded"
             self.store.put_occupant(occupant, connection=connection)
             lease["state"] = "stopping"
-            lease["reservation"]["state"] = "stopping"
-            self.store.put_lease(lease, reservation_status="acknowledged", connection=connection)
+            lease["reservation"]["state"] = "released"
+            self.store.put_lease(lease, reservation_status="released", connection=connection)
             if lane is not None:
                 lane["state"] = "free"
                 self.store.put_lane(lane, connection=connection)
             data = self._mutation("chat-unload", "occupant", occupant["occupant_id"], "unloaded", occupant["lane"], occupant["generation"])
             response = self._response(str(request["request_id"]), 200, data=data)
             self._remember(connection, request, context, fingerprint, response)
-            self.store.put_event(self._event(kind="chat-unload", state="unloaded", request_id=str(request["request_id"]), context=context, lane=occupant["lane"], generation=occupant["generation"], reason="service occupant unloaded", data={"occupant_id": occupant["occupant_id"], "token_redacted": True}), connection=connection)
+            self.store.put_event(self._event(kind="chat-unload", state="unloaded", request_id=str(request["request_id"]), context=context, lane=occupant["lane"], generation=occupant["generation"], reason="service occupant unloaded", data={"lease_id": lease["lease_id"], "token_redacted": True}), connection=connection)
             return response
 
     def _read(self, request: Mapping[str, Any], context: _Context, fingerprint: str) -> dict[str, Any]:
@@ -1651,20 +1658,26 @@ class Authority:
                 return self._response(str(request["request_id"]), 200, data={"kind": "report", "events": events, "next_cursor": None})
             if op == "queue":
                 return self._response(str(request["request_id"]), 200, data={"kind": "queue", "entries": self.store.all_queue(lane_id=request.get("lane"), connection=connection) if request.get("lane") else self.store.all_queue(connection=connection)})
-            if lane is None:
+            if lane is None and request.get("lane"):
                 raise _Reject(403, "denied", "read operation requires a known lane", failure_class="policy")
-            leases = [record for record, _status in self.store.leases(connection=connection) if record.get("lane", {}).get("lane_id") == lane["lane_id"] and record.get("state") in ACTIVE_LEASE_STATES and not (lane.get("state") == "free" and record.get("state") == "stopping")]
-            lease = leases[-1] if leases else None
-            occupant = next((item for item in self.store.all_occupants(connection=connection) if item.get("lane", {}).get("lane_id") == lane["lane_id"] and item.get("state") not in {"unloaded", "quarantined"}), None)
-            if op == "free" or op == "cal":
+            selected_lanes = [lane] if lane else self.store.all_lanes(connection=connection)
+            by_lane = {item["lane_id"]: item for item in selected_lanes}
+            leases = [record for record, status in self.store.leases(connection=connection) if status != "released" and record.get("lane", {}).get("lane_id") in by_lane and record.get("state") in ACTIVE_LEASE_STATES]
+            if op in {"free", "cal"}:
                 windows: list[dict[str, Any]] = []
-                known = lane.get("reachability") == "confirmed" and lane.get("state") not in {"unknown", "quarantined"}
-                for booking in self.store.all_bookings(lane_id=lane["lane_id"], connection=connection):
+                known = bool(selected_lanes) and all(item.get("reachability") == "confirmed" and item.get("state") not in {"unknown", "quarantined"} for item in selected_lanes)
+                for active_lease in leases:
+                    source_lane = by_lane[active_lease["lane"]["lane_id"]]
+                    observed = source_lane.get("reachability") == "confirmed" and source_lane.get("state") not in {"unknown", "quarantined"}
+                    windows.append({"start": active_lease["started_at"], "end": active_lease["max_end"], "state": "occupied", "certainty": "confirmed" if observed else "unknown", "reason": None if observed else "lane reachability or occupancy is not confirmed"})
+                for booking in self.store.all_bookings(lane_id=lane["lane_id"] if lane else None, connection=connection):
                     if booking.get("state") in {"scheduled", "blocked", "claimed"}:
                         windows.append({"start": booking["start"], "end": booking["end"], "state": "booked", "certainty": "estimate", "reason": "future schedule projection"})
-                if lease is not None:
-                    windows.insert(0, {"start": lease["started_at"], "end": lease["max_end"], "state": "occupied", "certainty": "confirmed" if known else "unknown", "reason": None if known else "lane reachability or occupancy is not confirmed"})
-                return self._response(str(request["request_id"]), 200, data={"kind": "projection", "scope": "calendar" if op == "cal" else "free", "lane": lane["lane"], "windows": windows, "observation": {"certainty": "confirmed" if known else "unknown", "reason": None if known else "lane reachability or occupancy is not confirmed"}})
+                return self._response(str(request["request_id"]), 200, data={"kind": "projection", "scope": "calendar" if op == "cal" else "free", "lane": lane["lane"] if lane else None, "windows": windows, "observation": {"certainty": "confirmed" if known else "unknown", "reason": None if known else "lane reachability or occupancy is not confirmed"}})
+            if lane is None:
+                raise _Reject(403, "denied", "read operation requires a known lane", failure_class="policy")
+            lease = leases[-1] if leases else None
+            occupant = next((item for item in self.store.all_occupants(connection=connection) if item.get("lane", {}).get("lane_id") == lane["lane_id"] and item.get("state") not in {"unloaded", "quarantined"}), None)
             return self._response(str(request["request_id"]), 200, data={"kind": "occupancy", "lane": lane["lane"], "state": lane.get("state", "unknown"), "generation": lane.get("generation") if lease else None, "lease": self._redact_lease(lease) if lease else None, "occupant": self._redact_occupant(occupant) if occupant else None, "observation": {"certainty": "confirmed" if lane.get("state") != "quarantined" else "unknown", "reason": None if lane.get("state") != "quarantined" else "lane state is quarantined"}})
 
     def enforce_deadlines(self, *, peer: str | None = None, ingress_peer: str | None = None) -> list[str]:

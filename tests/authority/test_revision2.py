@@ -72,10 +72,13 @@ def _ssh_string(value: bytes) -> bytes:
     return struct.pack(">I", len(value)) + value
 
 
+_SECURITY_KEY_APPLICATION = b"ssh:"
+
+
 def _security_key_proof(seed: bytes, approval: dict[str, object], *, flags: int = 0x05, counter: int = 1) -> dict[str, str]:
     auth_data = bytes([flags]) + counter.to_bytes(4, "big")
-    signature = ed25519_sign(seed, auth_data + hashlib.sha256(approval_digest(approval)).digest())
-    wrapped = _ssh_string(b"sk-ssh-ed25519@openssh.com") + _ssh_string(signature + auth_data)
+    signature = ed25519_sign(seed, hashlib.sha256(_SECURITY_KEY_APPLICATION).digest() + auth_data + hashlib.sha256(approval_digest(approval)).digest())
+    wrapped = _ssh_string(b"sk-ssh-ed25519@openssh.com") + _ssh_string(signature) + auth_data
     return {
         "scheme": "ssh-sk",
         "key_id": "key-a",
@@ -85,8 +88,10 @@ def _security_key_proof(seed: bytes, approval: dict[str, object], *, flags: int 
     }
 
 
-_OPENSSL_VECTOR_PUBLIC_KEY = bytes.fromhex("03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8")
-_OPENSSL_VECTOR_SIGNATURE = bytes.fromhex("84066ab6e3053fdaa7331193cb6f1b22ed73e9acbc1516e1c7050ce0469f9712e1768bfae2a2c4d7263a157bc270d7c5fdde531653261218ff87680f9d5d2908")
+# Fixed OpenSSL Ed25519 output over the protocol-correct security-key bytes;
+# verification has no runtime OpenSSL dependency.
+_OPENSSL_VECTOR_PUBLIC_KEY = bytes.fromhex("a87a6368b50137811aacb38ecf8f34739c51f1a6755357324b1796ed1bbd5582")
+_OPENSSL_VECTOR_SIGNATURE = bytes.fromhex("77e60658cea49351d7eb5874c8457d5ef8a7f519e3c9d9cc544f61cd7c7e5923ee96e1ff32a872fd875ca5c7750b1a6d7bfdcb68d6738a6bbe9d981d58926b0e")
 
 
 def _approval_record(*, lane: dict[str, str] | None = None, generation: int | None = None) -> dict[str, object]:
@@ -124,6 +129,44 @@ def _approval_record(*, lane: dict[str, str] | None = None, generation: int | No
         "signed_fields": [],
         "state": "approved",
     }
+
+
+def _genuine_approval_verifier() -> ApprovalVerifier:
+    return ApprovalVerifier({"key-a": KeyRecord(ed25519_public_key(bytes(range(32))), application=_SECURITY_KEY_APPLICATION)})
+
+
+def _issue_genuine_approval(authority, request_id: str, *, action: str, peer: str, lane: str | None, booking_id: str | None = None, revision: int | None = None, target_generation: int | None = None, max_s: int = 60, max_end: str = "2026-09-28T10:05:00Z") -> dict[str, object]:
+    approval_args = {
+        "action": action,
+        "booking_id": booking_id,
+        "revision": revision,
+        "target_generation": target_generation,
+        "bounds": {"max_s": max_s, "max_end": max_end},
+        "reason": "test approval",
+        "destination_site": "site-a",
+        "controller_id": "controller-a",
+        "payload_hash": "a" * 64,
+        "manifest_hash": None,
+        "policy_hash": "b" * 64,
+    }
+    issued = authority.handle(request(request_id, "approval-request", approval_args, lane=lane), peer=peer)
+    assert issued["status"] == 200
+    record = issued["data"]["approval"]
+    approved = authority.handle(
+        request(
+            f"{request_id}-approve",
+            "approve",
+            {
+                "approval_id": record["id"],
+                "proof": _security_key_proof(bytes(range(32)), record),
+                "evidence": {"verifier": "key-a", "verified_at": "2026-09-28T10:00:01Z", "user_presence": "verified", "user_verification": "verified"},
+            },
+            lane=None,
+        ),
+        peer=peer,
+    )
+    assert approved["status"] == 200
+    return approved["data"]["approval"]
 
 
 class _BlockingTransport(Executor):
@@ -166,11 +209,12 @@ class _EchoingFailureTransport:
 def test_revision2_security_key_proof_binds_touch_and_pin_and_disables_webauthn():
     seed = bytes(range(32))
     approval = _approval_record()
-    verifier = ApprovalVerifier({"key-a": KeyRecord(ed25519_public_key(seed))})
+    verifier = ApprovalVerifier({"key-a": KeyRecord(ed25519_public_key(seed), application=_SECURITY_KEY_APPLICATION)})
     proof = _security_key_proof(seed, approval)
     independent = copy.deepcopy(proof)
-    independent["signature_b64"] = base64.b64encode(_ssh_string(b"sk-ssh-ed25519@openssh.com") + _ssh_string(_OPENSSL_VECTOR_SIGNATURE + b"\x05\x00\x00\x00\x01")).decode("ascii")
-    verified = ApprovalVerifier({"key-a": KeyRecord(_OPENSSL_VECTOR_PUBLIC_KEY)}).verify(independent, approval_digest(approval))
+    independent["signature_b64"] = base64.b64encode(_ssh_string(b"sk-ssh-ed25519@openssh.com") + _ssh_string(_OPENSSL_VECTOR_SIGNATURE) + b"\x05\x00\x00\x00\x07").decode("ascii")
+    public_key = _ssh_string(b"sk-ssh-ed25519@openssh.com") + _ssh_string(_OPENSSL_VECTOR_PUBLIC_KEY) + _ssh_string(_SECURITY_KEY_APPLICATION)
+    verified = ApprovalVerifier({"key-a": KeyRecord(public_key)}).verify(independent, approval_digest(approval))
     assert verified["user_presence"] == "verified"
     assert verified["user_verification"] == "verified"
     raw = copy.deepcopy(proof)
@@ -193,7 +237,7 @@ def test_revision2_security_key_proof_binds_touch_and_pin_and_disables_webauthn(
 def test_revision2_every_signed_approval_field_and_authenticator_byte_is_bound():
     seed = bytes(range(32))
     approval = _approval_record()
-    verifier = ApprovalVerifier({"key-a": KeyRecord(ed25519_public_key(seed))})
+    verifier = ApprovalVerifier({"key-a": KeyRecord(ed25519_public_key(seed), application=_SECURITY_KEY_APPLICATION)})
     proof = _security_key_proof(seed, approval)
     for field in APPROVAL_SIGNED_FIELDS:
         mutated = copy.deepcopy(approval)
@@ -257,19 +301,17 @@ def test_revision2_approval_is_consumed_before_stop_effect(tmp_path):
         {"external_id": "peer-a", "principal": PRINCIPAL, "roles": ["agent"]},
         {"external_id": "peer-op", "principal": PRINCIPAL, "roles": ["operator"]},
     ]
-    authority, _transport, _clock = _authority(tmp_path, transport=transport, identity_mapping=mapping)
+    authority, _transport, _clock = _authority(tmp_path, transport=transport, identity_mapping=mapping, approval_verifier=_genuine_approval_verifier())
     grant = authority.handle(request("acquire-before-preempt", "acquire", {"purpose": "benchmark", "class": "batch", "est_s": 1, "max_s": 60}), peer="peer-a")
     assert grant["status"] == 200
     lease = grant["data"]["lease"]
-    approval = _approval_record(lane=lease["lane"], generation=lease["generation"])
-    with authority.store.transaction() as connection:
-        authority.store.put_approval(approval, connection=connection)
+    approval = _issue_genuine_approval(authority, "forced-preemption-approval", action="forced-preemption", peer="peer-op", lane="lane-gpu0", target_generation=lease["generation"], max_end=lease["max_end"])
     preempt = request("preempt-once", "preempt", {"token": grant["data"]["token"], "approval_id": approval["id"]})
     result: dict[str, dict[str, object]] = {}
     thread = threading.Thread(target=lambda: result.setdefault("response", authority.handle(preempt, peer="peer-op")))
     thread.start()
     assert transport.entered.wait(1)
-    assert authority.store.get_approval("approval-test")["state"] == "consumed"
+    assert authority.store.get_approval(approval["id"])["state"] == "consumed"
     second = authority.handle(request("preempt-twice", "preempt", {"token": grant["data"]["token"], "approval_id": approval["id"]}), peer="peer-op")
     assert second["status"] == 503
     transport.release.set()
@@ -635,11 +677,8 @@ def test_revision2_operator_and_shared_device_quota_are_not_caller_flags(tmp_pat
     )
     operator_path = tmp_path / "operator-approval"
     operator_path.mkdir()
-    operator_authority, _operator_transport, _clock = _authority(operator_path, identity_mapping=mapping)
-    operator_approval = _approval_record()
-    operator_approval.update({"id": "approval-operator", "action": "operator-admission", "target_generation": None, "lane": None})
-    with operator_authority.store.transaction() as connection:
-        operator_authority.store.put_approval(operator_approval, connection=connection)
+    operator_authority, _operator_transport, _clock = _authority(operator_path, identity_mapping=mapping, approval_verifier=_genuine_approval_verifier())
+    operator_approval = _issue_genuine_approval(operator_authority, "operator-approval-request", action="operator-admission", peer="peer-john", lane=None, max_end="2026-09-28T10:05:00Z")
     signed_operator = request(
         "signed-operator",
         "acquire",
@@ -705,7 +744,7 @@ def test_revision2_eviction_matrix_allows_only_lower_classes_with_bounded_grace(
 
     displacement_path = tmp_path / "displacement"
     displacement_path.mkdir()
-    displacement_authority, displacement_transport, _clock = _authority(displacement_path, identity_mapping=mapping)
+    displacement_authority, displacement_transport, _clock = _authority(displacement_path, identity_mapping=mapping, approval_verifier=_genuine_approval_verifier())
     booked = displacement_authority.handle(request("displacement-booking", "book", {"start": "2026-09-28T10:00:00Z", "end": "2026-09-28T10:15:00Z", "purpose": "benchmark"}), peer="peer-a")
     assert booked["status"] == 200
     booking = booked["data"]["booking"]
@@ -715,10 +754,7 @@ def test_revision2_eviction_matrix_allows_only_lower_classes_with_bounded_grace(
     current_booking = displacement_authority.store.get_booking(booking["booking_id"])
     unsigned = displacement_authority.handle(request("unsigned-displacement", "preempt", {"token": lease["token"]}), peer="peer-op")
     assert unsigned["status"] == 403
-    displacement_approval = _approval_record(lane=lease["lane"])
-    displacement_approval.update({"id": "approval-displacement", "action": "displacement", "booking_id": booking["booking_id"], "revision": current_booking["revision"], "target_generation": None})
-    with displacement_authority.store.transaction() as connection:
-        displacement_authority.store.put_approval(displacement_approval, connection=connection)
+    displacement_approval = _issue_genuine_approval(displacement_authority, "displacement-approval-request", action="displacement", peer="peer-op", lane="lane-gpu0", booking_id=booking["booking_id"], revision=current_booking["revision"], max_end=lease["max_end"])
     displaced = displacement_authority.handle(request("approved-displacement", "preempt", {"token": lease["token"], "approval_id": displacement_approval["id"]}), peer="peer-op")
     assert displaced["status"] == 200
     assert displacement_authority.store.get_booking(booking["booking_id"])["state"] == "displaced"
@@ -738,6 +774,9 @@ def test_revision2_transport_errors_and_store_events_never_export_secret_values(
     assert echoed_token not in why
     report = authority.handle(request("secret-report", "report", {"at": None}, lane=None), peer="peer-a")
     assert echoed_token not in str(report)
+    occupancy = authority.handle(request("secret-occupancy", "free", {"at": None}, lane="lane-gpu0"), peer="peer-a")
+    assert occupancy["status"] == 200
+    assert echoed_token not in str(occupancy)
 
     store = SQLiteStore(tmp_path / "event.sqlite")
     token_record = {

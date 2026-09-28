@@ -319,8 +319,18 @@ def _ssh_string(data: bytes, offset: int = 0) -> tuple[bytes, int]:
     return data[offset + 4 : end], end
 
 
-def _public_key_bytes(value: Any) -> bytes:
+def _application_bytes(value: Any) -> bytes:
+    if isinstance(value, str):
+        value = value.encode("utf-8")
+    if not isinstance(value, (bytes, bytearray)) or not value:
+        raise AuthError("missing security-key application")
+    return bytes(value)
+
+
+def _public_key_details(value: Any) -> tuple[bytes, bytes | None]:
+    configured_application = None
     if isinstance(value, Mapping):
+        configured_application = value.get("application")
         value = value.get("public_key", value.get("key"))
     if isinstance(value, str):
         stripped = value.strip()
@@ -332,7 +342,8 @@ def _public_key_bytes(value: Any) -> bytes:
             marker = b"\x03\x21\x00"
             position = der.find(marker)
             if position >= 0 and len(der) >= position + len(marker) + 32:
-                return der[position + len(marker) : position + len(marker) + 32]
+                key = der[position + len(marker) : position + len(marker) + 32]
+                return key, _application_bytes(configured_application) if configured_application is not None else None
         try:
             value = base64.b64decode(stripped, validate=True)
         except (ValueError, binascii.Error) as exc:
@@ -341,16 +352,28 @@ def _public_key_bytes(value: Any) -> bytes:
         raise AuthError("missing public key")
     raw = bytes(value)
     if len(raw) == 32:
-        return raw
-    # OpenSSH public key wire format: string algorithm, string key.
+        return raw, _application_bytes(configured_application) if configured_application is not None else None
+    # OpenSSH public key wire format: string algorithm, string key, and for
+    # security keys a registered application string.
     try:
         algorithm, offset = _ssh_string(raw)
         key, offset = _ssh_string(raw, offset)
-        if algorithm in {b"ssh-ed25519", b"sk-ssh-ed25519@openssh.com"} and len(key) == 32:
-            return key
+        if algorithm == b"sk-ssh-ed25519@openssh.com" and len(key) == 32:
+            application, offset = _ssh_string(raw, offset)
+            if offset != len(raw) or not application:
+                raise AuthError("invalid security-key application encoding")
+            if configured_application is not None and _application_bytes(configured_application) != application:
+                raise AuthError("registered security-key application mismatch")
+            return key, application
+        if algorithm == b"ssh-ed25519" and len(key) == 32 and offset == len(raw):
+            return key, _application_bytes(configured_application) if configured_application is not None else None
     except AuthError:
         pass
     raise AuthError("unsupported Ed25519 public key format")
+
+
+def _public_key_bytes(value: Any) -> bytes:
+    return _public_key_details(value)[0]
 
 
 def _security_key_signature(proof: Mapping[str, Any]) -> tuple[bytes, int, int]:
@@ -358,24 +381,23 @@ def _security_key_signature(proof: Mapping[str, Any]) -> tuple[bytes, int, int]:
 
     The security-key signature is not an ordinary Ed25519 signature over the
     approval digest.  OpenSSH's sk-ssh-ed25519 format carries the authenticator
-    flags and counter beside the Ed25519 signature; the authenticator signs
-    those five bytes followed by SHA-256(message).  Keeping the flags inside
-    the signed input prevents caller-supplied touch/PIN claims from becoming
-    authority.
+    flags and counter after the signature string; the authenticator signs the
+    application hash, those five bytes, extensions, and SHA-256(message).
+    Keeping the flags inside the signed input prevents caller-supplied
+    touch/PIN claims from becoming authority.
     """
 
     encoded = proof.get("signature_b64")
     raw = _b64(encoded)
     try:
         algorithm, offset = _ssh_string(raw)
-        nested, offset = _ssh_string(raw, offset)
-        if offset != len(raw) or algorithm != b"sk-ssh-ed25519@openssh.com":
+        signature, offset = _ssh_string(raw, offset)
+        if algorithm != b"sk-ssh-ed25519@openssh.com" or len(signature) != 64 or len(raw) != offset + 5:
             raise AuthError("unsupported SSH signature blob")
-        if len(nested) != 69:
-            raise AuthError("security-key signature is missing flags or counter")
-        signature = nested[:64]
-        flags = nested[64]
-        counter = struct.unpack(">I", nested[65:])[0]
+        flags = raw[offset]
+        counter = struct.unpack(">I", raw[offset + 1 : offset + 5])[0]
+        if flags & 0x80:
+            raise AuthError("security-key proof contains unsupported extensions")
         if not flags & 0x01:
             raise AuthError("security-key proof lacks user-presence evidence")
         if not flags & 0x04:
@@ -391,6 +413,7 @@ class KeyRecord:
     public_key: Any
     verifier: Callable[[bytes, bytes], bool] | None = None
     evidence: Mapping[str, Any] | None = None
+    application: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -411,13 +434,13 @@ class ApprovalVerifier:
             if isinstance(value, KeyRecord):
                 self.keys[str(key_id)] = value
             elif isinstance(value, Mapping) and ("public_key" in value or "key" in value):
-                self.keys[str(key_id)] = KeyRecord(value.get("public_key", value.get("key")), value.get("verifier"), value.get("evidence"))
+                self.keys[str(key_id)] = KeyRecord(value.get("public_key", value.get("key")), value.get("verifier"), value.get("evidence"), value.get("application"))
             else:
                 self.keys[str(key_id)] = KeyRecord(value)
         self.verifier = verifier
 
-    def register(self, key_id: str, public_key: Any, *, evidence: Mapping[str, Any] | None = None, verifier: Callable[[bytes, bytes], bool] | None = None) -> None:
-        self.keys[key_id] = KeyRecord(public_key, verifier, evidence)
+    def register(self, key_id: str, public_key: Any, *, evidence: Mapping[str, Any] | None = None, verifier: Callable[[bytes, bytes], bool] | None = None, application: Any | None = None) -> None:
+        self.keys[key_id] = KeyRecord(public_key, verifier, evidence, application)
 
     def verify(self, proof: Mapping[str, Any], message: bytes, *, evidence: Mapping[str, Any] | None = None, now: datetime | None = None, require_evidence: bool = True) -> dict[str, Any]:
         if not isinstance(proof, Mapping):
@@ -439,11 +462,21 @@ class ApprovalVerifier:
             raise AuthError("invalid SSH security-key proof metadata")
         record = self.keys[key_id]
         signature, flags, counter = _security_key_signature(proof)
-        signed_message = bytes([flags]) + counter.to_bytes(4, "big") + hashlib.sha256(message).digest()
+        public_key, application = _public_key_details(record.public_key)
+        if record.application is not None:
+            configured_application = _application_bytes(record.application)
+            if application is not None and application != configured_application:
+                raise AuthError("registered security-key application mismatch")
+            application = configured_application
+        if application is None and isinstance(record.evidence, Mapping) and record.evidence.get("application") is not None:
+            application = _application_bytes(record.evidence["application"])
+        if application is None:
+            raise AuthError("registered security-key application is required")
+        signed_message = hashlib.sha256(application).digest() + bytes([flags]) + counter.to_bytes(4, "big") + hashlib.sha256(message).digest()
         # The registered public key is the cryptographic authority.  Optional
         # controller callbacks may add policy checks, but a callback result
         # can never replace the real offline signature verification.
-        verified = ed25519_verify(_public_key_bytes(record.public_key), signature, signed_message)
+        verified = ed25519_verify(public_key, signature, signed_message)
         if not verified:
             raise AuthError("approval signature verification failed")
         if record.verifier is not None:
@@ -490,8 +523,6 @@ class ApprovalVerifier:
             "verified_at": _utc_text(current),
             "user_presence": expected_presence,
             "user_verification": expected_verification,
-            "flags": flags,
-            "counter": counter,
         }
 
 

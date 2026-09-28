@@ -47,7 +47,7 @@ def request(request_id, op, args, *, lane="lane-gpu0", principal=PRINCIPAL, admi
     return result
 
 
-def make_authority(tmp_path, *, transport=None, clock=None, principal=PRINCIPAL, other_mapping=True, pipelines=None, policy=None, approval_verifier=None):
+def make_authority(tmp_path, *, transport=None, clock=None, principal=PRINCIPAL, other_mapping=True, pipelines=None, policy=None, approval_verifier=None, lanes=None):
     clock = clock or FakeClock(datetime(2026, 9, 28, 10, 0, tzinfo=timezone.utc))
     transport = transport or Executor()
     mapping = [{"external_id": "peer-a", "principal": PRINCIPAL, "roles": ["agent"]}]
@@ -58,7 +58,7 @@ def make_authority(tmp_path, *, transport=None, clock=None, principal=PRINCIPAL,
         store,
         transport,
         clock,
-        lanes=[{"lane_id": "lane-gpu0", "host_id": "host-1", "reachability": "confirmed", "enabled": True}],
+        lanes=lanes or [{"lane_id": "lane-gpu0", "host_id": "host-1", "reachability": "confirmed", "enabled": True}],
         identity_mapping=mapping,
         pipelines=pipelines,
         policy=policy,
