@@ -264,7 +264,7 @@ class FileReleaseBackend:
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
         try:
-            os.chmod(self.root, 0o700)
+            os.chmod(self.root, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700 is owner-only (stricter than the rule's 0o644)
         except OSError:
             pass
         self.state_path = self.root / "state.json"
@@ -894,7 +894,7 @@ class ReleaseManager:
         self.paths.snapshot_dir.mkdir(parents=True, exist_ok=True)
         for directory in (self.paths.state_dir, self.paths.staging_dir, self.paths.snapshot_dir):
             try:
-                os.chmod(directory, 0o700)
+                os.chmod(directory, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700 is owner-only (stricter than the rule's 0o644)
             except OSError:
                 pass
         self.backend = backend or FileReleaseBackend(self.paths.state_dir)
@@ -967,7 +967,7 @@ class ReleaseManager:
         base = self.paths.backup_dir or (self.paths.state_dir / "backup-rehearsal")
         base.mkdir(parents=True, exist_ok=True)
         try:
-            os.chmod(base, 0o700)
+            os.chmod(base, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700 is owner-only (stricter than the rule's 0o644)
         except OSError:
             pass
         bundle = base / f"before-{release_id}"
@@ -1296,7 +1296,7 @@ def restore_backup(bundle: Path, target_root: Path) -> Mapping[str, Any]:
     if target_root.exists() and any(target_root.iterdir()):
         raise ReleaseFailure("restore target is not fresh", code="backup-refused")
     target_root.mkdir(parents=True, exist_ok=True)
-    os.chmod(target_root, 0o700)
+    os.chmod(target_root, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700 is owner-only (stricter than the rule's 0o644)
     restored: list[str] = []
     for item in manifest.get("files", []):
         if not isinstance(item, Mapping):
