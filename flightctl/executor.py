@@ -10,8 +10,11 @@ free lane.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
+import math
 import os
+import re
 import tempfile
 import threading
 from collections.abc import Callable, Iterable, Mapping
@@ -38,10 +41,44 @@ _KNOWN_SYSTEMD_FAILURES = {
 _KNOWN_SUCCESS_STATUSES = {"ok", "success"}
 _ACTIVE_STATES = {"starting", "running", "stopping", "quarantined"}
 _EXECUTION_CLASSES = {"operator", "booked", "batch", "service", "resident", "standby"}
+_LOCAL_ACTION_OPS = {
+    "acquire",
+    "renew",
+    "release",
+    "claim",
+    "queue",
+    "book",
+    "cancel",
+    "preempt",
+    "chat-load",
+    "chat-unload",
+}
+_LOCAL_ACTION_FIELDS = (
+    "schema",
+    "op",
+    "lane",
+    "args",
+    "requester",
+    "pipeline",
+    "content_labels",
+    "batch",
+    "destination_site",
+    "controller_id",
+    "policy_hash",
+    "manifest_hash",
+)
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$")
+_SHORT_IDENTIFIER_RE = re.compile(r"^[a-z][a-z0-9._-]{0,63}$")
+_SHA256_RE = re.compile(r"^[A-Fa-f0-9]{64}$")
+_LOCAL_ACTION_DOMAIN = b"flightctl/local-action/v1\0"
 
 
 class StateCorruptError(RuntimeError):
     """Raised internally when the durable state is not a valid JSON object."""
+
+
+class LocalActionError(ValueError):
+    """Raised when a prospective local RPC cannot be admitted or canonicalised."""
 
 
 class TrustedController:
@@ -52,11 +89,22 @@ class TrustedController:
     pass that same instance to ``handle`` when it wants per-call checking.
     """
 
-    __slots__ = ("controller_id", "_proof")
+    __slots__ = ("controller_id", "_proof", "effective_principal")
 
-    def __init__(self, controller_id: str, proof: object | None = None) -> None:
+    def __init__(
+        self,
+        controller_id: str,
+        proof: object | None = None,
+        *,
+        effective_principal: Mapping[str, object] | None = None,
+        principal: Mapping[str, object] | None = None,
+    ) -> None:
         self.controller_id = controller_id
         self._proof = proof if proof is not None else object()
+        if effective_principal is not None and principal is not None and dict(effective_principal) != dict(principal):
+            raise ValueError("effective_principal and principal disagree")
+        selected = effective_principal if effective_principal is not None else principal
+        self.effective_principal = copy.deepcopy(dict(selected)) if isinstance(selected, Mapping) else None
 
 
 class JsonStateStore:
@@ -124,6 +172,8 @@ class Executor:
     preemptible_stale_s = 180.0
     service_grace_s = 120.0
     standby_grace_s = 300.0
+    release_retry_after_s = 60
+    release_wait_s = 600.0
 
     def __init__(
         self,
@@ -136,6 +186,7 @@ class Executor:
         state_store: Any | None = None,
         controller_authorizer: Callable[[object], bool] | None = None,
         approval_checker: Callable[..., bool] | None = None,
+        owner_release_checker: Callable[..., bool] | None = None,
         approved_forced_preemptions: Iterable[str] | Mapping[str, object] | None = None,
         operation_timeout_s: float = 2.0,
         clock_skew_s: float = 30.0,
@@ -149,6 +200,7 @@ class Executor:
         self._trusted_controller = trusted_controller
         self._controller_authorizer = controller_authorizer
         self._approval_checker = approval_checker
+        self._owner_release_checker = owner_release_checker
         self._approved_forced_preemptions = approved_forced_preemptions
         self._operation_timeout_s = max(0.01, float(operation_timeout_s))
         self._clock_skew_s = float(clock_skew_s)
@@ -156,6 +208,8 @@ class Executor:
         self._inflight_starts: set[tuple[str, int]] = set()
         self._start_operations: dict[tuple[str, int], dict[str, object]] = {}
         self._inflight_stops: set[tuple[str, int]] = set()
+        self._owner_contexts: dict[str, object] = {}
+        self._release_replay_contexts: dict[tuple[str, str], object] = {}
         self._state_error: str | None = None
         try:
             self._state = self._store.load()
@@ -173,15 +227,13 @@ class Executor:
         authenticated_controller: object = AUTH_UNSET,
         controller: object = AUTH_UNSET,
         trusted_controller: object = AUTH_UNSET,
+        *,
+        release_request_id: str | None = None,
     ) -> dict[str, object]:
         """Execute one frozen request and return one frozen reply mapping."""
 
-        auth = authenticated_controller if authenticated_controller is not AUTH_UNSET else controller
-        if auth is AUTH_UNSET:
-            auth = trusted_controller
+        auth = self._resolve_auth(authenticated_controller, controller, trusted_controller)
         with self._lock:
-            if auth is AUTH_UNSET and self._trusted_controller is not None:
-                auth = self._trusted_controller
             if not self._authenticated(auth):
                 return self._early_rejection(request, "controller authentication required")
             if self._state_error is not None:
@@ -193,13 +245,13 @@ class Executor:
                 return self._early_rejection(request, str(exc))
 
         if kind == "reserve":
-            return self._reserve(request)
+            return self._reserve(request, auth)
         if kind == "start":
             return self._start(request)
         if kind == "beat":
             return self._beat(request)
         if kind == "stop":
-            return self._stop(request)
+            return self._stop(request, auth, release_request_id=release_request_id)
         if kind == "inspect":
             return self._inspect(request)
         return self._early_rejection(request, f"unsupported executor operation: {kind}")
@@ -207,6 +259,82 @@ class Executor:
     execute = handle
     process = handle
     handle_request = handle
+
+    def release_rpc(
+        self,
+        stop_request: Mapping[str, object],
+        request_id: str,
+        authenticated_controller: object = AUTH_UNSET,
+        controller: object = AUTH_UNSET,
+        trusted_controller: object = AUTH_UNSET,
+        *,
+        retry_after_s: int | None = None,
+    ) -> dict[str, object]:
+        """Adapt an owner stop to the frozen RPC release result contract.
+
+        The executor wire operation remains ``stop``.  This boundary is the
+        small controller-facing adapter that turns a verified owner stop
+        whose exact cleanup is still draining into HTTP-202 pending release,
+        while retaining the durable fence.  A pending response is stored
+        without a token and is replayed for the same RPC request ID.
+        """
+
+        if not _is_identifier(request_id):
+            return _rpc_error(request_id if isinstance(request_id, str) else "invalid-request", "invalid", "release request_id is invalid", False, "client")
+        auth = self._resolve_auth(authenticated_controller, controller, trusted_controller)
+        if not self._authenticated(auth):
+            return _rpc_error(request_id, "denied", "controller authentication required", False, "policy")
+        try:
+            if self._validate_request_shape(stop_request) != "stop" or stop_request.get("stop_authority") != {"mode": "owner-release", "approval_id": None}:
+                raise ValueError("release requires an owner stop")
+            fingerprint = hashlib.sha256(json.dumps(stop_request, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
+        except (TypeError, ValueError):
+            return _rpc_error(request_id, "denied", "release requires a valid owner stop", False, "policy")
+        identity = _dict(stop_request.get("identity")) if isinstance(stop_request, Mapping) else {}
+        key = _lane_key(_dict(identity.get("lane"))) if isinstance(identity.get("lane"), Mapping) else None
+        if key is not None:
+            with self._lock:
+                prior = self._state.get("release_replays", {}).get(key, {}).get(request_id)
+                if isinstance(prior, Mapping):
+                    owner = prior.get("owner_principal")
+                    principal = _effective_principal(auth)
+                    bound = self._release_replay_contexts.get((key, request_id), _MISSING)
+                    owner_matches = principal == owner if isinstance(owner, Mapping) else bound is auth
+                    if not owner_matches:
+                        return _rpc_error(request_id, "denied", "release replay owner does not match", False, "policy")
+                    if prior.get("fingerprint") != fingerprint:
+                        return _rpc_error(request_id, "conflict", "release request ID was reused for another request", False, "conflict")
+                    return copy.deepcopy(dict(prior["response"]))
+
+        reply = self.handle(stop_request, authenticated_controller=auth, release_request_id=request_id)
+        record = self.state_snapshot(_dict(identity.get("lane"))) if isinstance(identity.get("lane"), Mapping) else {}
+        if (reply.get("acknowledgement") == "stopped" and reply.get("observed_state") == "stopping"
+                and reply.get("uncertain") is False and record.get("release_pending") is True
+                and record.get("identity") == identity):
+            pending = self._pending_release_response(request_id, record, retry_after_s=retry_after_s)
+            with self._lock:
+                current = self._state.get("lanes", {}).get(key) if key is not None else None
+                if isinstance(current, dict) and current.get("generation") == record.get("generation"):
+                    current["release_pending_response"] = copy.deepcopy(pending)
+                    current.setdefault("release_pending_responses", {})[request_id] = copy.deepcopy(pending)
+                    current["release_request_id"] = request_id
+                self._state.setdefault("release_replays", {}).setdefault(key, {})[request_id] = {
+                    "fingerprint": fingerprint,
+                    "owner_principal": _effective_principal(auth),
+                    "response": copy.deepcopy(pending),
+                }
+                self._release_replay_contexts[(key, request_id)] = auth
+                self._save_locked()
+            return pending
+        if reply.get("ok") is True:
+            return self._release_success_response(request_id, reply)
+        if reply.get("uncertain") is True or reply.get("observed_state") == "quarantined":
+            return _rpc_error(request_id, "unknown", str(reply.get("error") or "release cleanup is uncertain"), True, "state")
+        return _rpc_error(request_id, "denied", str(reply.get("error") or "release was rejected"), False, "policy")
+
+    # Names used by controller adapters and small embedding callers.
+    release = release_rpc
+    release_request = release_rpc
 
     def state_snapshot(self, lane: Mapping[str, object] | str) -> dict[str, object]:
         """Return a copy of durable lane state without causing host side effects."""
@@ -345,7 +473,7 @@ class Executor:
     # ------------------------------------------------------------------
     # Request handlers
 
-    def _reserve(self, request: Mapping[str, object]) -> dict[str, object]:
+    def _reserve(self, request: Mapping[str, object], authenticated_controller: object) -> dict[str, object]:
         identity = _dict(request.get("identity"))
         policy = _dict(request.get("execution_policy"))
         lane = _dict(identity.get("lane"))
@@ -373,6 +501,8 @@ class Executor:
             if self._reservation_token_owner(key, str(identity.get("token"))) is not None:
                 return self._reply(request, "rejected", False, "free", False, "token is already fenced by another generation")
             now = self._read_clock()
+            owner_principal = _effective_principal(authenticated_controller)
+            self._owner_contexts[key] = authenticated_controller
             self._state["lanes"][key] = {
                 "lane": copy.deepcopy(lane),
                 "generation": generation,
@@ -383,6 +513,7 @@ class Executor:
                 "identity": copy.deepcopy(identity),
                 "reservation_identity": copy.deepcopy(identity),
                 "policy": copy.deepcopy(policy),
+                "owner_principal": owner_principal,
                 "workload": None,
                 "start_attempted": False,
                 "start_in_flight": False,
@@ -398,6 +529,12 @@ class Executor:
                 "grace_reason": None,
                 "reconcile_required": False,
                 "quarantine_reason": None,
+                "release_pending": False,
+                "release_wait_deadline": None,
+                "release_request_id": None,
+                "release_pending_response": None,
+                "release_pending_responses": {},
+                "release_identity": None,
                 "reserve_request_id": request.get("controller_request_id"),
             }
             self._save_locked()
@@ -518,7 +655,14 @@ class Executor:
                     keep_quarantined = True
                 self._save_locked()
             if cleanup_snapshot is not None:
-                cleanup = self._stop_record(key, cleanup_snapshot, reason="stop requested during start", internal=False)
+                cleanup = self._stop_record(
+                    key,
+                    cleanup_snapshot,
+                    reason="stop requested during start",
+                    internal=False,
+                    pending_allowed=bool(cleanup_snapshot.get("release_pending")),
+                    release_request_id=cleanup_snapshot.get("release_request_id") if isinstance(cleanup_snapshot.get("release_request_id"), str) else None,
+                )
                 if cleanup.get("ok") is True:
                     return self._reply(request, "started", False, "free", False, "start completed after stop was requested", cgroup=[], gpu_tenants=[])
                 return self._reply(request, "started", False, "quarantined", True, str(cleanup.get("error", "start cleanup is uncertain")))
@@ -605,7 +749,14 @@ class Executor:
                 current["quarantine_reason"] = f"systemd start completed uncertainly: {result.get('status', 'unknown')}"
             self._save_locked()
         if cleanup_snapshot is not None:
-            self._stop_record(generation_key[0], cleanup_snapshot, reason="stop requested during late start completion", internal=False)
+            self._stop_record(
+                generation_key[0],
+                cleanup_snapshot,
+                reason="stop requested during late start completion",
+                internal=False,
+                pending_allowed=bool(cleanup_snapshot.get("release_pending")),
+                release_request_id=cleanup_snapshot.get("release_request_id") if isinstance(cleanup_snapshot.get("release_request_id"), str) else None,
+            )
 
     def _recover_start(self, request: Mapping[str, object], key: str, unit: str, invocation: str) -> dict[str, object]:
         result = self._bounded_call(self.systemd.inspect, unit, invocation)
@@ -626,7 +777,14 @@ class Executor:
                         current["last_heartbeat_mono"] = self._read_clock()[1]
                     self._save_locked()
             if cleanup_snapshot is not None:
-                cleanup = self._stop_record(key, cleanup_snapshot, reason="stop requested during start recovery", internal=False)
+                cleanup = self._stop_record(
+                    key,
+                    cleanup_snapshot,
+                    reason="stop requested during start recovery",
+                    internal=False,
+                    pending_allowed=bool(cleanup_snapshot.get("release_pending")),
+                    release_request_id=cleanup_snapshot.get("release_request_id") if isinstance(cleanup_snapshot.get("release_request_id"), str) else None,
+                )
                 if cleanup.get("ok") is True:
                     return self._reply(request, "started", False, "free", False, "recovered start was already stopped", cgroup=[], gpu_tenants=[])
                 return self._reply(request, "started", False, "quarantined", True, str(cleanup.get("error", "recovered start cleanup is uncertain")))
@@ -664,7 +822,14 @@ class Executor:
             current["state"] = "stopping"
             cleanup_snapshot = copy.deepcopy(current)
             self._save_locked()
-        return self._stop_record(key, cleanup_snapshot, reason="stop after pending start recovery", internal=False)
+        return self._stop_record(
+            key,
+            cleanup_snapshot,
+            reason="stop after pending start recovery",
+            internal=False,
+            pending_allowed=bool(cleanup_snapshot.get("release_pending")),
+            release_request_id=cleanup_snapshot.get("release_request_id") if isinstance(cleanup_snapshot.get("release_request_id"), str) else None,
+        )
 
     def _beat(self, request: Mapping[str, object]) -> dict[str, object]:
         identity = _dict(request.get("identity"))
@@ -686,7 +851,13 @@ class Executor:
             state = str(record.get("state", "running"))
         return self._reply(request, "beat", True, state, False, None)
 
-    def _stop(self, request: Mapping[str, object]) -> dict[str, object]:
+    def _stop(
+        self,
+        request: Mapping[str, object],
+        authenticated_controller: object,
+        *,
+        release_request_id: str | None = None,
+    ) -> dict[str, object]:
         identity = _dict(request.get("identity"))
         key = _lane_key(_dict(identity.get("lane")))
         authority = _dict(request.get("stop_authority"))
@@ -696,9 +867,13 @@ class Executor:
             if not isinstance(record, dict) or not self._full_identity_matches(record, identity):
                 return self._reply(request, "rejected", False, self._lane_state(key), False, "stop identity mismatch")
             policy = _dict(record.get("policy"))
-            if bool(policy.get("protected")):
-                approval_id = authority.get("approval_id")
-                if authority.get("mode") != "approved-forced-preemption" or not isinstance(approval_id, str) or not self._approval_valid(approval_id, request, record):
+            mode = authority.get("mode")
+            approval_id = authority.get("approval_id")
+            if mode == "owner-release":
+                if approval_id is not None or not self._owner_release_authorized(authenticated_controller, request, record):
+                    return self._reply(request, "rejected", False, str(record.get("state", "unknown")), False, "owner release is not authorized for this lease")
+            elif bool(policy.get("protected")):
+                if mode != "approved-forced-preemption" or not isinstance(approval_id, str) or not self._approval_valid(approval_id, request, record):
                     record["state"] = "quarantined"
                     record["quarantine_reason"] = "protected stop lacks trusted forced-preemption approval"
                     record["closed_generation"] = max(int(record.get("closed_generation", 0)), int(record["generation"]))
@@ -710,22 +885,49 @@ class Executor:
                         record["closed_invocations"].append(pair)
                     self._save_locked()
                     return self._reply(request, "rejected", False, "quarantined", False, "protected stop lacks trusted forced-preemption approval")
-            elif authority.get("mode") != "controller-match" or authority.get("approval_id") is not None:
+            elif mode == "approved-forced-preemption":
+                if not isinstance(approval_id, str) or not self._approval_valid(approval_id, request, record):
+                    return self._reply(request, "rejected", False, str(record.get("state", "unknown")), False, "forced preemption lacks trusted approval")
+            elif mode != "controller-match" or approval_id is not None:
                 return self._reply(request, "rejected", False, str(record.get("state", "unknown")), False, "invalid stop authority")
             generation_key = (key, int(record.get("generation", 0)))
             if record.get("start_in_flight") or generation_key in self._inflight_starts:
+                if mode == "owner-release" and self._release_wait_expired_locked(record):
+                    self._quarantine(key, "release wait deadline elapsed before start completed")
+                    return self._reply(request, "stopped", False, "quarantined", True, "release wait deadline elapsed before start completed")
                 record["state"] = "stopping"
                 record["stop_requested"] = True
                 record["closed_generation"] = max(int(record.get("closed_generation", 0)), int(record.get("generation", 0)))
+                if mode == "owner-release":
+                    record["release_pending"] = True
+                    if not isinstance(record.get("release_wait_deadline"), Mapping):
+                        record["release_wait_deadline"] = self._new_release_wait_deadline_locked()
+                    if release_request_id is not None:
+                        record["release_request_id"] = release_request_id
+                    record["release_identity"] = copy.deepcopy(identity)
                 self._save_locked()
                 if generation_key in self._inflight_starts:
-                    return self._reply(request, "stopped", False, "quarantined", True, "stop queued until start outcome is known")
+                    return self._reply(
+                        request,
+                        "stopped",
+                        False,
+                        "stopping" if mode == "owner-release" else "quarantined",
+                        False if mode == "owner-release" else True,
+                        "stop queued until start outcome is known",
+                    )
                 pending_restart_snapshot = copy.deepcopy(record)
             snapshot = copy.deepcopy(record) if pending_restart_snapshot is None else None
         if pending_restart_snapshot is not None:
             return self._recover_pending_start_for_stop(request, key, pending_restart_snapshot)
         assert snapshot is not None
-        return self._stop_record(key, snapshot, reason="controller stop", internal=False)
+        return self._stop_record(
+            key,
+            snapshot,
+            reason="owner release" if mode == "owner-release" else "controller stop",
+            internal=False,
+            pending_allowed=mode == "owner-release",
+            release_request_id=release_request_id,
+        )
 
     def _inspect(self, request: Mapping[str, object]) -> dict[str, object]:
         identity = _dict(request.get("identity"))
@@ -752,7 +954,16 @@ class Executor:
     # ------------------------------------------------------------------
     # Side-effect and state helpers
 
-    def _stop_record(self, key: str, snapshot: dict[str, object], *, reason: str, internal: bool) -> dict[str, object]:
+    def _stop_record(
+        self,
+        key: str,
+        snapshot: dict[str, object],
+        *,
+        reason: str,
+        internal: bool,
+        pending_allowed: bool = False,
+        release_request_id: str | None = None,
+    ) -> dict[str, object]:
         identity = _dict(snapshot.get("identity"))
         unit = str(identity.get("unit", ""))
         invocation = str(identity.get("invocation", ""))
@@ -804,6 +1015,55 @@ class Executor:
         gpu_result = self._bounded_call(self.gpu_probe.inspect, str(_dict(snapshot.get("lane")).get("host_id", "")))
         inspect_ok, inspect_reason, cgroup, systemd_gpu = self._cleanup_systemd_observation(inspect_result, unit, invocation)
         gpu_ok, gpu_reason, gpu_tenants = self._cleanup_gpu_observation(gpu_result)
+        if stop_ok and pending_allowed and self._cleanup_is_pending(
+            inspect_result,
+            gpu_result,
+            unit,
+            invocation,
+        ):
+            expired = False
+            with self._lock:
+                current = self._state["lanes"].get(key)
+                if isinstance(current, dict) and current.get("generation") == snapshot.get("generation") and current.get("identity") == identity:
+                    if self._release_wait_expired_locked(current):
+                        current["state"] = "quarantined"
+                        current["release_pending"] = False
+                        current["quarantine_reason"] = "release wait deadline elapsed before emptiness was confirmed"
+                        self._close_record_locked(current)
+                        expired = True
+                    else:
+                        current["state"] = "stopping"
+                        current["release_pending"] = True
+                        current["quarantine_reason"] = None
+                        if not isinstance(current.get("release_wait_deadline"), Mapping):
+                            current["release_wait_deadline"] = self._new_release_wait_deadline_locked()
+                        if release_request_id is not None:
+                            current["release_request_id"] = release_request_id
+                        current["release_identity"] = copy.deepcopy(identity)
+                    self._save_locked()
+            if expired:
+                return self._reply_for_identity(
+                    identity,
+                    "stop",
+                    "stopped",
+                    False,
+                    "quarantined",
+                    True,
+                    "release wait deadline elapsed before emptiness was confirmed",
+                    cgroup=cgroup,
+                    gpu_tenants=gpu_tenants,
+                )
+            return self._reply_for_identity(
+                identity,
+                "stop",
+                "stopped",
+                False,
+                "stopping",
+                False,
+                "matching stop accepted; emptiness not yet confirmed",
+                cgroup=cgroup,
+                gpu_tenants=gpu_tenants,
+            )
         if stop_ok and inspect_ok and gpu_ok:
             with self._lock:
                 current = self._state["lanes"].get(key)
@@ -822,6 +1082,9 @@ class Executor:
                     current["workload"] = None
                     current["quarantine_reason"] = None
                     current["reconcile_required"] = False
+                    current["release_pending"] = False
+                    current["release_wait_deadline"] = None
+                    current["release_request_id"] = None
                     self._save_locked()
             return self._reply_for_identity(identity, "stop", "stopped", True, "free", False, None, cgroup=[], gpu_tenants=[])
 
@@ -835,6 +1098,117 @@ class Executor:
         failure = "; ".join(reason_parts) or "cleanup evidence was incomplete"
         self._quarantine(key, failure)
         return self._reply_for_identity(identity, "stop", "stopped", False, "quarantined", True, failure, cgroup=cgroup or _list_strings(systemd_gpu), gpu_tenants=gpu_tenants)
+
+    def _cleanup_is_pending(
+        self,
+        systemd_result: Mapping[str, object],
+        gpu_result: Mapping[str, object],
+        unit: str,
+        invocation: str,
+    ) -> bool:
+        """Classify a verified, still-draining cleanup separately from uncertainty."""
+
+        if not isinstance(systemd_result, Mapping) or systemd_result.get("unit") != unit or systemd_result.get("invocation") != invocation:
+            return False
+        if systemd_result.get("ok") is not True or systemd_result.get("status") not in _KNOWN_SUCCESS_STATUSES:
+            return False
+        if "complete" in systemd_result and systemd_result.get("complete") is not True:
+            return False
+        cgroup = _occupancy_fields(systemd_result, ("cgroup_occupants", "occupants"))
+        systemd_gpu = _occupancy_fields(systemd_result, ("gpu_occupants", "gpu_tenants"), required=False)
+        if cgroup is None or systemd_gpu is None or systemd_gpu:
+            return False
+        if "active" in systemd_result and not isinstance(systemd_result.get("active"), bool):
+            return False
+        state = systemd_result.get("state")
+        if state is not None and state not in {"free", "inactive", "absent", "dead", "running", "starting", "stopping", "active"}:
+            return False
+        if (cgroup or state in {"running", "starting", "stopping", "active"}) and systemd_result.get("active") is False:
+            return False
+        if state in {"free", "inactive", "absent", "dead"} and (cgroup or systemd_result.get("active") is True):
+            return False
+
+        # The frozen GPU observation has no invocation ownership proof. Any
+        # tenant is unexplained; failed/partial unload or probe results remain
+        # uncertain even when the matching cgroup is still draining.
+        gpu_ok, _, _ = self._cleanup_gpu_observation(gpu_result)
+        if not gpu_ok:
+            return False
+
+        systemd_active = bool(cgroup) or systemd_result.get("active") is True or state in {"running", "starting", "stopping", "active"}
+        return systemd_active
+
+    def _new_release_wait_deadline_locked(self) -> dict[str, object]:
+        now = self._read_clock()
+        return {
+            "boot_id": now[2],
+            "deadline_s": now[1] + float(self.release_wait_s),
+            "utc_anchor": _utc_text(now[0]),
+            "monotonic_anchor_s": now[1],
+        }
+
+    def _release_wait_expired_locked(self, record: Mapping[str, object]) -> bool:
+        deadline = record.get("release_wait_deadline")
+        if not isinstance(deadline, Mapping):
+            return False
+        if deadline.get("boot_id") != self._state.get("boot_id"):
+            return True
+        try:
+            return self._read_clock()[1] >= float(deadline["deadline_s"])
+        except (KeyError, TypeError, ValueError):
+            return True
+
+    def _pending_release_response(
+        self,
+        request_id: str,
+        record: Mapping[str, object],
+        *,
+        retry_after_s: int | None,
+    ) -> dict[str, object]:
+        deadline = record.get("release_wait_deadline")
+        if not isinstance(deadline, Mapping):
+            with self._lock:
+                deadline = self._new_release_wait_deadline_locked()
+        retry = self.release_retry_after_s if retry_after_s is None else retry_after_s
+        if not isinstance(retry, int) or isinstance(retry, bool) or retry < 1:
+            retry = self.release_retry_after_s
+        return {
+            "schema": 1,
+            "request_id": request_id,
+            "status": 202,
+            "data": {
+                "kind": "pending",
+                "operation": "release",
+                "request_id": request_id,
+                "queue_id": None,
+                "retry_after_s": retry,
+                "wait_deadline": copy.deepcopy(dict(deadline)),
+                "reason": "matching stop accepted; emptiness not yet confirmed",
+            },
+            "error": None,
+        }
+
+    def _release_success_response(self, request_id: str, reply: Mapping[str, object]) -> dict[str, object]:
+        identity = _dict(reply.get("echoed_identity"))
+        lane = _dict(identity.get("lane"))
+        generation = identity.get("generation")
+        if not isinstance(generation, int) or generation < 1 or set(lane) != {"site_id", "host_id", "lane_id"}:
+            return _rpc_error(request_id, "unknown", "release completed without a valid reservation identity", True, "state")
+        return {
+            "schema": 1,
+            "request_id": request_id,
+            "status": 200,
+            "data": {
+                "kind": "mutation",
+                "operation": "release",
+                "record_type": "lease",
+                "record_id": f"release-{lane['lane_id']}",
+                "state": "free",
+                "revision": generation,
+                "reservation": {"lane": copy.deepcopy(lane), "generation": generation, "state": "released"},
+            },
+            "error": None,
+        }
 
     def _close_record_locked(self, record: dict[str, object]) -> None:
         if isinstance(record.get("generation"), int):
@@ -854,6 +1228,7 @@ class Executor:
             if isinstance(record, dict):
                 record["state"] = "quarantined"
                 record["quarantine_reason"] = reason
+                record["release_pending"] = False
                 self._close_record_locked(record)
                 self._save_locked()
 
@@ -897,6 +1272,21 @@ class Executor:
             reservation_copy = copy.deepcopy(dict(reservation))
             reservation_copy["deadline"] = copy.deepcopy(deadline)
             record["reservation_identity"] = reservation_copy
+        release_deadline = record.get("release_wait_deadline")
+        if isinstance(release_deadline, Mapping):
+            try:
+                release_anchor_utc = _parse_utc(str(release_deadline["utc_anchor"]))
+                release_deadline_s = float(release_deadline["deadline_s"])
+                release_anchor_mono = float(release_deadline["monotonic_anchor_s"])
+                release_remaining = (release_anchor_utc + timedelta(seconds=release_deadline_s - release_anchor_mono) - now[0]).total_seconds()
+            except (KeyError, TypeError, ValueError, OverflowError):
+                return "reboot reconciliation has an invalid release wait deadline"
+            release_deadline_copy = copy.deepcopy(dict(release_deadline))
+            release_deadline_copy["boot_id"] = now[2]
+            release_deadline_copy["utc_anchor"] = _utc_text(now[0])
+            release_deadline_copy["monotonic_anchor_s"] = now[1]
+            release_deadline_copy["deadline_s"] = now[1] + max(0.0, release_remaining)
+            record["release_wait_deadline"] = release_deadline_copy
         return None
 
     def _initialise_clock_and_reboot(self) -> None:
@@ -998,6 +1388,14 @@ class Executor:
         clock = self._state.get("clock")
         return bool(isinstance(clock, dict) and clock.get("frozen"))
 
+    def _resolve_auth(self, authenticated_controller: object, controller: object, trusted_controller: object) -> object:
+        auth = authenticated_controller if authenticated_controller is not AUTH_UNSET else controller
+        if auth is AUTH_UNSET:
+            auth = trusted_controller
+        if auth is AUTH_UNSET and self._trusted_controller is not None:
+            auth = self._trusted_controller
+        return auth
+
     def _authenticated(self, context: object) -> bool:
         if context is AUTH_UNSET or context is None:
             return False
@@ -1029,6 +1427,43 @@ class Executor:
         if isinstance(approved, Mapping):
             return approval_id in approved and bool(approved[approval_id])
         return approved is not None and approval_id in set(approved)
+
+    def _owner_release_authorized(
+        self,
+        authenticated_controller: object,
+        request: Mapping[str, object],
+        record: Mapping[str, object],
+    ) -> bool:
+        """Check owner release while the reservation fence is held."""
+
+        if self._owner_release_checker is not None:
+            try:
+                if not bool(self._owner_release_checker(authenticated_controller, request, record)):
+                    return False
+            except TypeError:
+                try:
+                    if not bool(self._owner_release_checker(request, record)):
+                        return False
+                except Exception:
+                    return False
+            except Exception:
+                return False
+            # The injected checker is the controller's atomic ownership and
+            # user-intent boundary. Token/lane/generation/instance/unit/
+            # invocation fencing was checked before this method was called.
+            return True
+
+        principal = _effective_principal(authenticated_controller)
+        owner = record.get("owner_principal")
+        if isinstance(owner, Mapping):
+            return principal is not None and dict(owner) == principal
+        key = _lane_key(_dict(_dict(request.get("identity")).get("lane")))
+        bound = self._owner_contexts.get(key, _MISSING)
+        if bound is _MISSING:
+            return False
+        if isinstance(bound, (str, int, bytes)) and isinstance(authenticated_controller, type(bound)):
+            return bound == authenticated_controller
+        return bound is authenticated_controller
 
     def _validate_request_shape(self, request: Mapping[str, object]) -> str:
         if not isinstance(request, Mapping):
@@ -1328,6 +1763,455 @@ class Executor:
 
 def _dict(value: object) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def validate_content_labels(value: object = _MISSING) -> list[str]:
+    """Return caller-declared labels in their original order, or reject them."""
+
+    if value is _MISSING:
+        return []
+    if not isinstance(value, list):
+        raise LocalActionError("admission.content_labels must be an array when supplied")
+    labels: list[str] = []
+    seen: set[str] = set()
+    for label in value:
+        if not isinstance(label, str) or not _is_identifier(label) or label in seen:
+            raise LocalActionError("admission.content_labels must contain unique identifiers")
+        labels.append(label)
+        seen.add(label)
+    return labels
+
+
+def content_labels_admitted(value: object = _MISSING, content_policy: Iterable[str] | None = None) -> bool:
+    """Check labels against an injected current content policy.
+
+    An omitted or empty label list is admitted by this label-only check, but
+    it does not assert that any other admission or purpose rule passed.
+    """
+
+    labels = validate_content_labels(value)
+    if content_policy is None:
+        return not labels
+    allowed = set(validate_content_labels(list(content_policy)))
+    return all(label in allowed for label in labels)
+
+
+def local_action_projection(
+    request: Mapping[str, object],
+    *,
+    destination_site: str,
+    controller_id: str,
+    site_policy_hash: str | None = None,
+    current_pipeline: Mapping[str, object] | None = None,
+    content_policy: Iterable[str] | None = None,
+) -> dict[str, object]:
+    """Build the frozen, transport-independent local-action hash projection."""
+
+    _validate_local_action_request(request)
+    if not _is_short_identifier(destination_site) or not _is_identifier(controller_id):
+        raise LocalActionError("local action destination or controller is invalid")
+    admission = _dict(request["admission"])
+    pipeline = admission["pipeline"]
+    if pipeline is not None:
+        pipeline = copy.deepcopy(dict(pipeline))
+        if current_pipeline is not None:
+            if not isinstance(current_pipeline, Mapping):
+                raise LocalActionError("current pipeline is invalid")
+            _validate_current_pipeline(pipeline, current_pipeline)
+            current_policy_hash = current_pipeline.get("policy_hash")
+            if not isinstance(current_policy_hash, str) or not _is_sha256(current_policy_hash):
+                raise LocalActionError("current pipeline has no valid policy hash")
+            policy_hash = current_policy_hash
+            if content_policy is None and isinstance(current_pipeline.get("content_policy"), list):
+                content_policy = current_pipeline["content_policy"]
+        else:
+            policy_hash = pipeline.get("policy_hash")
+    else:
+        policy_hash = site_policy_hash
+
+    if not isinstance(policy_hash, str) or not _is_sha256(policy_hash):
+        raise LocalActionError("local action has no current policy hash")
+    labels = validate_content_labels(admission.get("content_labels", _MISSING))
+    if content_policy is not None and not content_labels_admitted(labels, content_policy):
+        raise LocalActionError("content label is outside the current content policy")
+    if admission.get("delegation") is not None:
+        raise LocalActionError("local action cannot silently discard a delegation")
+    args = copy.deepcopy(dict(request["args"]))
+    if args.get("signed_manifest") is not None:
+        raise LocalActionError("local action cannot silently discard a signed manifest")
+    args.pop("approval_id", None)
+
+    projection = {
+        "schema": request["schema"],
+        "op": request["op"],
+        "lane": copy.deepcopy(request["lane"]),
+        "args": args,
+        "requester": _effective_principal(_dict(admission["ingress"])),
+        "pipeline": pipeline,
+        "content_labels": labels,
+        "batch": copy.deepcopy(admission["batch"]),
+        "destination_site": destination_site,
+        "controller_id": controller_id,
+        "policy_hash": policy_hash,
+        "manifest_hash": None,
+    }
+    if not isinstance(projection["requester"], Mapping):
+        raise LocalActionError("authenticated ingress has no effective principal")
+    return projection
+
+
+def canonical_local_action_payload(
+    request: Mapping[str, object],
+    *,
+    destination_site: str,
+    controller_id: str,
+    site_policy_hash: str | None = None,
+    current_pipeline: Mapping[str, object] | None = None,
+    content_policy: Iterable[str] | None = None,
+) -> tuple[bytes, str]:
+    """Return canonical UTF-8 bytes and the domain-separated SHA-256 digest."""
+
+    projection = local_action_projection(
+        request,
+        destination_site=destination_site,
+        controller_id=controller_id,
+        site_policy_hash=site_policy_hash,
+        current_pipeline=current_pipeline,
+        content_policy=content_policy,
+    )
+    pairs = [[field, projection[field]] for field in _LOCAL_ACTION_FIELDS]
+    canonical = _jcs_serialize(pairs)
+    digest = hashlib.sha256(_LOCAL_ACTION_DOMAIN + canonical).hexdigest()
+    return canonical, digest
+
+
+def local_action_payload_hash(
+    request: Mapping[str, object],
+    *,
+    destination_site: str,
+    controller_id: str,
+    site_policy_hash: str | None = None,
+    current_pipeline: Mapping[str, object] | None = None,
+    content_policy: Iterable[str] | None = None,
+) -> str:
+    """Return only the canonical local-action payload digest."""
+
+    return canonical_local_action_payload(
+        request,
+        destination_site=destination_site,
+        controller_id=controller_id,
+        site_policy_hash=site_policy_hash,
+        current_pipeline=current_pipeline,
+        content_policy=content_policy,
+    )[1]
+
+
+# Descriptive aliases for callers that name the operation by its hash.
+project_local_action = local_action_projection
+local_action_hash = local_action_payload_hash
+
+
+def _validate_local_action_request(request: Mapping[str, object]) -> None:
+    if not isinstance(request, Mapping):
+        raise LocalActionError("execution RPC must be a mapping")
+    required = {"schema", "request_id", "op", "lane", "args", "idempotency_scope", "request_fingerprint", "admission"}
+    if set(request) != required:
+        raise LocalActionError("execution RPC has fields outside the frozen request contract")
+    if type(request.get("schema")) is not int or request.get("schema") != 1 or not isinstance(request.get("request_id"), str) or not _is_identifier(request["request_id"]):
+        raise LocalActionError("execution RPC schema or request_id is invalid")
+    op = request.get("op")
+    if op not in _LOCAL_ACTION_OPS:
+        raise LocalActionError("operation is not a local action")
+    lane = request.get("lane")
+    if lane is not None and (not isinstance(lane, str) or not _is_short_identifier(lane)):
+        raise LocalActionError("lane selector is invalid")
+    args = request.get("args")
+    if not isinstance(args, Mapping):
+        raise LocalActionError("execution RPC args must be an object")
+    _validate_local_action_args(str(op), args)
+    scope = request.get("idempotency_scope")
+    if not isinstance(scope, Mapping) or set(scope) != {"scope", "controller_id"} or scope.get("scope") not in {"authenticated-principal", "controller"} or not isinstance(scope.get("controller_id"), str) or not _is_identifier(scope["controller_id"]):
+        raise LocalActionError("idempotency scope is invalid")
+    if not isinstance(request.get("request_fingerprint"), str) or not _is_sha256(request["request_fingerprint"]):
+        raise LocalActionError("request fingerprint is invalid")
+
+    admission = request.get("admission")
+    if not isinstance(admission, Mapping) or set(admission) - {"execution", "content_labels", "approval", "pipeline", "delegation", "ingress", "batch"}:
+        raise LocalActionError("admission contains unsupported fields")
+    if not {"execution", "approval", "pipeline", "delegation", "ingress", "batch"}.issubset(admission) or admission.get("execution") != "atomic":
+        raise LocalActionError("admission is incomplete")
+    validate_content_labels(admission.get("content_labels", _MISSING))
+    approval = admission.get("approval")
+    if not isinstance(approval, Mapping) or set(approval) != {"approval_id", "required", "consume_atomically"} or approval.get("consume_atomically") is not True or not isinstance(approval.get("required"), bool):
+        raise LocalActionError("approval selection is invalid")
+    if approval["required"] and not _is_identifier(approval.get("approval_id")):
+        raise LocalActionError("required approval has no identifier")
+    if not approval["required"] and approval.get("approval_id") is not None:
+        raise LocalActionError("optional approval cannot carry an identifier")
+    pipeline = admission.get("pipeline")
+    if pipeline is not None:
+        _validate_pipeline_binding(pipeline)
+    if not (admission.get("delegation") is None or isinstance(admission.get("delegation"), Mapping)):
+        raise LocalActionError("delegation is invalid")
+    _validate_ingress(admission.get("ingress"))
+    if admission.get("batch") is not None:
+        _validate_batch_registration(admission.get("batch"))
+
+
+def _validate_local_action_args(op: str, args: Mapping[str, object]) -> None:
+    specs: dict[str, tuple[set[str], set[str]]] = {
+        "acquire": ({"purpose", "class", "est_s", "max_s", "booking_id", "queue_id", "pipeline_ref", "signed_manifest"}, {"purpose", "class", "est_s", "max_s"}),
+        "renew": ({"token", "instance", "extend_s"}, {"token"}),
+        "release": ({"token", "instance", "extend_s"}, {"token"}),
+        "claim": ({"token", "generation", "generation_source", "instance", "booking_id", "revision"}, set()),
+        "queue": ({"action", "purpose", "class", "max_wait_s", "queue_id"}, {"action"}),
+        "book": ({"start", "end", "purpose"}, {"start", "end", "purpose"}),
+        "cancel": ({"booking_id", "revision"}, {"booking_id"}),
+        "preempt": ({"token", "approval_id"}, {"token", "approval_id"}),
+        "chat-load": ({"pipeline_ref", "purpose"}, {"pipeline_ref", "purpose"}),
+        "chat-unload": ({"occupant_id", "generation"}, {"occupant_id", "generation"}),
+    }
+    allowed, required = specs[op]
+    if set(args) - allowed or not required.issubset(args):
+        raise LocalActionError(f"{op} args are invalid")
+    if "purpose" in args and (not isinstance(args["purpose"], str) or not 1 <= len(args["purpose"]) <= 512):
+        raise LocalActionError("purpose must contain 1 to 512 characters")
+    if "token" in args and (not isinstance(args["token"], str) or len(args["token"]) < 16 or (op != "preempt" and len(args["token"]) > 512)):
+        raise LocalActionError("token must contain 16 to 512 characters")
+    if "instance" in args and args["instance"] is not None and not _is_identifier(args["instance"]):
+        raise LocalActionError("instance is invalid")
+    if op == "acquire":
+        if not isinstance(args.get("purpose"), str) or not args["purpose"] or args.get("class") not in _EXECUTION_CLASSES or not _positive_integer(args.get("est_s")) or not _positive_integer(args.get("max_s")):
+            raise LocalActionError("acquire args are invalid")
+        if args.get("pipeline_ref") is not None and (not isinstance(args.get("pipeline_ref"), str) or not _is_short_identifier(args["pipeline_ref"] or "")):
+            raise LocalActionError("acquire pipeline_ref is invalid")
+        if args.get("signed_manifest") is not None and not isinstance(args.get("signed_manifest"), Mapping):
+            raise LocalActionError("acquire signed_manifest is invalid")
+        for field in ("booking_id", "queue_id"):
+            if args.get(field) is not None and not _is_identifier(args[field]):
+                raise LocalActionError(f"acquire {field} is invalid")
+    elif op in {"renew", "release"}:
+        _validate_token_args(args)
+    elif op == "claim":
+        adoption = "generation" in args or "generation_source" in args or "token" in args
+        booking = "booking_id" in args or "revision" in args
+        if adoption == booking or adoption and set(args) - {"token", "generation", "generation_source", "instance"} or booking and set(args) - {"booking_id", "revision"}:
+            raise LocalActionError("claim args are invalid")
+        if adoption and (not isinstance(args.get("token"), str) or len(args["token"]) < 16 or not _positive_integer(args.get("generation")) or args.get("generation_source") != "authenticated-adoption"):
+            raise LocalActionError("claim adoption args are invalid")
+        if booking and (not isinstance(args.get("booking_id"), str) or not _is_identifier(args["booking_id"]) or not _positive_integer(args.get("revision"))):
+            raise LocalActionError("claim booking args are invalid")
+    elif op == "queue":
+        action = args.get("action")
+        if action == "add":
+            if set(args) != {"action", "purpose", "class", "max_wait_s"} or not isinstance(args.get("purpose"), str) or not args["purpose"] or args.get("class") not in _EXECUTION_CLASSES or not _positive_integer(args.get("max_wait_s")):
+                raise LocalActionError("queue add args are invalid")
+        elif action == "refresh":
+            if set(args) != {"action", "queue_id", "max_wait_s"} or not isinstance(args.get("queue_id"), str) or not _is_identifier(args["queue_id"]) or not _positive_integer(args.get("max_wait_s")):
+                raise LocalActionError("queue refresh args are invalid")
+        elif action == "remove":
+            if set(args) != {"action", "queue_id"} or not isinstance(args.get("queue_id"), str) or not _is_identifier(args["queue_id"]):
+                raise LocalActionError("queue remove args are invalid")
+        elif action == "list":
+            if set(args) != {"action"}:
+                raise LocalActionError("queue list args are invalid")
+        else:
+            raise LocalActionError("queue action is invalid")
+    elif op == "book":
+        if any(not isinstance(args.get(field), str) or not args[field] for field in ("start", "end", "purpose")):
+            raise LocalActionError("book args are invalid")
+        for field in ("start", "end"):
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z", args[field]):
+                raise LocalActionError("booking timestamps must be UTC date-times")
+            try:
+                _parse_utc(args[field])
+            except ValueError as exc:
+                raise LocalActionError("booking timestamp is invalid") from exc
+    elif op == "cancel":
+        if not isinstance(args.get("booking_id"), str) or not _is_identifier(args["booking_id"]) or ("revision" in args and not _positive_integer(args.get("revision"))):
+            raise LocalActionError("cancel args are invalid")
+    elif op == "preempt":
+        if not isinstance(args.get("token"), str) or len(args["token"]) < 16 or not isinstance(args.get("approval_id"), str) or not _is_identifier(args["approval_id"]):
+            raise LocalActionError("preempt args are invalid")
+    elif op == "chat-load":
+        if not isinstance(args.get("pipeline_ref"), str) or not _is_short_identifier(args["pipeline_ref"]) or not isinstance(args.get("purpose"), str) or not args["purpose"]:
+            raise LocalActionError("chat-load args are invalid")
+    elif op == "chat-unload":
+        if not isinstance(args.get("occupant_id"), str) or not _is_identifier(args["occupant_id"]) or not _positive_integer(args.get("generation")):
+            raise LocalActionError("chat-unload args are invalid")
+
+
+def _validate_token_args(args: Mapping[str, object]) -> None:
+    if not isinstance(args.get("token"), str) or len(args["token"]) < 16 or ("instance" in args and args["instance"] is not None and (not isinstance(args["instance"], str) or not _is_identifier(args["instance"]))) or ("extend_s" in args and not _positive_integer(args.get("extend_s"))):
+        raise LocalActionError("token args are invalid")
+
+
+def _validate_pipeline_binding(pipeline: object) -> None:
+    if not isinstance(pipeline, Mapping) or set(pipeline) != {"pipeline_id", "version", "revision", "purpose", "policy_hash"} or not isinstance(pipeline.get("pipeline_id"), str) or not _is_short_identifier(pipeline["pipeline_id"]) or not isinstance(pipeline.get("version"), str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", pipeline["version"]) or not _positive_integer(pipeline.get("revision")) or not isinstance(pipeline.get("purpose"), str) or not pipeline["purpose"] or not isinstance(pipeline.get("policy_hash"), str) or not _is_sha256(pipeline["policy_hash"]):
+        raise LocalActionError("pipeline binding is invalid")
+    if len(pipeline["purpose"]) > 512:
+        raise LocalActionError("pipeline purpose exceeds 512 characters")
+
+
+def _validate_current_pipeline(request_pipeline: Mapping[str, object], current_pipeline: Mapping[str, object]) -> None:
+    for field in ("pipeline_id", "version", "revision", "purpose", "policy_hash"):
+        if request_pipeline.get(field) != current_pipeline.get(field):
+            raise LocalActionError("execution RPC pipeline is stale")
+    if "content_policy" in current_pipeline:
+        if not isinstance(current_pipeline["content_policy"], list):
+            raise LocalActionError("current pipeline content policy is invalid")
+        validate_content_labels(current_pipeline["content_policy"])
+
+
+def _validate_batch_registration(batch: object) -> None:
+    if not isinstance(batch, Mapping) or set(batch) != {"batch_id", "arms", "dependencies", "registered_before_execution", "all_arms_visible"}:
+        raise LocalActionError("batch registration is invalid")
+    if not isinstance(batch.get("batch_id"), str) or not _is_identifier(batch["batch_id"]) or batch.get("registered_before_execution") is not True or batch.get("all_arms_visible") is not True:
+        raise LocalActionError("batch registration metadata is invalid")
+    arms = batch.get("arms")
+    if not isinstance(arms, list) or not arms:
+        raise LocalActionError("batch arms are invalid")
+    arm_ids: set[str] = set()
+    for arm in arms:
+        if not isinstance(arm, Mapping) or set(arm) != {"arm_id", "predecessor", "dependencies"} or not isinstance(arm.get("arm_id"), str) or not _is_identifier(arm["arm_id"]) or arm["arm_id"] in arm_ids:
+            raise LocalActionError("batch arm is invalid")
+        arm_ids.add(arm["arm_id"])
+        predecessor = arm.get("predecessor")
+        if predecessor is not None and (not isinstance(predecessor, str) or not _is_identifier(predecessor)):
+            raise LocalActionError("batch predecessor is invalid")
+        dependencies = arm.get("dependencies")
+        if not isinstance(dependencies, list) or any(not isinstance(item, str) or not _is_identifier(item) for item in dependencies) or len(set(dependencies)) != len(dependencies):
+            raise LocalActionError("batch dependencies are invalid")
+    dependencies = batch.get("dependencies")
+    if not isinstance(dependencies, list) or any(not isinstance(item, str) or not _is_identifier(item) for item in dependencies) or len(set(dependencies)) != len(dependencies):
+        raise LocalActionError("batch dependency summary is invalid")
+
+
+def _validate_ingress(ingress: object) -> None:
+    required = {"actor", "subject", "controller_id", "authenticated_peer", "peer_source", "auth_method", "transport_binding", "peer_verified", "forwarding_headers_ignored", "operator_elevation"}
+    if not isinstance(ingress, Mapping) or set(ingress) != required or not _valid_principal(ingress.get("actor")) or not (ingress.get("subject") is None or _valid_principal(ingress.get("subject"))) or not isinstance(ingress.get("controller_id"), str) or not _is_identifier(ingress["controller_id"]) or not isinstance(ingress.get("authenticated_peer"), str) or not _is_identifier(ingress["authenticated_peer"]) or ingress.get("peer_source") != "socket-peer" or ingress.get("transport_binding") != "transport-independent" or ingress.get("peer_verified") is not True or ingress.get("forwarding_headers_ignored") is not True or ingress.get("auth_method") not in {"local", "tailnet-peer", "ssh-sk", "webauthn"} or ingress.get("operator_elevation") not in {"none", "approval-only"}:
+        raise LocalActionError("authenticated ingress is invalid")
+
+
+def _valid_principal(value: object) -> bool:
+    if not isinstance(value, Mapping) or set(value) != {"site_id", "tenant_id", "issuer", "subject"}:
+        return False
+    return isinstance(value.get("site_id"), str) and _is_short_identifier(value["site_id"]) and all(isinstance(value.get(field), str) and _is_identifier(value[field]) for field in ("tenant_id", "issuer", "subject"))
+
+
+def _effective_principal(context: object) -> dict[str, object] | None:
+    value: object = None
+    if isinstance(context, TrustedController):
+        value = context.effective_principal
+    elif isinstance(context, Mapping):
+        if "actor" in context and "subject" in context:
+            value = context.get("subject") or context.get("actor")
+        else:
+            value = context.get("effective_principal", context.get("principal"))
+    else:
+        value = getattr(context, "effective_principal", None)
+        if value is None:
+            value = getattr(context, "principal", None)
+    if not _valid_principal(value):
+        return None
+    return copy.deepcopy(dict(value))
+
+
+def _is_identifier(value: object) -> bool:
+    return isinstance(value, str) and _IDENTIFIER_RE.fullmatch(value) is not None
+
+
+def _is_short_identifier(value: object) -> bool:
+    return isinstance(value, str) and _SHORT_IDENTIFIER_RE.fullmatch(value) is not None
+
+
+def _is_sha256(value: object) -> bool:
+    return isinstance(value, str) and _SHA256_RE.fullmatch(value) is not None
+
+
+def _positive_integer(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+def _jcs_serialize(value: object) -> bytes:
+    if value is None or isinstance(value, bool):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    if isinstance(value, str):
+        try:
+            encoded = value.encode("utf-16-be")
+        except UnicodeEncodeError as exc:
+            raise LocalActionError("JCS rejects unpaired Unicode surrogates") from exc
+        del encoded
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    if isinstance(value, int) and not isinstance(value, bool):
+        if abs(value) > 2**53 - 1:
+            raise LocalActionError("JCS integer is outside the I-JSON safe range")
+        return str(value).encode("ascii")
+    if isinstance(value, float):
+        return _jcs_number(value).encode("ascii")
+    if isinstance(value, list):
+        return b"[" + b",".join(_jcs_serialize(item) for item in value) + b"]"
+    if isinstance(value, Mapping):
+        pairs: list[tuple[bytes, str, object]] = []
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise LocalActionError("JCS object keys must be strings")
+            try:
+                sort_key = key.encode("utf-16-be")
+            except UnicodeEncodeError as exc:
+                raise LocalActionError("JCS rejects unpaired Unicode object keys") from exc
+            pairs.append((sort_key, key, item))
+        pairs.sort(key=lambda item: item[0])
+        rendered: list[bytes] = []
+        for _, key, item in pairs:
+            rendered.append(_jcs_serialize(key) + b":" + _jcs_serialize(item))
+        return b"{" + b",".join(rendered) + b"}"
+    raise LocalActionError(f"unsupported JCS value type: {type(value).__name__}")
+
+
+def _jcs_number(value: float) -> str:
+    if not math.isfinite(value):
+        raise LocalActionError("JCS rejects non-finite numbers")
+    if value == 0:
+        return "0"
+    negative = value < 0
+    raw = repr(abs(value)).lower()
+    if "e" in raw:
+        mantissa, exponent_text = raw.split("e", 1)
+        exponent = int(exponent_text)
+    else:
+        mantissa = raw
+        exponent = 0
+    if "." in mantissa:
+        whole, fraction = mantissa.split(".", 1)
+    else:
+        whole, fraction = mantissa, ""
+    digits = whole + fraction
+    decimal_position = len(whole) + exponent
+    digits = digits.rstrip("0") or "0"
+    magnitude_exponent = decimal_position - 1
+    if -6 <= magnitude_exponent < 21:
+        if decimal_position <= 0:
+            rendered = "0." + ("0" * -decimal_position) + digits
+        elif decimal_position >= len(digits):
+            rendered = digits + ("0" * (decimal_position - len(digits)))
+        else:
+            rendered = digits[:decimal_position] + "." + digits[decimal_position:]
+    else:
+        coefficient = digits[0] if len(digits) == 1 else digits[0] + "." + digits[1:]
+        sign = "+" if magnitude_exponent >= 0 else "-"
+        rendered = f"{coefficient}e{sign}{abs(magnitude_exponent)}"
+    return "-" + rendered if negative else rendered
+
+
+def _rpc_error(request_id: str, code: str, message: str, retryable: bool, failure_class: str) -> dict[str, object]:
+    return {
+        "schema": 1,
+        "request_id": request_id,
+        "status": 503 if code in {"unknown", "timeout", "unavailable"} else 403 if code == "denied" else 409 if code in {"busy", "conflict", "fenced"} else 403,
+        "data": None,
+        "error": {"code": code, "message": message[:512], "retryable": retryable, "failure_class": failure_class},
+    }
 
 
 def _positive_int(value: object) -> int:
