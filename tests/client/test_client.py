@@ -194,6 +194,48 @@ def test_failed_acquire_has_no_workload_or_release():
     assert handoffs == []
 
 
+def test_pending_release_is_propagated_by_lifecycle():
+    pending = {
+        "schema": 1,
+        "request_id": "placeholder",
+        "status": 202,
+        "data": {
+            "kind": "pending",
+            "operation": "release",
+            "request_id": "placeholder",
+            "queue_id": None,
+            "retry_after_s": 60,
+            "wait_deadline": {
+                "boot_id": "boot-a",
+                "deadline_s": 600,
+                "utc_anchor": "2026-09-27T20:00:00Z",
+                "monotonic_anchor_s": 10,
+            },
+            "reason": "matching stop accepted; emptiness not yet confirmed",
+        },
+        "error": None,
+    }
+
+    def handler(message, _):
+        if message["op"] == "acquire":
+            return _grant(message)
+        response = copy.deepcopy(pending)
+        response["request_id"] = message["request_id"]
+        response["data"]["request_id"] = message["request_id"]
+        return response
+
+    transport = ScriptedTransport(handler)
+    response = RpcClient(transport).lifecycle(
+        "lane-gpu0",
+        "purpose",
+        ["workload"],
+        handoff=lambda grant, workload: True,
+    )
+    assert response["status"] == 202
+    assert response["data"]["operation"] == "release"
+    assert [call["op"] for call in transport.calls] == ["acquire", "release"]
+
+
 def test_transport_failure_replay():
     transport = P0FakeTransport(
         [

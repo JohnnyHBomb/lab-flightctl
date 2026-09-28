@@ -12,6 +12,7 @@ import base64
 import copy
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -120,7 +121,7 @@ _LEASE_STATES = {"starting", "running", "stopping", "quarantined"}
 _RESULT_KINDS_BY_OPERATION = {
     "acquire": {"grant", "pending"},
     "renew": {"mutation"},
-    "release": {"mutation"},
+    "release": {"mutation", "pending"},
     "claim": {"grant", "pending"},
     "queue": {"mutation", "pending", "queue"},
     "book": {"booking", "pending"},
@@ -134,6 +135,33 @@ _RESULT_KINDS_BY_OPERATION = {
     "free": {"projection"},
     "report": {"report"},
     "status": {"status"},
+}
+_LOCAL_ACTION_FIELDS = (
+    "schema",
+    "op",
+    "lane",
+    "args",
+    "requester",
+    "pipeline",
+    "content_labels",
+    "batch",
+    "destination_site",
+    "controller_id",
+    "policy_hash",
+    "manifest_hash",
+)
+_LOCAL_ACTION_DOMAIN = "flightctl/local-action/v1"
+_LOCAL_ACTION_OPERATIONS = {
+    "acquire",
+    "renew",
+    "release",
+    "claim",
+    "queue",
+    "book",
+    "cancel",
+    "preempt",
+    "chat-load",
+    "chat-unload",
 }
 
 
@@ -620,6 +648,17 @@ def _validate_ingress(ingress: object) -> None:
     _enum(ingress_value.get("operator_elevation"), "admission operator elevation", {"none", "approval-only"})
 
 
+def _validate_content_labels(
+    value: object,
+    field: str,
+    error_cls: type[ClientError] = InvalidRequest,
+) -> None:
+    if not isinstance(value, list) or not _unique(value):
+        _invalid(error_cls, f"{field} is invalid")
+    for index, label in enumerate(value):
+        _identifier(label, f"{field}[{index}]", error_cls)
+
+
 def _default_admission(controller_id: str) -> dict[str, object]:
     """Return a schema-shaped hint; the authority authenticates the socket peer.
 
@@ -657,9 +696,16 @@ def _controller_id(admission: Mapping[str, object]) -> str:
 
 
 def _validate_admission(admission: object) -> None:
-    admission_value = _object(admission, "admission", {"execution", "approval", "pipeline", "delegation", "ingress", "batch"})
+    admission_value = _object(
+        admission,
+        "admission",
+        {"execution", "approval", "pipeline", "delegation", "ingress", "batch"},
+        {"content_labels"},
+    )
     if admission_value.get("execution") != "atomic":
         raise InvalidRequest("admission execution must be atomic")
+    if "content_labels" in admission_value:
+        _validate_content_labels(admission_value.get("content_labels"), "admission.content_labels")
     _validate_approval_selection(admission_value.get("approval"), "admission.approval")
     pipeline = admission_value.get("pipeline")
     if pipeline is not None:
@@ -1123,12 +1169,14 @@ def _validate_response_result(data: object, *, operation: str | None = None, lan
         pending = _object(data, "response.data", {"kind", "operation", "request_id", "queue_id", "retry_after_s", "wait_deadline", "reason"}, error_cls=InvalidResponse)
         if pending.get("kind") != "pending":
             raise InvalidResponse("pending discriminator is invalid")
-        _enum(pending.get("operation"), "pending.operation", {"acquire", "claim", "queue", "book", "chat-load"}, InvalidResponse)
+        _enum(pending.get("operation"), "pending.operation", {"acquire", "claim", "queue", "book", "chat-load", "release"}, InvalidResponse)
         if operation is not None and pending.get("operation") != operation:
             raise InvalidResponse("pending operation does not match request")
         _identifier(pending.get("request_id"), "pending.request_id", InvalidResponse)
         if pending.get("queue_id") is not None:
             _identifier(pending.get("queue_id"), "pending.queue_id", InvalidResponse)
+        if pending.get("operation") == "release" and pending.get("queue_id") is not None:
+            raise InvalidResponse("pending release must not carry a queue identity")
         _positive_int(pending.get("retry_after_s"), "pending.retry_after_s", InvalidResponse)
         _validate_deadline(pending.get("wait_deadline"), "pending.wait_deadline", InvalidResponse)
         if not isinstance(pending.get("reason"), str) or not pending["reason"] or len(pending["reason"]) > 512:
@@ -1338,6 +1386,224 @@ def _request_id() -> str:
     return "req-" + uuid.uuid4().hex
 
 
+def _jcs_number(value: int | float) -> str:
+    """Serialize a JSON number using the RFC 8785/ECMAScript form."""
+
+    if type(value) is int:
+        if abs(value) > 2**53 - 1:
+            raise InvalidRequest("local-action numbers must be safe integers")
+        return str(value)
+    if type(value) is not float or not math.isfinite(value):
+        raise InvalidRequest("local-action number is not finite")
+    if value == 0.0:
+        return "0"
+
+    text = repr(value).lower()
+    sign = ""
+    if text.startswith("-"):
+        sign, text = "-", text[1:]
+    if "e" not in text:
+        if text.endswith(".0"):
+            text = text[:-2]
+        return sign + text
+
+    mantissa, exponent_text = text.split("e", 1)
+    exponent = int(exponent_text)
+    if "." in mantissa:
+        whole, fraction = mantissa.split(".", 1)
+        digits = whole + fraction
+        decimal_index = len(whole) + exponent
+    else:
+        digits = mantissa
+        decimal_index = len(mantissa) + exponent
+
+    # JSON.stringify uses decimal notation for [1e-6, 1e21).  Python's
+    # shortest-round-trip repr supplies the same significant digits; this
+    # only changes the notation around the ECMAScript thresholds.
+    if 1e-6 <= abs(value) < 1e21:
+        if decimal_index <= 0:
+            return sign + "0." + ("0" * -decimal_index) + digits
+        if decimal_index >= len(digits):
+            return sign + digits + ("0" * (decimal_index - len(digits)))
+        return sign + digits[:decimal_index] + "." + digits[decimal_index:]
+
+    digits = digits.rstrip("0") or "0"
+    exponent = decimal_index - 1
+    mantissa = digits[0]
+    if len(digits) > 1:
+        mantissa += "." + digits[1:]
+    exponent_sign = "+" if exponent >= 0 else "-"
+    return sign + mantissa + "e" + exponent_sign + str(abs(exponent))
+
+
+def _jcs_encode(value: object) -> str:
+    """Encode JSON-compatible values in canonical RFC 8785 order."""
+
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if type(value) in {int, float}:
+        return _jcs_number(value)
+    if isinstance(value, str):
+        try:
+            return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise InvalidRequest("local-action string is not valid JSON") from exc
+    if isinstance(value, Mapping):
+        items = list(value.items())
+        if any(not isinstance(key, str) for key, _ in items):
+            raise InvalidRequest("local-action object keys must be strings")
+        keys = [key for key, _ in items]
+        if len(keys) != len(set(keys)):
+            raise InvalidRequest("local-action object has duplicate keys")
+        items.sort(key=lambda item: item[0].encode("utf-16-be", "surrogatepass"))
+        return "{" + ",".join(_jcs_encode(key) + ":" + _jcs_encode(item) for key, item in items) + "}"
+    if isinstance(value, list):
+        return "[" + ",".join(_jcs_encode(item) for item in value) + "]"
+    raise InvalidRequest("local-action contains a non-JSON value")
+
+
+def _validate_local_action_projection(value: object) -> Mapping[str, object]:
+    projection = _object(value, "local_action", set(_LOCAL_ACTION_FIELDS), error_cls=InvalidRequest)
+    _schema_version(projection.get("schema"), "local_action.schema")
+    _enum(projection.get("op"), "local_action.op", _LOCAL_ACTION_OPERATIONS)
+    lane = projection.get("lane")
+    if lane is not None:
+        _short_identifier(lane, "local_action.lane")
+    args = projection.get("args")
+    if not isinstance(args, Mapping) or "approval_id" in args:
+        raise InvalidRequest("local_action.args must omit approval_id")
+    _validate_principal(projection.get("requester"), "local_action.requester")
+    pipeline = projection.get("pipeline")
+    if pipeline is not None:
+        _validate_pipeline(pipeline, "local_action.pipeline")
+    _validate_content_labels(projection.get("content_labels"), "local_action.content_labels")
+    batch = projection.get("batch")
+    if batch is not None:
+        _validate_batch(batch, "local_action.batch")
+    _short_identifier(projection.get("destination_site"), "local_action.destination_site")
+    _identifier(projection.get("controller_id"), "local_action.controller_id")
+    _valid_hash(projection.get("policy_hash"), "local_action.policy_hash")
+    if projection.get("manifest_hash") is not None:
+        raise InvalidRequest("local_action.manifest_hash must be null")
+    return projection
+
+
+def local_action_projection(
+    request: Mapping[str, object],
+    *,
+    destination_site: str,
+    controller_id: str,
+    policy_hash: str | None = None,
+    site_policy_hash: str | None = None,
+    manifest_hash: object = None,
+) -> dict[str, object]:
+    """Build the frozen, transport-neutral projection of an execution RPC.
+
+    ``policy_hash`` (or its explicit ``site_policy_hash`` alias) is the
+    current site policy when the request has no pipeline.  When a pipeline is
+    bound, its current policy hash is authoritative and a supplied hash must
+    agree with it.  Local signed manifests and delegations are unsupported
+    hooks here and therefore fail closed rather than being omitted.
+    """
+
+    validate_operation(request)
+    operation = request.get("op")
+    if operation not in _LOCAL_ACTION_OPERATIONS:
+        raise InvalidRequest("RPC operation cannot be a local action")
+    admission = request.get("admission")
+    args = request.get("args")
+    if not isinstance(admission, Mapping) or not isinstance(args, Mapping):
+        raise InvalidRequest("local-action request is incomplete")
+    if admission.get("delegation") is not None:
+        raise InvalidRequest("local action cannot silently discard a delegation")
+    if args.get("signed_manifest") is not None:
+        raise InvalidRequest("local action cannot silently discard a signed manifest")
+    if manifest_hash is not None:
+        raise InvalidRequest("local action manifest_hash must be null")
+
+    supplied_policy_hash = policy_hash if policy_hash is not None else site_policy_hash
+    if policy_hash is not None and site_policy_hash is not None and policy_hash != site_policy_hash:
+        raise InvalidRequest("local-action policy hashes disagree")
+    pipeline = admission.get("pipeline")
+    if isinstance(pipeline, Mapping):
+        current_policy_hash = pipeline.get("policy_hash")
+        if supplied_policy_hash is not None and supplied_policy_hash != current_policy_hash:
+            raise InvalidRequest("local-action pipeline policy is stale")
+    else:
+        current_policy_hash = supplied_policy_hash
+        if current_policy_hash is None:
+            raise InvalidRequest("local-action site policy hash is required")
+
+    ingress = admission.get("ingress")
+    if not isinstance(ingress, Mapping):
+        raise InvalidRequest("local-action ingress is incomplete")
+    requester = ingress.get("subject") if ingress.get("subject") is not None else ingress.get("actor")
+    labels = copy.deepcopy(admission.get("content_labels", []))
+    projection: dict[str, object] = {
+        "schema": request.get("schema"),
+        "op": operation,
+        "lane": request.get("lane"),
+        "args": copy.deepcopy(dict(args)),
+        "requester": copy.deepcopy(requester),
+        "pipeline": copy.deepcopy(pipeline),
+        "content_labels": labels,
+        "batch": copy.deepcopy(admission.get("batch")),
+        "destination_site": destination_site,
+        "controller_id": controller_id,
+        "policy_hash": current_policy_hash,
+        "manifest_hash": None,
+    }
+    projected_args = projection["args"]
+    assert isinstance(projected_args, dict)
+    projected_args.pop("approval_id", None)
+    _validate_local_action_projection(projection)
+    return projection
+
+
+def canonical_local_action_bytes(projection: Mapping[str, object]) -> bytes:
+    """Return the exact UTF-8 JCS bytes hashed for a local action."""
+
+    checked = _validate_local_action_projection(projection)
+    pairs = [[field, copy.deepcopy(checked[field])] for field in _LOCAL_ACTION_FIELDS]
+    try:
+        return _jcs_encode(pairs).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise InvalidRequest("local-action contains an invalid Unicode scalar") from exc
+
+
+def local_action_payload_hash(
+    request: Mapping[str, object],
+    *,
+    destination_site: str,
+    controller_id: str,
+    policy_hash: str | None = None,
+    site_policy_hash: str | None = None,
+    manifest_hash: object = None,
+) -> str:
+    """Compute the domain-separated SHA-256 hash for a validated execution RPC."""
+
+    projection = local_action_projection(
+        request,
+        destination_site=destination_site,
+        controller_id=controller_id,
+        policy_hash=policy_hash,
+        site_policy_hash=site_policy_hash,
+        manifest_hash=manifest_hash,
+    )
+    canonical = canonical_local_action_bytes(projection)
+    return hashlib.sha256(_LOCAL_ACTION_DOMAIN.encode("utf-8") + b"\0" + canonical).hexdigest()
+
+
+# Descriptive aliases keep the helper usable by composition layers without
+# creating a second encoding or hash implementation.
+build_local_action_projection = local_action_projection
+compute_local_action_payload_hash = local_action_payload_hash
+
+
 @dataclass(frozen=True)
 class Grant:
     """Validated grant data passed to the controller-owned handoff."""
@@ -1438,6 +1704,54 @@ class RpcClient:
     # Compatibility aliases make the seam straightforward for package-local
     # shims without creating another public wire operation.
     build_request = make_request
+
+    def local_action_projection(
+        self,
+        request: Mapping[str, object],
+        *,
+        destination_site: str,
+        controller_id: str | None = None,
+        policy_hash: str | None = None,
+        site_policy_hash: str | None = None,
+        manifest_hash: object = None,
+    ) -> dict[str, object]:
+        """Project an execution request using this client's admission context."""
+
+        selected_controller = controller_id
+        if selected_controller is None:
+            admission = request.get("admission")
+            selected_controller = _controller_id(admission) if isinstance(admission, Mapping) else _controller_id(self.admission)
+        return local_action_projection(
+            request,
+            destination_site=destination_site,
+            controller_id=selected_controller,
+            policy_hash=policy_hash,
+            site_policy_hash=site_policy_hash,
+            manifest_hash=manifest_hash,
+        )
+
+    def local_action_payload_hash(
+        self,
+        request: Mapping[str, object],
+        *,
+        destination_site: str,
+        controller_id: str | None = None,
+        policy_hash: str | None = None,
+        site_policy_hash: str | None = None,
+        manifest_hash: object = None,
+    ) -> str:
+        """Hash an execution request using this client's admission context."""
+
+        projection = self.local_action_projection(
+            request,
+            destination_site=destination_site,
+            controller_id=controller_id,
+            policy_hash=policy_hash,
+            site_policy_hash=site_policy_hash,
+            manifest_hash=manifest_hash,
+        )
+        canonical = canonical_local_action_bytes(projection)
+        return hashlib.sha256(_LOCAL_ACTION_DOMAIN.encode("utf-8") + b"\0" + canonical).hexdigest()
 
     def request(
         self,
@@ -1829,8 +2143,13 @@ __all__ = [
     "DEFAULT_TTL_MIN",
     "DEFAULT_WAIT_MAX_MIN",
     "QUEUE_REFRESH_S",
+    "build_local_action_projection",
+    "canonical_local_action_bytes",
+    "compute_local_action_payload_hash",
     "encode_signature",
     "failure_response",
+    "local_action_payload_hash",
+    "local_action_projection",
     "main",
     "parse_admission_json",
     "rpc_stdin",

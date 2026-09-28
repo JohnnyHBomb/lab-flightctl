@@ -6,7 +6,18 @@ from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
 
-from flightctl.client import InvalidResponse, RpcClient, _fingerprint, rpc_stdin, validate_operation, validate_response
+from flightctl.client import (
+    InvalidRequest,
+    InvalidResponse,
+    RpcClient,
+    _fingerprint,
+    canonical_local_action_bytes,
+    local_action_payload_hash,
+    local_action_projection,
+    rpc_stdin,
+    validate_operation,
+    validate_response,
+)
 from flightctl.flightctl import main
 import pytest
 
@@ -200,24 +211,161 @@ def test_status_exit_json_is_an_unchanged_envelope(status):
     assert stderr.getvalue() == ""
 
 
-def test_pending_release_remains_a_frozen_contract_gap():
-    response = {
-        "schema": 1,
-        "request_id": "req-release",
-        "status": 202,
-        "data": {
-            "kind": "pending",
-            "operation": "release",
-            "request_id": "req-release",
-            "queue_id": None,
-            "retry_after_s": 60,
-            "wait_deadline": {"boot_id": "boot-a", "deadline_s": 60, "utc_anchor": "2026-09-27T20:00:00Z", "monotonic_anchor_s": 10},
-            "reason": "release is pending",
-        },
-        "error": None,
+def test_p01_pending_release_vector_runs_through_cli():
+    vector = json.loads((ROOT / "tests" / "contracts" / "vectors" / "p0-1.json").read_text(encoding="utf-8"))
+    case = vector["pending_release"]
+    valid = copy.deepcopy(case["valid"])
+
+    def handler(message, _):
+        response = copy.deepcopy(valid)
+        response["request_id"] = message["request_id"]
+        response["data"]["request_id"] = message["request_id"]
+        return response
+
+    transport = ScriptedTransport(handler)
+    stdout, stderr = StringIO(), StringIO()
+    code = main(
+        ["--json", "release", "lane-gpu0", "token-abcdefghijklmnop"],
+        transport=transport,
+        clock=VectorClock(),
+        stdout=stdout,
+        stderr=stderr,
+    )
+    assert code == 5
+    payload = json.loads(stdout.getvalue())
+    assert payload["status"] == 202
+    assert payload["request_id"] == transport.calls[0]["request_id"]
+    assert payload["data"]["operation"] == "release"
+    assert stderr.getvalue() == ""
+    assert transport.calls[0]["args"] == {"token": "token-abcdefghijklmnop"}
+
+    for invalid in case["invalid"]:
+        with pytest.raises(InvalidResponse):
+            validate_response(invalid, invalid["request_id"], operation="release", lane="lane-gpu0")
+
+
+def test_p01_owner_release_and_forced_preemption_stay_distinct():
+    vector = json.loads((ROOT / "tests" / "contracts" / "vectors" / "p0-1.json").read_text(encoding="utf-8"))
+    owner_release = vector["owner_release"]["valid"]
+    assert owner_release["stop_authority"] == {"mode": "owner-release", "approval_id": None}
+
+    rpc = json.loads((ROOT / "tests" / "contracts" / "vectors" / "rpc.json").read_text(encoding="utf-8"))
+    client = RpcClient(admission=rpc["request_defaults"]["admission"])
+    release = client.make_request("release", "lane-gpu0", {"token": "token-abcdefghijklmnop"})
+    preempt = client.make_request("preempt", "lane-gpu0", {"token": "token-abcdefghijklmnop", "approval_id": "approval-a"})
+    assert release["args"] == {"token": "token-abcdefghijklmnop"}
+    assert release["admission"]["approval"] == {"approval_id": None, "required": False, "consume_atomically": True}
+    assert "stop_authority" not in release["args"]
+    assert preempt["args"] == {"token": "token-abcdefghijklmnop", "approval_id": "approval-a"}
+    assert preempt["admission"]["approval"] == {"approval_id": "approval-a", "required": True, "consume_atomically": True}
+
+
+def test_p01_content_labels_are_admission_only_and_policy_denial_is_server_result():
+    vector = json.loads((ROOT / "tests" / "contracts" / "vectors" / "p0-1.json").read_text(encoding="utf-8"))
+    cases = vector["content_labels"]
+    valid = cases["valid"]
+    request = RpcClient(admission=valid["admission"]).make_request(valid["op"], valid["lane"], valid["args"], request_id=valid["request_id"])
+    assert request["admission"]["content_labels"] == ["acceptable-use"]
+    assert "content_labels" not in request["args"]
+    validate_operation(request)
+
+    denied = cases["policy_denied"]
+    denied_client = RpcClient(
+        ScriptedTransport(
+            lambda message, _: {
+                "schema": 1,
+                "request_id": message["request_id"],
+                "status": 403,
+                "data": None,
+                "error": {
+                    "code": "denied",
+                    "message": "content label rejected",
+                    "retryable": False,
+                    "failure_class": "policy",
+                },
+            }
+        ),
+        admission=denied["admission"],
+    )
+    denied_request = denied_client.make_request(denied["op"], denied["lane"], denied["args"], request_id=denied["request_id"])
+    assert denied_request["admission"]["content_labels"] == ["disallowed"]
+    denied_response = denied_client.request(denied_request)
+    assert denied_response["status"] == 403
+    for labels in (cases["invalid"]["admission"]["content_labels"], None, ["acceptable-use", "acceptable-use"], [1], [""]):
+        invalid = copy.deepcopy(valid["admission"])
+        invalid["content_labels"] = labels
+        with pytest.raises(InvalidRequest):
+            RpcClient(admission=invalid)
+
+
+def test_p01_local_action_projection_and_hash_vectors():
+    vector = json.loads((ROOT / "tests" / "contracts" / "vectors" / "p0-1.json").read_text(encoding="utf-8"))
+    case = vector["local_action"]
+    kwargs = {
+        "destination_site": case["destination_site"],
+        "controller_id": case["controller_id"],
+        "policy_hash": case["policy_hash"],
+        "manifest_hash": case["manifest_hash"],
     }
-    with pytest.raises(InvalidResponse):
-        validate_response(response, "req-release", operation="release", lane="lane-gpu0")
+    projection = local_action_projection(case["request"], **kwargs)
+    assert projection == case["projection"]
+    assert canonical_local_action_bytes(projection).decode("utf-8") == case["canonical_utf8"]
+    assert local_action_payload_hash(case["request"], **kwargs) == case["payload_hash"]
+    assert RpcClient().local_action_payload_hash(case["request"], **kwargs) == case["payload_hash"]
+
+    for mutation in case["negative_mutations"]:
+        changed = copy.deepcopy(case["request"])
+        target = changed
+        for key in mutation["path"][:-1]:
+            target = target[key]
+        target[mutation["path"][-1]] = mutation["value"]
+        if mutation["path"] == ["args", "purpose"]:
+            changed["admission"]["pipeline"]["purpose"] = mutation["value"]
+        assert local_action_payload_hash(changed, **kwargs) != case["payload_hash"]
+
+    changed = copy.deepcopy(case["request"])
+    changed["request_id"] = "another-request"
+    changed["request_fingerprint"] = "b" * 64
+    changed["admission"]["ingress"]["authenticated_peer"] = "another-peer"
+    changed["admission"]["approval"] = {"approval_id": "approval-new", "required": True, "consume_atomically": True}
+    assert local_action_payload_hash(changed, **kwargs) == case["payload_hash"]
+
+    changed["op"] = "preempt"
+    changed["lane"] = "lane-gpu0"
+    changed["args"] = {"token": "token-abcdefghijklmnop", "approval_id": "approval-new"}
+    changed["admission"]["pipeline"] = None
+    del changed["admission"]["content_labels"]
+    with pytest.raises(InvalidRequest):
+        local_action_payload_hash(changed, destination_site=case["destination_site"], controller_id=case["controller_id"])
+    changed["admission"]["content_labels"] = []
+    # A site-policy hash is required when the execution request has no pipeline.
+    absent_labels_hash = local_action_payload_hash(
+        changed,
+        destination_site=case["destination_site"],
+        controller_id=case["controller_id"],
+        policy_hash=case["policy_hash"],
+    )
+    assert absent_labels_hash != case["payload_hash"]
+    changed["args"]["approval_id"] = "approval-other"
+    changed["admission"]["approval"]["approval_id"] = "approval-other"
+    assert local_action_payload_hash(
+        changed,
+        destination_site=case["destination_site"],
+        controller_id=case["controller_id"],
+        policy_hash=case["policy_hash"],
+    ) == absent_labels_hash
+    del changed["admission"]["content_labels"]
+    assert local_action_payload_hash(
+        changed,
+        destination_site=case["destination_site"],
+        controller_id=case["controller_id"],
+        policy_hash=case["policy_hash"],
+    ) == absent_labels_hash
+
+    delegated = copy.deepcopy(case["request"])
+    delegated["admission"]["delegation"] = {"unsupported": True}
+    with pytest.raises(InvalidRequest):
+        local_action_payload_hash(delegated, **kwargs)
 
 
 def test_malformed_or_mismatched_json_response_is_unavailable():
