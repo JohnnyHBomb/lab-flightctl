@@ -1,0 +1,13 @@
+# Template only.  This file is intentionally not installable or activated by P2.
+# A later deployment package must substitute an approved command and state path.
+
+[Unit]
+Description=Flightctl host executor (inactive template)
+
+[Service]
+Type=simple
+ExecStart=@FLIGHTCTL_EXECUTOR_COMMAND@
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
