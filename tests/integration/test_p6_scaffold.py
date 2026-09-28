@@ -519,8 +519,10 @@ def test_ci_security_configuration() -> None:
     requirements = (Path(__file__).resolve().parents[2] / "deploy" / "requirements-ci.lock").read_text(encoding="utf-8")
     pinned_requirements = [line for line in requirements.splitlines() if line and not line.startswith("#")]
     assert pinned_requirements and all("==" in line and " " not in line for line in pinned_requirements)
-    assert "importlib-metadata==7.1.0" in pinned_requirements
-    assert "zipp==3.19.2" in pinned_requirements
+    pinned_names = {line.split("==", 1)[0].lower().replace("_", "-") for line in pinned_requirements}  # PEP 503 names
+    # Every CI tool is pinned, and the lock carries its transitive closure (verified in CI by `pip check`).
+    assert {"semgrep", "pip-audit", "pytest", "jsonschema", "referencing"} <= pinned_names
+    assert len(pinned_names) > 20 and "rpds-py" in pinned_names  # transitive (jsonschema/referencing) pinned too
     tool_lock = (Path(__file__).resolve().parents[2] / "deploy" / "ci-tools.lock").read_text(encoding="utf-8")
     assert "GITLEAKS_VERSION=" in tool_lock and "GITLEAKS_IMAGE=" in tool_lock
     assert re.search(r"@sha256:[0-9a-f]{64}", tool_lock)
