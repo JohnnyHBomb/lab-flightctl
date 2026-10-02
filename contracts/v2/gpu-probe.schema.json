@@ -314,7 +314,7 @@
           ]
         },
         "attribution": {
-          "description": "Set by the executor, not the probe: lease (inside the lease's unit cgroup or a registered holder pid), noise (an allow-listed desktop identity: noise_identity_ok, Amendment 2), external (anything else, WHATEVER its size).",
+          "description": "Set by the executor, not the probe: lease (inside the lease's unit cgroup or a registered holder pid), noise (an allow-listed desktop identity: noise_identity_ok, Amendment 2), external (anything else, WHATEVER its size). Amendment 3 rev 2 (Sol 6.1 amd3 P1-4): a friend session's processes (a CUDA child in user-<uid>.slice) are 'lease' ONLY when the process's cgroup path lies inside the user slice that an OPEN entry of the executor's session registry records for THIS lane (the entry exists only after the helper's session-open succeeded for that parent lease); the parent is that entry's parent_lease_id. The uid is never used: a friend-uid process outside a registered slice, or inside the slice of a closed or other-lane entry, is 'external'. Oracle session_attribution.",
           "enum": [
             "unattributed",
             "lease",

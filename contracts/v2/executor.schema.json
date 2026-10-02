@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://flightctl.local/contracts/v2/executor.schema.json",
   "title": "Flightctl executor protocol v2 (authority <-> per-host executor)",
-  "description": "SEMANTIC v2 of executor-v1. Fixes: G02 (deadlines are durations anchored by the executor on its OWN monotonic clock; no cross-host boot_id comparison), G03 (beat carries renewed durations; the authority sends it every executor_beat_s for every live lease), Grok finding 1 (the full identity incl. unit and run_id is assigned BEFORE reserve and never changes; stop verifies the same identity), Grok finding 7 (typed errors with cause are preserved), WAKE-BRIEF Q2 (a reserve rejected with definite=true wrote no fence and is a definite non-reservation), G20 (work_mode holder|unit; argv workloads), G05 (inspect returns the occupancy shape the probe defines). Raw lease tokens never reach the executor: it stores token_sha256. Round 2: beat may not carry max-end; 'extend' (approval_id required) is the only way to move the host ceiling later (N1). Reserve order: take the inhibitor, then write the fence; if the fence write fails the inhibitor is released before a definite refusal, and if that release fails the reply is uncertain (D-pow-3: definite means NO fence and NO inhibitor persisted). 'output' serves owner job-output chunks (B6). Round 4 (N1): a reserve is NOT a grant until the host has ACKNOWLEDGED a ceiling at or before the approved end: authority_receive_time + max_end_remaining_s <= approved_max_end. Otherwise the authority sends a shorten-only 'ceiling' message and grants only after that message's reply confirms the bound; if the correction is lost, no grant is issued (202 pending 'ceiling-unconfirmed' until wait_until, then the reservation is stopped, or the lane quarantined if the stop is uncertain).",
+  "description": "SEMANTIC v2 of executor-v1. Fixes: G02 (deadlines are durations anchored by the executor on its OWN monotonic clock; no cross-host boot_id comparison), G03 (beat carries renewed durations; the authority sends it every executor_beat_s for every live lease), Grok finding 1 (the full identity incl. unit and run_id is assigned BEFORE reserve and never changes; stop verifies the same identity), Grok finding 7 (typed errors with cause are preserved), WAKE-BRIEF Q2 (a reserve rejected with definite=true wrote no fence and is a definite non-reservation), G20 (work_mode holder|unit; argv workloads), G05 (inspect returns the occupancy shape the probe defines). Raw lease tokens never reach the executor: it stores token_sha256. Round 2: beat may not carry max-end; 'extend' (approval_id required) is the only way to move the host ceiling later (N1). Reserve order: take the inhibitor, then write the fence; if the fence write fails the inhibitor is released before a definite refusal, and if that release fails the reply is uncertain (D-pow-3: definite means NO fence and NO inhibitor persisted). 'output' serves owner job-output chunks (B6). Round 4 (N1): a reserve is NOT a grant until the host has ACKNOWLEDGED a ceiling at or before the approved end: authority_receive_time + max_end_remaining_s <= approved_max_end. Otherwise the authority sends a shorten-only 'ceiling' message and grants only after that message's reply confirms the bound; if the correction is lost, no grant is issued (202 pending 'ceiling-unconfirmed' until wait_until, then the reservation is stopped, or the lane quarantined if the stop is uncertain). Amendment 3 rev 2 (Sol 6.1 amd3 P1-4): kind 'session' carries the friend-session lifecycle on this wire. action 'register' (authority -> executor; the parent lease identity, the account, the canonical public key, the lane's device minors and expires_in_s, a duration anchored on the executor's monotonic clock as in G02): the executor calls SessionGateway.open; only an ok reply from the helper creates an executor session-registry entry recording the slice the helper configured (user-<uid>.slice) against the parent lease_id and lane. While friend sessions are off the helper refuses and the executor replies ok=false, definite=true, 'unavailable', and records nothing. action 'close' (authority -> executor: user, lease-end, idle, operator, preempted) and two executor-initiated closes that need no controller: 'local-expiry' (the entry's own monotonic deadline passed) and 'controller-loss' (the parent lease's executor-side deadline lapsed without a beat: its sessions are closed before the unit stop and emptiness proof). action 'reconcile' (authority -> executor after A8 restart: the active session ids for the lane): every registered session not listed is closed with reason 'reconcile'. Every session reply carries 'sessions' (the lane's registry after the change, with close proofs; inspect may carry it too), and the authority sends 'reconcile' on every executor (re)connection and A8 pass, so executor-initiated closes are reported even after a controller loss; oracle executor_session_closes. The registry is the ONLY input to session attribution (gpu-probe attribution 'lease': a process whose cgroup lies inside the user slice of an OPEN registry entry for this lane; never by uid alone; oracle session_attribution).",
   "oneOf": [
     {
       "$ref": "#/$defs/request"
@@ -23,7 +23,8 @@
         "logs",
         "extend",
         "output",
-        "ceiling"
+        "ceiling",
+        "session"
       ]
     },
     "identity": {
@@ -729,6 +730,9 @@
         },
         {
           "$ref": "#/$defs/ceiling_request"
+        },
+        {
+          "$ref": "#/$defs/session_request"
         }
       ]
     },
@@ -1014,6 +1018,21 @@
             }
           ],
           "description": "Round 4 (Sol 6 r3 N1): seconds until the host-local max-end at the moment the host built this reply (null if no fence). The host's ceiling is then at most authority_receive_time + max_end_remaining_s (the reply was built before it was received), with no clock comparison."
+        },
+        "sessions": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "$ref": "#/$defs/session_state"
+              }
+            }
+          ],
+          "description": "Amendment 3 rev 2: the executor's session registry for this lane after the change; required on 'session' replies, optional on 'inspect' (absent or null = no registry entry on this lane)."
         }
       },
       "allOf": [
@@ -1150,6 +1169,25 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "session"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "sessions"
+            ],
+            "properties": {
+              "sessions": {
+                "type": "array"
+              }
+            }
+          }
         }
       ]
     },
@@ -1274,6 +1312,387 @@
       ],
       "unevaluatedProperties": false,
       "description": "Shorten-only: the host sets max-end = min(current, received). Never moves it later (only 'extend' with an approval does)."
+    },
+    "session_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "session_id",
+        "parent_lease_id",
+        "lane_id",
+        "account",
+        "slice",
+        "state",
+        "close_reason",
+        "close_proof"
+      ],
+      "properties": {
+        "session_id": {
+          "$ref": "common.schema.json#/$defs/public_id"
+        },
+        "parent_lease_id": {
+          "$ref": "common.schema.json#/$defs/public_id"
+        },
+        "lane_id": {
+          "$ref": "common.schema.json#/$defs/identifier"
+        },
+        "account": {
+          "$ref": "session.schema.json#/$defs/session/properties/unix_user"
+        },
+        "slice": {
+          "type": "string",
+          "pattern": "^user-[1-9][0-9]{0,9}\\.slice$"
+        },
+        "state": {
+          "enum": [
+            "open",
+            "closing",
+            "closed",
+            "failed"
+          ]
+        },
+        "close_reason": {
+          "anyOf": [
+            {
+              "$ref": "session.schema.json#/$defs/session/properties/close_reason/anyOf/0"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "close_proof": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "user_slice_empty",
+                "occupancy_empty",
+                "key_removed"
+              ],
+              "properties": {
+                "user_slice_empty": {
+                  "type": "boolean"
+                },
+                "occupancy_empty": {
+                  "type": "boolean"
+                },
+                "key_removed": {
+                  "type": "boolean"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "open"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "close_reason": {
+                "type": "null"
+              },
+              "close_proof": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "closing"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "close_reason": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "close_proof": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "closed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "close_reason": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "close_proof": {
+                "type": "object",
+                "properties": {
+                  "user_slice_empty": {
+                    "const": true
+                  },
+                  "occupancy_empty": {
+                    "const": true
+                  },
+                  "key_removed": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "failed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "close_reason": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "close_proof": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      ],
+      "description": "Amendment 3 rev 3 (Sol 6.1 amd3r2): open = no reason, no proof; closing = a reason, no proof yet; closed = a reason and a proof whose three facts are all true (the schema form of 'closed only after the proof'); failed = a reason and the proof as measured (some fact false). Consumers still verify emptiness before any release: a reported proof is evidence, not permission."
+    },
+    "session_request": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/request_base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "action"
+          ],
+          "properties": {
+            "kind": {
+              "const": "session"
+            },
+            "action": {
+              "enum": [
+                "register",
+                "close",
+                "reconcile"
+              ]
+            },
+            "identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "lane": {
+              "$ref": "common.schema.json#/$defs/lane_ref"
+            },
+            "session": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "account",
+                "public_key",
+                "key_fingerprint",
+                "device_minors",
+                "expires_in_s"
+              ],
+              "properties": {
+                "session_id": {
+                  "$ref": "common.schema.json#/$defs/public_id"
+                },
+                "account": {
+                  "$ref": "session.schema.json#/$defs/session/properties/unix_user"
+                },
+                "public_key": {
+                  "$ref": "session.schema.json#/$defs/enrolled_key/properties/public_key"
+                },
+                "key_fingerprint": {
+                  "$ref": "session.schema.json#/$defs/session/properties/key_fingerprint"
+                },
+                "device_minors": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 16,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 255
+                  }
+                },
+                "expires_in_s": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 31536000
+                }
+              }
+            },
+            "session_id": {
+              "$ref": "common.schema.json#/$defs/public_id"
+            },
+            "reason": {
+              "enum": [
+                "user",
+                "lease-end",
+                "idle",
+                "operator",
+                "preempted"
+              ]
+            },
+            "active_session_ids": {
+              "type": "array",
+              "maxItems": 256,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "common.schema.json#/$defs/public_id"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "register"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "identity",
+              "session"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "session_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "reason"
+                  ]
+                },
+                {
+                  "required": [
+                    "active_session_ids"
+                  ]
+                },
+                {
+                  "required": [
+                    "lane"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "close"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "identity",
+              "session_id",
+              "reason"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "session"
+                  ]
+                },
+                {
+                  "required": [
+                    "active_session_ids"
+                  ]
+                },
+                {
+                  "required": [
+                    "lane"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "reconcile"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "lane",
+              "active_session_ids"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "session"
+                  ]
+                },
+                {
+                  "required": [
+                    "session_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "reason"
+                  ]
+                },
+                {
+                  "required": [
+                    "identity"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false,
+      "description": "Amendment 3 rev 2: the friend-session lifecycle on the executor wire (see the schema description). register creates state only through an ok SessionGateway.open; close and reconcile are cleanup paths that work while friend sessions are off."
     }
   },
   "x-examples": {
@@ -1397,6 +1816,68 @@
         "dry_run": false,
         "output": null,
         "max_end_remaining_s": null
+      },
+      {
+        "schema_version": 2,
+        "kind": "session",
+        "controller_request_id": "creq-s1",
+        "controller_id": "authority-1",
+        "sent_at": "2026-10-02T10:00:00Z",
+        "action": "register",
+        "identity": {
+          "lane": {
+            "site_id": "site-a",
+            "host_id": "host-1",
+            "lane_id": "lane-gpu1"
+          },
+          "generation": 7,
+          "lease_id": "lse-0000100",
+          "token_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "run_id": "run-0000007a",
+          "unit": "flightctl-lane-gpu1-g7.service"
+        },
+        "session": {
+          "session_id": "ses-000001",
+          "account": "fc-friend",
+          "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDR/yEIlkVI/wd5ar9zgYtW/HDPIPv9JwHjHwDY+kqRH",
+          "key_fingerprint": "SHA256:LA11xymOOE7XYYMCs390mZIYwTCX7SIWRqpUwai0uMY",
+          "device_minors": [
+            1
+          ],
+          "expires_in_s": 3600
+        }
+      },
+      {
+        "schema_version": 2,
+        "kind": "session",
+        "controller_request_id": "creq-s1",
+        "echoed_identity": null,
+        "ok": false,
+        "definite": true,
+        "observed_state": "free",
+        "host_boot": {
+          "host_id": "host-1",
+          "boot_id": "e8a72066-3f84-4fbb-bfd5-9e055bee90c0",
+          "observed_at": "2026-10-02T10:00:01Z"
+        },
+        "host_utc": "2026-10-02T10:00:01Z",
+        "fences": [],
+        "unit": null,
+        "occupancy": null,
+        "inhibitor": null,
+        "stage": null,
+        "log_lines": [],
+        "next_cursor": null,
+        "error": {
+          "code": "unavailable",
+          "message": "friend_sessions is off on this host",
+          "layer": "executor",
+          "cause": null
+        },
+        "dry_run": false,
+        "output": null,
+        "max_end_remaining_s": null,
+        "sessions": []
       }
     ],
     "invalid": [
@@ -1501,6 +1982,24 @@
             "sender_utc": "2026-10-02T10:01:00Z"
           }
         ]
+      },
+      {
+        "schema_version": 2,
+        "kind": "session",
+        "controller_request_id": "creq-s2",
+        "controller_id": "authority-1",
+        "sent_at": "2026-10-02T10:00:00Z",
+        "action": "register",
+        "session": {
+          "session_id": "ses-000001",
+          "account": "fc-friend",
+          "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDR/yEIlkVI/wd5ar9zgYtW/HDPIPv9JwHjHwDY+kqRH",
+          "key_fingerprint": "SHA256:LA11xymOOE7XYYMCs390mZIYwTCX7SIWRqpUwai0uMY",
+          "device_minors": [
+            1
+          ],
+          "expires_in_s": 3600
+        }
       }
     ]
   }

@@ -10,10 +10,16 @@
   For every listed port: no registered implementation, a missing real twin, or ANY skip that is not a declared
   "n/a" is a FAILURE. Evidence files record passed / failed / n/a per case and strict=true; the gauge accepts
   only strict evidence with zero failures.
+* Amendment 3 rev 2 (Sol 6.1 amd3): implementations register from tests/conformance/impl_*.py, which this conftest
+  imports (sorted) before any case is parametrised, so a packet registers by ADDING a file and edits no harness file.
+  Cases that depend on the target's friend-session flags declare it with @pytest.mark.friend_flags("off"|"on"); the
+  target's state is FLIGHTCTL_CONFORMANCE_FRIEND_FLAGS (default "off", which is every R1 target), the other state is
+  recorded "n/a", and the case body asserts the implementation's read-back flag state equals the declared one.
 """
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import subprocess
@@ -25,6 +31,25 @@ import pytest
 from . import registry
 
 _RESULTS: dict[tuple[str, str], dict[str, str]] = {}
+
+
+def load_implementations(directory: Path = Path(__file__).parent, package: str = __package__) -> list[str]:
+    """Import every impl_*.py next to this file (sorted); each registers its factories with registry.register."""
+    loaded = []
+    for path in sorted(directory.glob("impl_*.py")):
+        importlib.import_module(f"{package}.{path.stem}")
+        loaded.append(path.stem)
+    return loaded
+
+
+load_implementations()
+
+
+def friend_flags_state() -> str:
+    state = os.environ.get("FLIGHTCTL_CONFORMANCE_FRIEND_FLAGS", "off")
+    if state not in {"off", "on"}:
+        raise pytest.UsageError(f"FLIGHTCTL_CONFORMANCE_FRIEND_FLAGS must be off or on, not {state!r}")
+    return state
 
 
 def strict_ports() -> set[str]:
@@ -41,6 +66,7 @@ def pytest_configure(config: pytest.Config) -> None:
         "fake_only: applies to the fake only (fault injection); n/a for dryrun and real",
         "not_dryrun: needs a real effect; n/a for the dryrun twin",
         "strict_missing(port): strict run without a real twin; fails at setup",
+        "friend_flags(state): applies only when the target's friend-session flags are 'off' or 'on'; n/a otherwise",
     ):
         config.addinivalue_line("markers", line)
 
@@ -77,7 +103,11 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         kind = callspec.params.get("kind") if callspec else None
         if kind is None:
             continue
-        if item.get_closest_marker("fake_only") and kind != "fake":
+        flags = item.get_closest_marker("friend_flags")
+        if flags is not None and flags.args[0] != friend_flags_state():
+            item.add_marker(pytest.mark.skip(reason=f"n/a: needs friend flags {flags.args[0]}"))
+            item.user_properties.append(("applicability", "n/a"))
+        elif item.get_closest_marker("fake_only") and kind != "fake":
             item.add_marker(pytest.mark.skip(reason="n/a: fake-only case"))
             item.user_properties.append(("applicability", "n/a"))
         elif item.get_closest_marker("not_dryrun") and kind == "dryrun":

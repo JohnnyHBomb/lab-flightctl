@@ -47,6 +47,9 @@
         "job-list",
         "session-open",
         "session-close",
+        "session-key-enrol",
+        "session-key-list",
+        "session-key-revoke",
         "endpoint-load",
         "endpoint-unload",
         "chat-load",
@@ -810,6 +813,54 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "session-key-enrol"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/session_key_enrol_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "session-key-revoke"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/session_key_revoke_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "session-key-list"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/empty_or_reason"
+              }
+            }
+          }
         }
       ]
     },
@@ -1387,7 +1438,8 @@
             }
           ]
         }
-      }
+      },
+      "description": "Amendment 3 rev 2 (Sol 6.1 amd3 P1-4): key_fingerprint names one of the caller's enrolled, unrevoked keys (session-key-enrol); the authority resolves it to the key bytes (resolve_session_key) only after the friend gates admit the request, and sends the bytes over the executor wire; an unknown, revoked or foreign fingerprint is 'not_found'."
     },
     "endpoint_load_args": {
       "type": "object",
@@ -1511,6 +1563,42 @@
           "$ref": "common.schema.json#/$defs/sha256"
         }
       }
+    },
+    "session_key_enrol_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "public_key"
+      ],
+      "properties": {
+        "public_key": {
+          "$ref": "session.schema.json#/$defs/public_key_text"
+        },
+        "label": {
+          "$ref": "session.schema.json#/$defs/enrolled_key/properties/label"
+        }
+      },
+      "description": "Amendment 3 rev 2: enrol one public key for the CALLER's own principal (account-scoped; the principal comes from the peer, never from args). Refused with 'unavailable' while features.friend_sessions is off; 'conflict' if another principal holds the same unrevoked key. Rev 3: a revoked fingerprint is refused with 'conflict' until the operator purges it (session-key-revoke purge)."
+    },
+    "session_key_revoke_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key_fingerprint"
+      ],
+      "properties": {
+        "key_fingerprint": {
+          "$ref": "session.schema.json#/$defs/session/properties/key_fingerprint"
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        },
+        "purge": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "description": "Amendment 3 rev 2/3: revoke one of the caller's keys (the operator: anyone's). Works while friend sessions are off (it removes friend state). A revoked key never resolves and is never re-enrolled, by anyone: its record stays as a tombstone (rev 3, Sol 6.1 amd3r2) until the OPERATOR purges it (purge=true, an already revoked key; 'denied' for anyone else), after which it may be enrolled again as a new record. Open sessions keyed by a revoked key are closed by the authority (session-close)."
     }
   },
   "x-ops": [
@@ -1945,6 +2033,36 @@
       "session close <session_id>"
     ],
     [
+      "session-key-enrol",
+      "work",
+      "member",
+      "session",
+      true,
+      "none",
+      false,
+      "session key add <public-key-file> [--label L]"
+    ],
+    [
+      "session-key-list",
+      "work",
+      "member",
+      "session",
+      false,
+      "-",
+      false,
+      "session key list"
+    ],
+    [
+      "session-key-revoke",
+      "work",
+      "owner|operator",
+      "session",
+      true,
+      "none",
+      false,
+      "session key revoke <fingerprint>"
+    ],
+    [
       "endpoint-load",
       "work",
       "member",
@@ -2178,6 +2296,23 @@
             "legacy_token_hint": "5f815964"
           }
         }
+      },
+      {
+        "schema": 2,
+        "request_id": "req-key-1",
+        "op": "session-key-enrol",
+        "lane": null,
+        "args": {
+          "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDR/yEIlkVI/wd5ar9zgYtW/HDPIPv9JwHjHwDY+kqRH friend@laptop",
+          "label": "laptop"
+        },
+        "request_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "admission": {
+          "approval_id": null,
+          "pipeline": null,
+          "content_labels": [],
+          "batch": null
+        }
       }
     ],
     "invalid": [
@@ -2228,6 +2363,23 @@
         "args": {
           "token": "short",
           "extend_s": 600
+        },
+        "request_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "admission": {
+          "approval_id": null,
+          "pipeline": null,
+          "content_labels": [],
+          "batch": null
+        }
+      },
+      {
+        "schema": 2,
+        "request_id": "req-key-2",
+        "op": "session-key-enrol",
+        "lane": null,
+        "args": {
+          "public_key": "command=\"/bin/sh\" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDR/yEIlkVI/wd5ar9zgYtW/HDPIPv9JwHjHwDY+kqRH",
+          "label": "laptop"
         },
         "request_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "admission": {

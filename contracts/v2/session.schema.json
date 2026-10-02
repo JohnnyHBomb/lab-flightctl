@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://flightctl.local/contracts/v2/session.schema.json",
   "title": "Flightctl interactive session v2",
-  "description": "NEW, redesigned in round 2 (Sol 6 B5) on the recommended Q1 option; slice C9 stays GATED on the owner's Q1 answer. Each friend has a dedicated unix account (fc-<principal>) with linger DISABLED. A root-owned helper (flightctl-helper), callable by the executor account through one sudoers rule restricted to its fixed subcommands, does all privileged steps. OPEN: (1) set user-<uid>.slice properties DevicePolicy=closed + DeviceAllow= for exactly the lane's /dev/nvidia<minor> plus /dev/nvidiactl, /dev/nvidia-uvm, /dev/nvidia-uvm-tools (systemd device-cgroup via BPF on cgroup v2: ENFORCED, not advisory; measured host: cgroup2fs, systemd 261); (2) write a managed authorized_keys block with 'expiry-time=<lease end>,restrict,pty,command=\"flightctl-session-shell\"' (the wrapper sets CUDA_VISIBLE_DEVICES and execs the login shell or $SSH_ORIGINAL_COMMAND; authorized_keys environment= is NOT used because sshd ignores it unless PermitUserEnvironment, which is 'no' by default, measured). Round 3 (Sol 6 B5): because access and termination act on the user slice, at most ONE active PARENT lease per friend per host; the session is a CHILD of that lease and does not take a second slot (round 4; policy.work; 409 account_busy; the helper claims the same parent lease_id). Keys live in the root-owned /etc/ssh/flightctl-keys/<account> (AuthorizedKeysFile), never in the friend's home. CLOSE (lease end, idle, operator, preempt): remove the key block, then 'loginctl terminate-user fc-x' and 'systemctl stop user-<uid>.slice' (ends established shells and every child, including nohup/setsid and the user manager), then reset DeviceAllow to deny all NVIDIA nodes. Close is proven, not assumed: user slice cgroup empty AND occupancy empty on the lane before the session is 'closed'; otherwise the session is 'failed' and the lane quarantines (standard rule).",
+  "description": "NEW, redesigned in round 2 (Sol 6 B5) on the recommended Q1 option; slice C9 stays GATED on the owner's Q1 answer. Each friend has a dedicated unix account (fc-<principal>) with linger DISABLED. A root-owned helper (flightctl-helper), callable by the executor account through one sudoers rule restricted to its fixed subcommands, does all privileged steps. OPEN: (1) set user-<uid>.slice properties DevicePolicy=closed + DeviceAllow= for exactly the lane's /dev/nvidia<minor> plus /dev/nvidiactl, /dev/nvidia-uvm, /dev/nvidia-uvm-tools (systemd device-cgroup via BPF on cgroup v2: ENFORCED, not advisory; measured host: cgroup2fs, systemd 261); (2) write a managed authorized_keys block with 'expiry-time=<lease end>,restrict,pty,command=\"flightctl-session-shell\"' (the wrapper sets CUDA_VISIBLE_DEVICES and execs the login shell or $SSH_ORIGINAL_COMMAND; authorized_keys environment= is NOT used because sshd ignores it unless PermitUserEnvironment, which is 'no' by default, measured). Round 3 (Sol 6 B5): because access and termination act on the user slice, at most ONE active PARENT lease per friend per host; the session is a CHILD of that lease and does not take a second slot (round 4; policy.work; 409 account_busy; the helper claims the same parent lease_id). Keys live in the root-owned /etc/ssh/flightctl-keys/<account> (AuthorizedKeysFile), never in the friend's home. CLOSE (lease end, idle, operator, preempt): remove the key block, then 'loginctl terminate-user fc-x' and 'systemctl stop user-<uid>.slice' (ends established shells and every child, including nohup/setsid and the user manager), then reset DeviceAllow to deny all NVIDIA nodes. Close is proven, not assumed: user slice cgroup empty AND occupancy empty on the lane before the session is 'closed'; otherwise the session is 'failed' and the lane quarantines (standard rule). Amendment 3 rev 2 (Sol 6.1 amd3 P1-4): a friend's PUBLIC KEY reaches session-open through an account-scoped key registry in the authority store: session-key-enrol (refused with 'unavailable' while features.friend_sessions is off, because it creates friend state), session-key-list and session-key-revoke (both work while off). session-open names a key_fingerprint; the authority resolves it to the enrolled key of THE SAME principal that is not revoked (oracle resolve_session_key; anything else is 'not_found', which does not reveal whether another principal enrolled it) and passes the canonical key bytes over the executor wire (executor kind 'session', action 'register') to SessionGateway.open. Only bare OpenSSH public keys of the listed types are accepted: no options, no line breaks; the comment is dropped and the stored form is '<type> <base64>' (oracle parse_session_key; rev 3: the COMPLETE key structure of each type is checked: Ed25519 one 32-byte key, ECDSA curve nistp256 with an uncompressed point on the curve, sk- types an 'ssh:' application, the blob consumed exactly). A revoked key never resolves and is never re-enrolled until the operator purges its record (rev 3). Fingerprint = 'SHA256:' + unpadded base64 of SHA-256 over the key blob (ssh-keygen -l).",
   "oneOf": [
     {
       "$ref": "#/$defs/session"
@@ -111,7 +111,10 @@
                 "idle",
                 "operator",
                 "preempted",
-                "gateway-error"
+                "gateway-error",
+                "local-expiry",
+                "controller-loss",
+                "reconcile"
               ]
             },
             {
@@ -215,6 +218,76 @@
           }
         }
       ]
+    },
+    "public_key_text": {
+      "description": "Amendment 3 rev 2: what a friend submits: one OpenSSH public key line, optionally with a comment; no options, no line breaks.",
+      "type": "string",
+      "maxLength": 2048,
+      "pattern": "^(?![\\s\\S]*[\\r\\n])(ssh-ed25519|sk-ssh-ed25519@openssh\\.com|ecdsa-sha2-nistp256|sk-ecdsa-sha2-nistp256@openssh\\.com) [A-Za-z0-9+/]+={0,2}( [\\x21-\\x7e][\\x20-\\x7e]{0,99})?$"
+    },
+    "enrolled_key": {
+      "description": "Amendment 3 rev 2: one row of the authority's account-scoped key registry (session-key-list returns these for the caller; the operator sees all).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "principal_id",
+        "key_fingerprint",
+        "key_type",
+        "public_key",
+        "label",
+        "enrolled_at",
+        "revoked_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "$ref": "common.schema.json#/$defs/schema_version"
+        },
+        "principal_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "key_fingerprint": {
+          "$ref": "#/$defs/session/properties/key_fingerprint"
+        },
+        "key_type": {
+          "enum": [
+            "ssh-ed25519",
+            "sk-ssh-ed25519@openssh.com",
+            "ecdsa-sha2-nistp256",
+            "sk-ecdsa-sha2-nistp256@openssh.com"
+          ]
+        },
+        "public_key": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^(?![\\s\\S]*[\\r\\n])(ssh-ed25519|sk-ssh-ed25519@openssh\\.com|ecdsa-sha2-nistp256|sk-ecdsa-sha2-nistp256@openssh\\.com) [A-Za-z0-9+/]+={0,2}$"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[\\x20-\\x7e]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enrolled_at": {
+          "$ref": "common.schema.json#/$defs/utc_time"
+        },
+        "revoked_at": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/utc_time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
     }
   },
   "x-examples": {

@@ -41,14 +41,37 @@ def test_size_mismatch_is_failed_not_present(kind, factory) -> None:
     assert entry["state"] == "failed" and entry["error"]["code"] == "cache_fetch_failed"
 
 
+# Amendment 3 rev 2 (Sol 6.1 amd3 P1-2): the R1 session cases. R1 targets have every friend flag off, so the real twin
+# (C9w) crosses the real wire (sudo flightctl-helper) and must come back REFUSED with no side effect, and the cleanup body
+# must work on a SEEDED session. The successful open/close proof is C9's, in tests/conformance/test_session_gateway_c9.py
+# (friend_flags("on")). Fixture attributes: friend_flags_on() reads the target helper's flag state back; host_state()
+# snapshots the managed key file, the account's claim and the user slice's DeviceAllow; seed_session() places a session as
+# if it had been opened before the flags went off (fake: in memory; real: an owner-run root step OUTSIDE flightctl-helper,
+# which has no seeding route).
+@pytest.mark.friend_flags("off")
 @pytest.mark.parametrize("kind,factory", port_params("session_gateway"))
-def test_session_window_opens_and_closes(kind, factory) -> None:
+def test_session_open_refused_while_friend_flags_off(kind, factory) -> None:
     gw = _impl(kind, factory)
+    assert gw.friend_flags_on() is False, "the target's read-back flag state contradicts the declared applicability"
+    before = gw.host_state()
     opened = gw.open(gw.test_host, gw.test_user, gw.test_public_key, parent_lease_id=gw.test_parent_lease, lane_id=gw.test_lane, expires_at=gw.in_minutes(5), device_minors=gw.test_minors, cards=gw.test_cards, timeout_s=20)
-    assert opened["ok"] is True
+    assert opened["ok"] is False and opened["error"]["code"] == "unavailable"
+    assert gw.key_present() is False and gw.host_state() == before
+
+
+@pytest.mark.friend_flags("off")
+@pytest.mark.not_dryrun
+@pytest.mark.parametrize("kind,factory", port_params("session_gateway"))
+def test_session_close_on_seeded_session_proves_cleanup(kind, factory) -> None:
+    gw = _impl(kind, factory)
+    assert gw.friend_flags_on() is False
+    gw.seed_session(gw.test_host, gw.test_user, gw.test_public_key, parent_lease_id=gw.test_parent_lease, lane_id=gw.test_lane)
+    assert gw.key_present() is True
     closed = gw.close(gw.test_host, gw.test_user, gw.test_fingerprint, parent_lease_id=gw.test_parent_lease, timeout_s=20)
     assert closed["ok"] is True and gw.key_present() is False
     assert closed["close_proof"]["user_slice_empty"] is True and closed["close_proof"]["key_removed"] is True
+    again = gw.close(gw.test_host, gw.test_user, gw.test_fingerprint, parent_lease_id=gw.test_parent_lease, timeout_s=20)
+    assert again["ok"] is True and again["close_proof"]["key_removed"] is True  # idempotent cleanup
 
 
 @pytest.mark.parametrize("kind,factory", port_params("notifier"))

@@ -4,7 +4,9 @@ prior approval and is recorded in decisions.tsv (lab side) with the decision ids
 Q1  ANSWERED 2 Oct 2026 (Amendment 1): (c) for release 1, with the infrastructure for (a) built behind the
     friend_sessions flag (off) plus a per-host enable (inventory friend_sessions_enabled + recorded C9 runbook proof,
     rev 7). No friend SSH sessions and no friend shell jobs in R1; friends get API-queued jobs
-    under a per-job DynamicUser like agents. Original question kept below for the record.
+    under a per-job DynamicUser like agents. Amendment 3 (owner, 2 Oct): R1 builds only C9's pathways (packet C9w,
+    refusing while off); C9 itself is built in the session-enablement milestone D, after R1.
+    Original question kept below for the record.
 Q1  How should friends' jobs and SSH sessions be isolated from the owner's account on the lane hosts?
     Round 2 specifies the recommended option fully (session.schema.json, slice C7h flightctl-helper, slice C9):
       (a) one unix account per friend (fc-<name>, linger off) plus the minimal root helper, called through one
