@@ -804,7 +804,7 @@ class LifecycleOwner:
             env = os.environ.copy()
             env.update({"ROSTER_OWNER_UNIT": str(self.unit), "ROSTER_OWNER_INVOCATION": str(self.invocation)})
             try:
-                process = subprocess.Popen([hook, *self.workload], env=env)
+                process = subprocess.Popen([hook, *self.workload], env=env)  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args -- test double: runs the hook the test itself names (argv list, no shell)
             except OSError:
                 return 3
             command_line = _proc_cmdline(process.pid)
@@ -859,7 +859,7 @@ class LifecycleOwner:
         if not hook:
             return True
         try:
-            process = subprocess.Popen([hook, str(self.unit), str(self.invocation)], env=os.environ.copy())
+            process = subprocess.Popen([hook, str(self.unit), str(self.invocation)], env=os.environ.copy())  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args -- test double: runs the hook the test itself names (argv list, no shell)
             process.wait(timeout=_number(os.environ.get("ROSTER_HOOK_TIMEOUT_S"), 5.0))
         except (OSError, subprocess.TimeoutExpired):
             return False

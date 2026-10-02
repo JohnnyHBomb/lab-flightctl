@@ -125,7 +125,9 @@ def test_migration_map_rows_name_real_packets() -> None:
     rows = list(csv.DictReader(lines, delimiter="\t"))
     assert rows and set(rows[0]) == {"v1_test", "packet", "action", "replacement", "reason"}
     for row in rows:
-        assert row["packet"] in POS, row
+        # Amendment 4 rev 2: "contracts-v2" = the lead's contract/amendment stream, whose real diff is gated by
+        # test_v2_round3.py::test_b7_migration_gate_on_this_branchs_real_diff with --packet contracts-v2
+        assert row["packet"] in POS or row["packet"] == "contracts-v2", row
         assert row["action"] in {"rewrite", "delete"}, row
         if row["action"] == "rewrite":
             assert row["replacement"] != "-" and row["replacement"] in SLICES, f"replacement {row['replacement']} is not a named test in SLICES.md"

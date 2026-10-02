@@ -59,7 +59,7 @@ jobs:
       - name: pip-audit
         run: pip-audit --strict --no-deps -r deploy/requirements-ci.lock
       - name: Semgrep
-        run: semgrep scan --error --config p/python deploy tests
+        run: semgrep scan --error --config p/python flightctl deploy tests
 
   # A0a: the gate for every v2 packet. Linux only; lab-ci runs this same job from this file (steps are read, not retyped).
   full:

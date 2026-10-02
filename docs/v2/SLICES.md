@@ -35,7 +35,12 @@ checks this mechanically.
 - Size: about 400 changed lines and at most 5 named acceptance tests (lesson 56). **The cap is subordinate
   to complete proof**: a packet that cannot be proven inside the cap is split before it is raced, never
   shipped half-proven. A5b and C7b are pre-split for that reason. Linux only. Python 3.12, stdlib, plus the
-  declared test dependencies.
+  declared test dependencies. Amendment 4: the cap is a hard gate for race entries; only a harvested merge may
+  exceed it, with the count and each harvested item's cost reported (GATES G1, LINE CAP).
+- Test directories (Amendment 4, lesson 71): every packet's SCOPE implicitly includes one change outside it. A
+  packet that adds a new `tests/<dir>` holding `test_*.py` appends exactly the token `tests/<dir>` to the suite
+  step of the `full` job in `.github/workflows/ci.yml`, and changes nothing else there (GATES G1, CI APPEND;
+  the race gate's CIYML check enforces it).
 - No lab hostnames, IPs, usernames or paths in repo files. Site data goes in the site deploy directory.
 - Every named test must fail on the base commit (G0). Existing tests are frozen, except the rows this
   packet owns in `migration-map.tsv` (G1, G1b).
@@ -195,6 +200,7 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
 - ACCEPTANCE: `ci_full_job_lists_every_suite`; lab-ci `full` on head returns exit 0 with a `summary.json` count equal to the local count; a deliberately failing test in a scratch branch makes lab-ci exit non-zero.
 - PROOF: `$LABCI <checkout> --workflow .github/workflows/ci.yml --jobs full --out $EVID/labci`; count comparison; hosted run URL.
 - SEATS: the lead (infra on lab tooling). Not raced.
+- Amendment 4 rev 2 (the lead's amendment on A0a's CI surface; migration-map rows owned by `contracts-v2`, the lead's contract stream that `test_b7_migration_gate_on_this_branchs_real_diff` gates): the `pr` job's Semgrep step scans `flightctl deploy tests` with a repo `.semgrepignore` that keeps `tests/` in (semgrep's built-in default list skipped it). The edited tests are covered by these collected nodes: `tests/integration/test_p6_scaffold.py::test_ci_security_configuration`, `tests/contracts_v2/test_v2_amendment3_boundary.py::test_seam_loader_rejects_before_import` and `tests/roster/test_roster_scripts.py::test_arm_fresh_lifecycle_uses_stateful_owner_and_injected_hooks`.
 
 ### A0b: adapter registry, features and fail-closed selection
 - GOAL: Production code selects every port implementation, `command_runner` included, from `adapters.json`. An invalid selection refuses startup and says why.

@@ -506,7 +506,7 @@ def test_ci_security_configuration() -> None:
         "run: shellcheck -x deploy/pre-commit-denylist deploy/provision-ci-tools",
         "run: gitleaks detect --source . --no-banner --redact --exit-code 1",
         "run: pip-audit --strict --no-deps -r deploy/requirements-ci.lock",
-        "run: semgrep scan --error --config p/python deploy tests",
+        "run: semgrep scan --error --config p/python flightctl deploy tests",
     ):
         assert command in active_lines
     for command in ("deploy/provision-ci-tools", "gitleaks version", "shellcheck --version", "semgrep --version", "pip-audit --version"):

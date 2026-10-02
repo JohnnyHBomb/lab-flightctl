@@ -1,0 +1,6 @@
+# Amendment 4 rev 2: a repo .semgrepignore REPLACES semgrep's built-in default list, which skips tests/ (measured: a
+# git checkout scanned 4 files of deploy/ and tests/). Only tool and cache directories are left out; tests are scanned.
+.git/
+.venv/
+__pycache__/
+.pytest_cache/

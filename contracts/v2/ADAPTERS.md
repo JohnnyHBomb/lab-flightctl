@@ -36,7 +36,7 @@ battery, which is deferred until per-lane power is measured.
 ## 2. Selection by configuration
 
 The site file `adapters.json` (`contracts/v2/adapters.schema.json`) lives in the site deploy directory,
-never in the repo. The repo ships only `config/adapters.json.example`.
+never in the repo. The repo ships only `config/adapters-v2.json.example`.
 
 - `profile` sets the site default: `sim` (all fakes, one SimClock per host), `shadow` (real reads,
   dry-run writes, legacy authoritative), or `live`.
@@ -81,9 +81,20 @@ port, and turned shadow into a write prohibition across every mutating port.
    - The authority's own database records shadow decisions. That is not a host write.
    - Conformance check (A9): a recording CommandRunner and registry observe zero mutating calls from a
      shadow lane.
-6. `dryrun` is valid only for mutating ports. Read-only ports have no dry-run twin.
-7. The `sim` profile refuses `real`, `dryrun` and `record` ports.
-8. A config that violates any rule stops startup with exit 3 and an `adapter-refused` event. The process
+6. `dryrun` is valid only for mutating ports. Read-only ports have no dry-run twin, in the site selection or in any
+   lane override (Amendment 4 rev 2).
+7. The `sim` profile refuses `real`, `dryrun` and `record` ports, globally and as lane overrides (Amendment 4: the
+   rule applies to the effective ports of every lane, as rule 4 does for live lanes).
+   **A `sim` lane runs on fakes in every site profile** (Amendment 4 rev 2, Sol 6.1 amd4): its effective LANE-SCOPED
+   ports (the lane-critical `command_runner`, `executor_transport`, `workload_runner`, `occupancy_probe`, `inhibitor`,
+   `waker`, and the mutating `model_cache`, `session_gateway`, `notifier`, `release_backend`) must all be `fake`,
+   inherited site values included, so a sim lane in a `live` or `shadow` site overrides each of them to `fake`. The
+   SHARED exceptions are the site-level ports that are not lane-scoped (`clock`, `inventory_probe`, `peer_identity`,
+   `signer`, `health_probe`, `legacy_observer`): a sim lane may inherit their site selection, but any explicit
+   override it carries must be `fake`.
+8. A config that violates any rule stops startup with exit 3 and, on stderr, one line per problem,
+   `adapter-refused: port=<port|-> lane=<lane|->: <message>` (Amendment 4: no event is written; an event needs a
+   committed `seq` in the authority store, which a refused process has not opened and an executor never has). The process
    never falls back to fakes.
 
 

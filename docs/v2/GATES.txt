@@ -17,6 +17,19 @@ GATES EVERY PACKET MUST PASS (gauge reruns each one itself and files the evidenc
                   respected; <= ~400 changed lines and <= 5 named tests unless the brief was split for proof (lesson 56;
                   the cap never justifies a half-proven packet). FROZEN: no pre-existing test is changed, skipped or
                   weakened EXCEPT under G1b. Evidence: gates/race_gate.py output.
+                  LINE CAP (Amendment 4, owner's rule of 2 Oct): the ~400 changed-line cap is a HARD gate for every
+                  race ENTRY. A HARVESTED merge (the winner plus ideas taken from runners-up) may exceed it only when
+                  the harvest brings a real improvement; the merge report then states the merge's total changed-line
+                  count and the line cost of each harvested item (the harvest log row).
+                  CI APPEND (Amendment 4, lesson 71): a packet whose diff adds a new tests/<dir> holding test_*.py may
+                  change .github/workflows/ci.yml in exactly one way, appending the token tests/<dir> to the suite
+                  step of the `full` job (test_a0a_ci_full requires every suite there); any other ci.yml change is out
+                  of scope. The race gate's CIYML check (--ci-append tests/<dir>, one per new directory) enforces it:
+                  the only change allowed is tests/<dir> token(s) at the end of the `full` job's "Every suite" command,
+                  each named by --ci-append, appended once, absent there at base, and a directory the packet adds that
+                  holds a test_*.py. History: revision 1 claimed this enforcement; revision 2 (Sol 6.1 amd4) found the
+                  check then accepted the wrong job or step, duplicates and unadded directories and withdrew the claim;
+                  revision 3 (Sol 6.1 amd4r2) confirmed the fixed check rejects all of those.
   G1b MIGRATION   EXECUTABLE (round 3): python tools/migration_gate.py --base <base> --head <head> --packet <ID> (exit 0
                   required; its logic is tested in tests/contracts_v2/test_v2_round3.py incl. failure modes and this
                   branch's real diff; round 4/5: a rewrite counts only if its replacement is a COLLECTED pytest node at head in a test file this

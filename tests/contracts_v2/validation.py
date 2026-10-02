@@ -145,6 +145,15 @@ def adapters_semantics(config: Mapping[str, Any]) -> list[str]:
         shadow_real = set(entry.get("shadow_real", []))
         if shadow_real and mode != "shadow":
             problems.append(f"lane {lane}: shadow_real is only valid on a shadow lane")
+        for port in sorted(shadow_real - {"inhibitor"}):  # Amendment 4: the oracle matches the schema's items const
+            problems.append(f"lane {lane}: shadow_real may name only the inhibitor, not {port}")
+        for port, impl in sorted(overrides.items()):  # Amendment 4 rev 2: rule 6 on lane overrides too
+            if impl == "dryrun" and port not in MUTATING_PORTS:
+                problems.append(f"lane {lane}: port {port} is read-only and has no dryrun twin; use real or fake")
+        if mode == "sim":  # Amendment 4 rev 2: a sim lane's effective lane-scoped ports are fake, in any site profile
+            for port in sorted(set(LANE_CRITICAL_PORTS) | set(LANE_SCOPED_MUTATING)):  # explicit shared overrides: the schema
+                if effective[port] != "fake":
+                    problems.append(f"lane {lane} is sim but port {port} is {effective[port]} (a sim lane runs on fakes)")
         if mode == "live":
             if profile != "live":
                 problems.append(f"lane {lane} is live but the site profile is {profile}")

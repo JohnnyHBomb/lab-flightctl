@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://flightctl.local/contracts/v2/adapters.schema.json",
   "title": "Flightctl site adapters configuration v2 (the 'flip a switch to real lanes' file)",
-  "description": "NEW (ADAPTER-PRINCIPLE). Site configuration, not wire format; lives in the site deploy directory, never in the repo (the repo ships config/adapters.json.example). Selects fake | dryrun | real | record per port, sets the site profile (sim | shadow | live) and a mode per lane (off | sim | shadow | live). Semantic fail-closed rules that JSON Schema cannot express are in ADAPTERS.md section 3 and tests/contracts_v2/validation.py adapters_semantics(); startup refuses a config that violates any of them and names the port and lane. Round 2 (Sol 6 B3): command_runner is selected here like every other port; 'features' declares which capabilities are ON, and a port REQUIRED by an enabled feature may not be fake in live (allow_fake cannot override that); every mutating port is lane-scoped, and a shadow lane forces ALL of them to dryrun (a global host-write prohibition for that lane).",
+  "description": "NEW (ADAPTER-PRINCIPLE). Site configuration, not wire format; lives in the site deploy directory, never in the repo (the repo ships config/adapters-v2.json.example). Selects fake | dryrun | real | record per port, sets the site profile (sim | shadow | live) and a mode per lane (off | sim | shadow | live). Semantic fail-closed rules that JSON Schema cannot express are in ADAPTERS.md section 3 and tests/contracts_v2/validation.py adapters_semantics(); startup refuses a config that violates any of them and names the port and lane. Round 2 (Sol 6 B3): command_runner is selected here like every other port; 'features' declares which capabilities are ON, and a port REQUIRED by an enabled feature may not be fake in live (allow_fake cannot override that); every mutating port is lane-scoped, and a shadow lane forces ALL of them to dryrun (a global host-write prohibition for that lane). Amendment 4: rule 7 applies to EFFECTIVE ports: in profile sim a lane override other than fake is refused (a sim site is all fakes; a lane cannot reintroduce a real, dryrun or record port). Amendment 4 rev 2 (Sol 6.1 amd4): rule 6 applies to lane overrides too (a read-only port has no dryrun twin on any lane); a lane in mode sim, in ANY site profile, runs its lane-scoped ports (the lane-critical and the mutating ports) on fakes, inherited site values included; the schema refuses non-fake explicit overrides on a sim lane, and the oracle and startup also check the inherited values.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -216,7 +216,31 @@
               "const": "inhibitor"
             }
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "mode": {
+                  "const": "sim"
+                }
+              },
+              "required": [
+                "mode"
+              ]
+            },
+            "then": {
+              "properties": {
+                "ports": {
+                  "properties": {},
+                  "additionalProperties": {
+                    "const": "fake"
+                  }
+                }
+              }
+            }
+          }
+        ]
       }
     },
     "hosts": {
