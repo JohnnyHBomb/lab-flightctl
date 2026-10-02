@@ -1,0 +1,5 @@
+# False positives reviewed 2 Oct 2026: documentation example token_id values in the accounts schema and a dummy
+# 16-hex lease token in the legacy-shim test vectors. No real credential. Fingerprints are pinned to commit 0b0938e.
+0b0938eea35b6a8bfc927aaa03b035b40fe2a021:contracts/v2/accounts.schema.json:generic-api-key:545
+0b0938eea35b6a8bfc927aaa03b035b40fe2a021:contracts/v2/accounts.schema.json:generic-api-key:585
+0b0938eea35b6a8bfc927aaa03b035b40fe2a021:tests/contracts_v2/vectors/legacy-shim.json:generic-api-key:17

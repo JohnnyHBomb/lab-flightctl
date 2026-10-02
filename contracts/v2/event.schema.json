@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/event.schema.json",
+  "title": "Flightctl audit event v2",
+  "description": "AMENDS event-v1. Adds a gap-free monotone 'seq' committed in the same transaction as the state change (the events-since cursor, G26), public-id refs for every record family, preserved typed errors (Grok finding 7), and kinds for jobs, sessions, endpoints, accounts, quotas, windows, power/wake, cache, notifications, adapter configuration and shadow divergence. Raw tokens and secrets are forbidden in every field.",
+  "oneOf": [{ "$ref": "#/$defs/event" }, { "$ref": "#/$defs/page" }],
+  "$defs": {
+    "kind": {
+      "enum": [
+        "acquire", "renew", "heartbeat", "release", "claim", "expire", "holder-lost", "queue", "book", "cancel", "check-in", "approval-request", "approval", "preempt",
+        "op-stop", "op-extend", "queue-reorder", "quarantine", "quarantine-clear", "reconcile", "executor-error",
+        "job", "session", "endpoint", "stage", "cache",
+        "principal", "token", "quota-deny", "window", "drain",
+        "wake", "host-power", "thermal", "collision", "orphan",
+        "notification", "adapter-config", "config-activate", "shadow-decision", "shadow-divergence", "discovery"
+      ]
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "seq", "event_id", "occurred_at", "kind", "state", "request_id", "actor", "site_id", "controller_id", "lane_id", "host_id", "generation", "reason", "refs", "error", "detail", "token_redacted"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "event_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "occurred_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "kind": { "$ref": "#/$defs/kind" },
+        "state": { "type": "string", "pattern": "^[a-z][a-z-]{1,31}$" },
+        "request_id": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] },
+        "actor": { "anyOf": [{ "$ref": "common.schema.json#/$defs/short_identifier" }, { "enum": ["system"] }] },
+        "site_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "controller_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "lane_id": { "anyOf": [{ "$ref": "common.schema.json#/$defs/short_identifier" }, { "type": "null" }] },
+        "host_id": { "anyOf": [{ "$ref": "common.schema.json#/$defs/short_identifier" }, { "type": "null" }] },
+        "generation": { "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "refs": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "lease_id": { "$ref": "common.schema.json#/$defs/public_id" }, "queue_id": { "$ref": "common.schema.json#/$defs/identifier" }, "booking_id": { "$ref": "common.schema.json#/$defs/identifier" },
+            "job_id": { "$ref": "common.schema.json#/$defs/public_id" }, "session_id": { "$ref": "common.schema.json#/$defs/public_id" }, "endpoint_id": { "$ref": "common.schema.json#/$defs/public_id" },
+            "window_id": { "$ref": "common.schema.json#/$defs/public_id" }, "approval_id": { "$ref": "common.schema.json#/$defs/identifier" }, "wake_attempt_id": { "$ref": "common.schema.json#/$defs/public_id" },
+            "principal_id": { "$ref": "common.schema.json#/$defs/short_identifier" }, "token_id": { "$ref": "common.schema.json#/$defs/public_id" }, "message_id": { "$ref": "common.schema.json#/$defs/public_id" },
+            "usage_id": { "$ref": "common.schema.json#/$defs/public_id" }, "model_id": { "$ref": "storage.schema.json#/$defs/model_id" },
+            "config": { "$ref": "common.schema.json#/$defs/config_ref" }, "policy_hash": { "$ref": "common.schema.json#/$defs/sha256" }
+          }
+        },
+        "error": { "anyOf": [{ "$ref": "common.schema.json#/$defs/typed_error" }, { "type": "null" }] },
+        "detail": {
+          "description": "Kind-specific detail. Shadow divergences carry what legacy did and what the new controller would have done; adapter-config carries the effective selection hash and banner.",
+          "anyOf": [
+            { "type": "null" },
+            { "type": "object", "additionalProperties": false, "required": ["divergence_class", "legacy", "would"], "properties": { "divergence_class": { "enum": ["none", "grant-mismatch", "holder-mismatch", "release-mismatch", "occupancy-mismatch", "would-quarantine", "would-wake-failed", "adapter-error"] }, "legacy": { "type": "string", "maxLength": 1024 }, "would": { "type": "string", "maxLength": 1024 }, "explained_by": { "anyOf": [{ "type": "string", "maxLength": 512 }, { "type": "null" }] } } },
+            { "type": "object", "additionalProperties": false, "required": ["adapter_sha256", "banner"], "properties": { "adapter_sha256": { "$ref": "common.schema.json#/$defs/sha256" }, "banner": { "type": "string", "maxLength": 2048 } } },
+            { "type": "object", "additionalProperties": false, "required": ["quota"], "properties": { "quota": { "$ref": "quota.schema.json#/$defs/evaluation" } } },
+            { "type": "object", "additionalProperties": false, "required": ["from_position", "to_position"], "properties": { "from_position": { "type": "integer", "minimum": 1 }, "to_position": { "type": "integer", "minimum": 1 } } }
+          ]
+        },
+        "token_redacted": { "const": true }
+      }
+    },
+    "page": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "events", "next_seq", "has_more"],
+      "properties": {
+        "kind": { "const": "events" },
+        "events": { "type": "array", "maxItems": 1000, "items": { "$ref": "#/$defs/event" } },
+        "next_seq": { "type": "integer", "minimum": 1, "description": "Pass as since_seq to continue; equals last returned seq + 1, or the request's since_seq when empty." },
+        "has_more": { "type": "boolean" }
+      }
+    }
+  },
+  "x-examples": {
+    "valid": [
+      { "schema_version": 2, "seq": 41, "event_id": "evt-41", "occurred_at": "2026-10-02T10:00:00Z", "kind": "acquire", "state": "running", "request_id": "req-a", "actor": "review-agent", "site_id": "site-a", "controller_id": "controller-a", "lane_id": "lane-gpu1", "host_id": "host-1", "generation": 7, "reason": "granted from queue head", "refs": { "lease_id": "lse-0000100", "queue_id": "q-0001" }, "error": null, "detail": null, "token_redacted": true },
+      { "schema_version": 2, "seq": 42, "event_id": "evt-42", "occurred_at": "2026-10-02T10:00:05Z", "kind": "executor-error", "state": "quarantined", "request_id": "req-b", "actor": "system", "site_id": "site-a", "controller_id": "controller-a", "lane_id": "lane-gpu1", "host_id": "host-1", "generation": 7, "reason": "stop not confirmed", "refs": { "lease_id": "lse-0000100" },
+        "error": { "code": "unavailable", "message": "executor stop failed", "layer": "authority", "cause": { "code": "gpu_tenant", "message": "pid 3131 holds 900 MiB on GPU-00000000-0000-0000-0000-000000000002", "layer": "executor", "cause": null } }, "detail": null, "token_redacted": true },
+      { "schema_version": 2, "seq": 43, "event_id": "evt-43", "occurred_at": "2026-10-02T10:01:00Z", "kind": "shadow-divergence", "state": "recorded", "request_id": null, "actor": "system", "site_id": "site-a", "controller_id": "controller-a", "lane_id": "lane-gpu0", "host_id": "host-0", "generation": null, "reason": "legacy granted while a FIFO waiter was queued", "refs": {}, "error": null,
+        "detail": { "divergence_class": "grant-mismatch", "legacy": "acquire granted to client-label roster", "would": "409 queue eligibility must be claimed (head q-0003)", "explained_by": "legacy has no FIFO (known defect)" }, "token_redacted": true },
+      { "kind": "events", "events": [], "next_seq": 44, "has_more": false }
+    ],
+    "invalid": [
+      { "schema_version": 2, "seq": 0, "event_id": "evt-0", "occurred_at": "2026-10-02T10:00:00Z", "kind": "acquire", "state": "running", "request_id": null, "actor": "x", "site_id": "site-a", "controller_id": "controller-a", "lane_id": null, "host_id": null, "generation": null, "reason": "x", "refs": { "token": "5f815964f2cbc5d6" }, "error": null, "detail": null, "token_redacted": true }
+    ]
+  }
+}

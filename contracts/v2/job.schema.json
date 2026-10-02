@@ -1,0 +1,555 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/job.schema.json",
+  "title": "Flightctl batch job v2",
+  "description": "NEW (G12, G20; Slurm sbatch design, no code). A job is WORK that the system runs for a principal without shell access: the authority queues or books it, acquires a lease, wakes the host if needed, stages models into the host cache, starts the templated argv as a transient user unit under the principal's unix account, captures the journal, and releases the lease after cgroup + GPU emptiness. A crashed job ends 'failed' and frees the lane after the emptiness proof; an uncertain stop quarantines the lane and marks the job 'lost'.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/spec"
+    },
+    {
+      "$ref": "#/$defs/job"
+    }
+  ],
+  "$defs": {
+    "state": {
+      "enum": [
+        "submitted",
+        "queued",
+        "scheduled",
+        "waking",
+        "staging",
+        "starting",
+        "running",
+        "stopping",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "preempted",
+        "timed-out",
+        "lost",
+        "refused"
+      ]
+    },
+    "terminal": {
+      "enum": [
+        "succeeded",
+        "failed",
+        "cancelled",
+        "preempted",
+        "timed-out",
+        "lost",
+        "refused"
+      ]
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "template",
+        "params",
+        "extra_argv",
+        "resources",
+        "class",
+        "est_s",
+        "max_s",
+        "booking_id",
+        "purpose",
+        "notify",
+        "outputs"
+      ],
+      "properties": {
+        "template": {
+          "$ref": "executor.schema.json#/$defs/workload/properties/template_ref"
+        },
+        "params": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9_]{0,31}$"
+          },
+          "additionalProperties": {
+            "type": [
+              "string",
+              "integer",
+              "number",
+              "boolean"
+            ]
+          }
+        },
+        "extra_argv": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "lane",
+            "tiers",
+            "min_vram_bytes"
+          ],
+          "properties": {
+            "lane": {
+              "anyOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/short_identifier"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "tiers": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "$ref": "common.schema.json#/$defs/short_identifier"
+              }
+            },
+            "min_vram_bytes": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "class": {
+          "enum": [
+            "booked",
+            "batch",
+            "standby"
+          ]
+        },
+        "est_s": {
+          "$ref": "common.schema.json#/$defs/positive_duration_s"
+        },
+        "max_s": {
+          "$ref": "common.schema.json#/$defs/positive_duration_s"
+        },
+        "booking_id": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "purpose": {
+          "$ref": "common.schema.json#/$defs/text"
+        },
+        "notify": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "started",
+              "finished",
+              "failed",
+              "preempted"
+            ]
+          }
+        },
+        "outputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "store",
+            "retention_s"
+          ],
+          "properties": {
+            "store": {
+              "enum": [
+                "output",
+                "scratch",
+                "none"
+              ]
+            },
+            "retention_s": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "class": {
+                "const": "booked"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "booking_id": {
+                "$ref": "common.schema.json#/$defs/identifier"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "job_id",
+        "principal_id",
+        "spec",
+        "state",
+        "state_reason",
+        "submitted_at",
+        "queue_id",
+        "lease_id",
+        "lane_id",
+        "started_at",
+        "ended_at",
+        "exit_status",
+        "log_cursor",
+        "output_relpath",
+        "error"
+      ],
+      "properties": {
+        "schema_version": {
+          "$ref": "common.schema.json#/$defs/schema_version"
+        },
+        "job_id": {
+          "$ref": "common.schema.json#/$defs/public_id"
+        },
+        "principal_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "spec": {
+          "$ref": "#/$defs/spec"
+        },
+        "state": {
+          "$ref": "#/$defs/state"
+        },
+        "state_reason": {
+          "$ref": "common.schema.json#/$defs/nullable_text"
+        },
+        "submitted_at": {
+          "$ref": "common.schema.json#/$defs/utc_time"
+        },
+        "queue_id": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lease_id": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/public_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lane_id": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/short_identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/utc_time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ended_at": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/utc_time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exit_status": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "log_cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 512
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output_relpath": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(?!/)(?!.*\\.\\.)[A-Za-z0-9._/-]{1,512}$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Owner-readable through job-output-list / job-output-get (chunked RPC with sha256 per file), served by the executor 'output' kind from the lane host's output root; no shell access assumed."
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/typed_error"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "$ref": "#/$defs/terminal"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ended_at": {
+                "$ref": "common.schema.json#/$defs/utc_time"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "failed",
+                  "lost",
+                  "refused"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "error": {
+                "$ref": "common.schema.json#/$defs/typed_error"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "staging",
+                  "starting",
+                  "running",
+                  "stopping"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "lease_id": {
+                "$ref": "common.schema.json#/$defs/public_id"
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "x-transitions": {
+    "submitted": [
+      "queued",
+      "scheduled",
+      "refused",
+      "cancelled"
+    ],
+    "queued": [
+      "waking",
+      "staging",
+      "cancelled",
+      "refused"
+    ],
+    "scheduled": [
+      "queued",
+      "waking",
+      "staging",
+      "cancelled"
+    ],
+    "waking": [
+      "staging",
+      "queued",
+      "failed",
+      "cancelled"
+    ],
+    "staging": [
+      "starting",
+      "failed",
+      "cancelled",
+      "lost"
+    ],
+    "starting": [
+      "running",
+      "failed",
+      "lost"
+    ],
+    "running": [
+      "stopping",
+      "succeeded",
+      "failed",
+      "lost"
+    ],
+    "stopping": [
+      "succeeded",
+      "failed",
+      "cancelled",
+      "preempted",
+      "timed-out",
+      "lost"
+    ]
+  },
+  "x-examples": {
+    "valid": [
+      {
+        "schema_version": 2,
+        "job_id": "job-0000042",
+        "principal_id": "friend-a",
+        "spec": {
+          "template": {
+            "template_id": "llama-chat",
+            "version": "1.0.0"
+          },
+          "params": {
+            "model": "small-q4",
+            "ctx": 8192
+          },
+          "extra_argv": [],
+          "resources": {
+            "lane": null,
+            "tiers": [
+              "small"
+            ],
+            "min_vram_bytes": null
+          },
+          "class": "batch",
+          "est_s": 1800,
+          "max_s": 3600,
+          "booking_id": null,
+          "purpose": "eval run",
+          "notify": [
+            "finished",
+            "failed"
+          ],
+          "outputs": {
+            "store": "output",
+            "retention_s": 604800
+          }
+        },
+        "state": "running",
+        "state_reason": null,
+        "submitted_at": "2026-10-02T10:00:00Z",
+        "queue_id": "q-0002",
+        "lease_id": "lse-0000101",
+        "lane_id": "lane-gpu1",
+        "started_at": "2026-10-02T10:01:10Z",
+        "ended_at": null,
+        "exit_status": null,
+        "log_cursor": null,
+        "output_relpath": "friend-a/job-0000042",
+        "error": null
+      }
+    ],
+    "invalid": [
+      {
+        "schema_version": 2,
+        "job_id": "job-0000043",
+        "principal_id": "friend-a",
+        "spec": {
+          "template": {
+            "template_id": "llama-chat",
+            "version": "1.0.0"
+          },
+          "params": {},
+          "extra_argv": [],
+          "resources": {
+            "lane": null,
+            "tiers": [],
+            "min_vram_bytes": null
+          },
+          "class": "batch",
+          "est_s": 60,
+          "max_s": 60,
+          "booking_id": null,
+          "purpose": "x",
+          "notify": [],
+          "outputs": {
+            "store": "none",
+            "retention_s": null
+          }
+        },
+        "state": "failed",
+        "state_reason": "exit 1",
+        "submitted_at": "2026-10-02T10:00:00Z",
+        "queue_id": null,
+        "lease_id": null,
+        "lane_id": null,
+        "started_at": null,
+        "ended_at": null,
+        "exit_status": 1,
+        "log_cursor": null,
+        "output_relpath": null,
+        "error": null
+      }
+    ]
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/usage.schema.json",
+  "title": "Flightctl usage records v2 (sacct analogue) and report",
+  "description": "NEW. One record per closed lease/job/session/endpoint, DERIVED from committed events (never written independently), so a report always reconciles with the event log. Design follows Slurm sacct/sreport (borrowed design, no code).",
+  "oneOf": [{ "$ref": "#/$defs/record" }, { "$ref": "#/$defs/report" }],
+  "$defs": {
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "usage_id", "work", "lease_id", "principal_id", "groups", "lane_id", "tier", "class", "cards", "started_at", "ended_at", "gpu_seconds", "end_reason", "counts_against_quota", "energy_wh", "energy_certainty", "source_event_seq"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "usage_id": { "$ref": "common.schema.json#/$defs/public_id" },
+        "work": { "$ref": "common.schema.json#/$defs/work_ref" },
+        "lease_id": { "$ref": "common.schema.json#/$defs/public_id" },
+        "principal_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "groups": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/short_identifier" } },
+        "lane_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "tier": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "class": { "$ref": "common.schema.json#/$defs/class" },
+        "cards": { "type": "integer", "minimum": 1 },
+        "started_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "ended_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "gpu_seconds": { "type": "integer", "minimum": 0, "description": "(ended_at - started_at) x cards; quarantine time is charged to nobody and reported separately." },
+        "end_reason": { "enum": ["released", "expired", "preempted", "operator-stopped", "quarantined", "holder-lost", "job-succeeded", "job-failed", "job-cancelled", "session-closed", "endpoint-idle", "endpoint-evicted"] },
+        "counts_against_quota": { "type": "boolean" },
+        "energy_wh": { "anyOf": [{ "type": "number", "minimum": 0 }, { "type": "null" }], "description": "SHOULD/later: integrated power.draw samples. null until per-lane sampling exists." },
+        "energy_certainty": { "$ref": "common.schema.json#/$defs/certainty" },
+        "source_event_seq": { "type": "array", "minItems": 2, "items": { "type": "integer", "minimum": 1 } }
+      }
+    },
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "group_by", "from", "to", "rows", "quarantine_seconds"],
+      "properties": {
+        "kind": { "const": "usage-report" },
+        "group_by": { "enum": ["principal", "group", "lane", "tier"] },
+        "from": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "to": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["key", "gpu_hours", "records", "by_end_reason"],
+            "properties": {
+              "key": { "$ref": "common.schema.json#/$defs/short_identifier" },
+              "gpu_hours": { "type": "number", "minimum": 0 },
+              "records": { "type": "integer", "minimum": 0 },
+              "by_end_reason": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } }
+            }
+          }
+        },
+        "quarantine_seconds": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "x-examples": {
+    "valid": [
+      { "schema_version": 2, "usage_id": "use-0000001", "work": { "kind": "job", "id": "job-0000042" }, "lease_id": "lse-0000100", "principal_id": "friend-a", "groups": ["friends"], "lane_id": "lane-gpu1", "tier": "small", "class": "batch", "cards": 2, "started_at": "2026-10-02T10:00:00Z", "ended_at": "2026-10-02T11:00:00Z", "gpu_seconds": 7200, "end_reason": "job-succeeded", "counts_against_quota": true, "energy_wh": null, "energy_certainty": "unknown", "source_event_seq": [41, 57] },
+      { "kind": "usage-report", "group_by": "principal", "from": "2026-09-25T00:00:00Z", "to": "2026-10-02T00:00:00Z", "rows": [{ "key": "friend-a", "gpu_hours": 2.0, "records": 1, "by_end_reason": { "job-succeeded": 1 } }], "quarantine_seconds": 0 }
+    ],
+    "invalid": [
+      { "schema_version": 2, "usage_id": "use-0000001", "work": { "kind": "holder", "id": null }, "lease_id": "lse-0000100", "principal_id": "friend-a", "groups": [], "lane_id": "lane-gpu1", "tier": "small", "class": "batch", "cards": 0, "started_at": "2026-10-02T10:00:00Z", "ended_at": "2026-10-02T11:00:00Z", "gpu_seconds": -1, "end_reason": "released", "counts_against_quota": true, "energy_wh": null, "energy_certainty": "unknown", "source_event_seq": [41] }
+    ]
+  }
+}

@@ -1,0 +1,247 @@
+{
+  "provenance": "Cases real-* are REAL output of the x-real-commands queries (driver 610.57.04, two Turing 24 GiB cards on one host, one of them driving the desktop), captured read-only on 2 Oct 2026 while another holder's job used the cards. Sanitised deterministically for portability: card UUIDs -> GPU-...0011 / GPU-...0012, process command lines -> neutral names (the browser line was ~900 characters with no ', '). Raw captures are kept in the lab research directory, not in the repo. Cases synthetic-* encode review counterexamples (Sol 6 B2) and parser edge cases.",
+  "lane_cards": {
+    "both": [
+      "GPU-00000000-0000-0000-0000-000000000011",
+      "GPU-00000000-0000-0000-0000-000000000012"
+    ],
+    "display-card": [
+      "GPU-00000000-0000-0000-0000-000000000012"
+    ],
+    "one": [
+      "GPU-00000000-0000-0000-0000-000000000011"
+    ]
+  },
+  "cases": [
+    {
+      "name": "real-a-pair-busy",
+      "lane": "both",
+      "returncode": 0,
+      "gpus": "GPU-00000000-0000-0000-0000-000000000011, 13746, 24576, 100, 63, 177.79, 200.00, Not Active, Not Active, [N/A]\nGPU-00000000-0000-0000-0000-000000000012, 529, 24576, 0, 53, 28.14, 200.00, Not Active, Not Active, [N/A]\n",
+      "procs": "GPU-00000000-0000-0000-0000-000000000011, 555655, browser --type=gpu-process --render-node-override=renderD129, 5\nGPU-00000000-0000-0000-0000-000000000011, 2229722, venv/bin/python, 13736\n",
+      "expect": {
+        "status": "ok",
+        "tenant_pids": [
+          2229722
+        ],
+        "noise_pids": [
+          555655
+        ],
+        "lane_memory_used_mib": 14275,
+        "unexplained_mib": 14270,
+        "empty": false
+      },
+      "identities": {
+        "555655": {
+          "uid": 1000,
+          "argv0": "browser"
+        }
+      },
+      "context_types": {
+        "GPU-00000000-0000-0000-0000-000000000011|555655": "C+G"
+      }
+    },
+    {
+      "name": "real-a-display-card-only",
+      "lane": "display-card",
+      "returncode": 0,
+      "gpus": "GPU-00000000-0000-0000-0000-000000000011, 13746, 24576, 100, 63, 177.79, 200.00, Not Active, Not Active, [N/A]\nGPU-00000000-0000-0000-0000-000000000012, 529, 24576, 0, 53, 28.14, 200.00, Not Active, Not Active, [N/A]\n",
+      "procs": "GPU-00000000-0000-0000-0000-000000000011, 555655, browser --type=gpu-process --render-node-override=renderD129, 5\nGPU-00000000-0000-0000-0000-000000000011, 2229722, venv/bin/python, 13736\n",
+      "expect": {
+        "status": "ok",
+        "tenant_pids": [],
+        "noise_pids": [],
+        "lane_memory_used_mib": 529,
+        "unexplained_mib": 529,
+        "empty": true
+      },
+      "identities": {
+        "555655": {
+          "uid": 1000,
+          "argv0": "browser"
+        }
+      },
+      "context_types": {
+        "GPU-00000000-0000-0000-0000-000000000011|555655": "C+G"
+      }
+    },
+    {
+      "name": "real-b-pair-two-cards-one-process",
+      "lane": "both",
+      "returncode": 0,
+      "gpus": "GPU-00000000-0000-0000-0000-000000000011, 23648, 24576, 41, 64, 199.02, 200.00, Not Active, Not Active, [N/A]\nGPU-00000000-0000-0000-0000-000000000012, 15485, 24576, 5, 58, 71.71, 200.00, Not Active, Not Active, [N/A]\n",
+      "procs": "GPU-00000000-0000-0000-0000-000000000011, 555655, browser --type=gpu-process --render-node-override=renderD129, 5\nGPU-00000000-0000-0000-0000-000000000011, 2229722, venv/bin/python, 23638\nGPU-00000000-0000-0000-0000-000000000012, 2229722, venv/bin/python, 14956\n",
+      "expect": {
+        "status": "ok",
+        "tenant_pids": [
+          2229722,
+          2229722
+        ],
+        "noise_pids": [
+          555655
+        ],
+        "lane_memory_used_mib": 39133,
+        "unexplained_mib": 39128,
+        "empty": false
+      },
+      "identities": {
+        "555655": {
+          "uid": 1000,
+          "argv0": "browser"
+        }
+      },
+      "context_types": {
+        "GPU-00000000-0000-0000-0000-000000000011|555655": "C+G"
+      }
+    },
+    {
+      "name": "real-b-attributed-lease-process",
+      "lane": "both",
+      "returncode": 0,
+      "attributed_pids": [
+        2229722
+      ],
+      "gpus": "GPU-00000000-0000-0000-0000-000000000011, 23648, 24576, 41, 64, 199.02, 200.00, Not Active, Not Active, [N/A]\nGPU-00000000-0000-0000-0000-000000000012, 15485, 24576, 5, 58, 71.71, 200.00, Not Active, Not Active, [N/A]\n",
+      "procs": "GPU-00000000-0000-0000-0000-000000000011, 555655, browser --type=gpu-process --render-node-override=renderD129, 5\nGPU-00000000-0000-0000-0000-000000000011, 2229722, venv/bin/python, 23638\nGPU-00000000-0000-0000-0000-000000000012, 2229722, venv/bin/python, 14956\n",
+      "expect": {
+        "status": "ok",
+        "tenant_pids": [],
+        "noise_pids": [
+          555655
+        ],
+        "lane_memory_used_mib": 39133,
+        "unexplained_mib": 534,
+        "empty": false,
+        "note": "no collision (unexplained < lane noise) but not empty: the lease still has processes"
+      },
+      "identities": {
+        "555655": {
+          "uid": 1000,
+          "argv0": "browser"
+        }
+      },
+      "context_types": {
+        "GPU-00000000-0000-0000-0000-000000000011|555655": "C+G"
+      }
+    },
+    {
+      "name": "synthetic-sol6-19gib-no-process",
+      "lane": "one",
+      "returncode": 0,
+      "gpus": "GPU-00000000-0000-0000-0000-000000000011, 19456, 24576, 0, 40, 30.00, 200.00, Not Active, Not Active, [N/A]\n",
+      "procs": "",
+      "expect": {
+        "status": "ok",
+        "tenant_pids": [],
+        "noise_pids": [],
+        "lane_memory_used_mib": 19456,
+        "unexplained_mib": 19456,
+        "empty": false
+      }
+    },
+    {
+      "name": "synthetic-unknown-process-memory-is-tenant",
+      "lane": "one",
+      "returncode": 0,
+      "gpus": "GPU-00000000-0000-0000-0000-000000000011, 300, 24576, 0, 40, 30.00, 200.00, Not Active, Not Active, [N/A]\n",
+      "procs": "GPU-00000000-0000-0000-0000-000000000011, 4242, python, [N/A]\n",
+      "expect": {
+        "status": "ok",
+        "tenant_pids": [
+          4242
+        ],
+        "noise_pids": [],
+        "lane_memory_used_mib": 300,
+        "unexplained_mib": 300,
+        "empty": false
+      }
+    },
+    {
+      "name": "synthetic-comma-in-command-line",
+      "lane": "one",
+      "returncode": 0,
+      "gpus": "GPU-00000000-0000-0000-0000-000000000011, 700, 24576, 0, 40, 30.00, 200.00, Active, Not Active, [N/A]\n",
+      "procs": "GPU-00000000-0000-0000-0000-000000000011, 9001, python train.py --tags a, b, c, 600\n",
+      "expect": {
+        "status": "ok",
+        "tenant_pids": [
+          9001
+        ],
+        "noise_pids": [],
+        "lane_memory_used_mib": 700,
+        "unexplained_mib": 700,
+        "empty": false,
+        "process_name": "python train.py --tags a, b, c",
+        "thermal_slowdown": true
+      }
+    },
+    {
+      "name": "synthetic-tool-failure",
+      "lane": "one",
+      "returncode": 9,
+      "gpus": "",
+      "procs": "",
+      "expect": {
+        "status": "unknown",
+        "tenant_pids": [],
+        "noise_pids": [],
+        "lane_memory_used_mib": null,
+        "unexplained_mib": null,
+        "empty": false
+      }
+    },
+    {
+      "name": "synthetic-missing-lane-card",
+      "lane": "both",
+      "returncode": 0,
+      "gpus": "GPU-00000000-0000-0000-0000-000000000011, 6, 24576, 0, 40, 30.00, 200.00, Not Active, Not Active, [N/A]\n",
+      "procs": "",
+      "expect": {
+        "status": "unknown",
+        "tenant_pids": [],
+        "noise_pids": [],
+        "lane_memory_used_mib": null,
+        "unexplained_mib": null,
+        "empty": false
+      }
+    },
+    {
+      "name": "synthetic-same-pid-mixed-context-types",
+      "lane": "both",
+      "returncode": 0,
+      "gpus": "GPU-00000000-0000-0000-0000-000000000011, 10, 15360, 0, 40, 30.00, 70.00, Not Active, Not Active, [N/A]\nGPU-00000000-0000-0000-0000-000000000012, 10, 15360, 0, 40, 30.00, 70.00, Not Active, Not Active, [N/A]\n",
+      "procs": "GPU-00000000-0000-0000-0000-000000000011, 44, browser --type=gpu-process, 5\nGPU-00000000-0000-0000-0000-000000000012, 44, browser --type=gpu-process, 5\n",
+      "identities": {
+        "44": {
+          "uid": 1000,
+          "argv0": "browser"
+        }
+      },
+      "context_types": {
+        "GPU-00000000-0000-0000-0000-000000000011|44": "C+G",
+        "GPU-00000000-0000-0000-0000-000000000012|44": "C"
+      },
+      "note": "Sol 6.1 amd2 P1: one allow-listed process, C+G on card A, pure C on card B: card B's entry is a tenant",
+      "expect": {
+        "status": "ok",
+        "tenant_pids": [
+          44
+        ],
+        "noise_pids": [
+          44
+        ],
+        "lane_memory_used_mib": 20,
+        "unexplained_mib": 15,
+        "empty": false
+      }
+    }
+  ],
+  "noise_allowlist": [
+    {
+      "argv0": "browser",
+      "uid": 1000
+    }
+  ],
+  "noise_cap_mib": 64,
+  "identities_note": "Amendment 2: identities per pid (owner uid of /proc/<pid>, argv[0]); rev 2: context types per (gpu_uuid, pid) from nvidia-smi -q -d PIDS, keyed '<gpu_uuid>|<pid>' (the browser GPU process is C+G, measured 2 Oct on driver 610.57.04)."
+}

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/endpoint.schema.json",
+  "title": "Flightctl served endpoint v2 (renamed and generalised from occupant-v1)",
+  "description": "RENAMES occupant-v1 to endpoint. A served model endpoint is service-class WORK on a lease, started from a template; request accounting is unchanged from occupant-v1 (active/completed user requests drive the 600-second inactivity unload; health checks and connections never reset it; only an explicit load reloads). chat-load/chat-unload remain RPC aliases for one release.",
+  "oneOf": [{ "$ref": "#/$defs/endpoint" }],
+  "$defs": {
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "endpoint_id", "lease_id", "lane_id", "principal_id", "template", "model", "listen", "state", "loaded_at", "request_accounting", "idle_timeout_s", "close_reason"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "endpoint_id": { "$ref": "common.schema.json#/$defs/public_id" },
+        "lease_id": { "$ref": "common.schema.json#/$defs/public_id" },
+        "lane_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "principal_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "template": { "$ref": "executor.schema.json#/$defs/workload/properties/template_ref" },
+        "model": { "$ref": "storage.schema.json#/$defs/model_ref" },
+        "listen": { "type": "object", "additionalProperties": false, "required": ["host_id", "port", "proxy_port"], "properties": { "host_id": { "$ref": "common.schema.json#/$defs/short_identifier" }, "port": { "type": "integer", "minimum": 1024, "maximum": 65535 }, "proxy_port": { "type": "integer", "minimum": 1024, "maximum": 65535 } } },
+        "state": { "enum": ["loading", "ready", "draining", "unloaded", "quarantined", "failed"] },
+        "loaded_at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/utc_time" }, { "type": "null" }] },
+        "request_accounting": { "$ref": "../occupant-v1.schema.json#/$defs/request_accounting" },
+        "idle_timeout_s": { "const": 600 },
+        "close_reason": { "anyOf": [{ "enum": ["idle", "evicted", "operator", "load-failed", "unload-uncertain"] }, { "type": "null" }] }
+      }
+    }
+  },
+  "x-examples": {
+    "valid": [{ "schema_version": 2, "endpoint_id": "ept-000001", "lease_id": "lse-0000103", "lane_id": "lane-gpu1", "principal_id": "chat-service", "template": { "template_id": "llama-chat", "version": "1.0.0" }, "model": { "model_id": "small-q4", "revision": 1 }, "listen": { "host_id": "host-1", "port": 8311, "proxy_port": 8310 }, "state": "ready", "loaded_at": "2026-10-02T10:00:00Z", "request_accounting": { "active_requests": 0, "completed_requests": 3, "last_completed_at": "2026-10-02T10:05:00Z", "activity_basis": "completed-user-request" }, "idle_timeout_s": 600, "close_reason": null }],
+    "invalid": [{ "schema_version": 2, "endpoint_id": "ept-000001", "lease_id": "lse-0000103", "lane_id": "lane-gpu1", "principal_id": "chat-service", "template": { "template_id": "llama-chat", "version": "1.0.0" }, "model": { "model_id": "small-q4", "revision": 1 }, "listen": { "host_id": "host-1", "port": 8311, "proxy_port": 8310 }, "state": "ready", "loaded_at": null, "request_accounting": { "active_requests": 0, "completed_requests": 0, "last_completed_at": null, "activity_basis": "connection" }, "idle_timeout_s": 1800, "close_reason": null }]
+  }
+}

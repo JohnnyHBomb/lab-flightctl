@@ -1,0 +1,298 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/session.schema.json",
+  "title": "Flightctl interactive session v2",
+  "description": "NEW, redesigned in round 2 (Sol 6 B5) on the recommended Q1 option; slice C9 stays GATED on the owner's Q1 answer. Each friend has a dedicated unix account (fc-<principal>) with linger DISABLED. A root-owned helper (flightctl-helper), callable by the executor account through one sudoers rule restricted to its fixed subcommands, does all privileged steps. OPEN: (1) set user-<uid>.slice properties DevicePolicy=closed + DeviceAllow= for exactly the lane's /dev/nvidia<minor> plus /dev/nvidiactl, /dev/nvidia-uvm, /dev/nvidia-uvm-tools (systemd device-cgroup via BPF on cgroup v2: ENFORCED, not advisory; measured host: cgroup2fs, systemd 261); (2) write a managed authorized_keys block with 'expiry-time=<lease end>,restrict,pty,command=\"flightctl-session-shell\"' (the wrapper sets CUDA_VISIBLE_DEVICES and execs the login shell or $SSH_ORIGINAL_COMMAND; authorized_keys environment= is NOT used because sshd ignores it unless PermitUserEnvironment, which is 'no' by default, measured). Round 3 (Sol 6 B5): because access and termination act on the user slice, at most ONE active PARENT lease per friend per host; the session is a CHILD of that lease and does not take a second slot (round 4; policy.work; 409 account_busy; the helper claims the same parent lease_id). Keys live in the root-owned /etc/ssh/flightctl-keys/<account> (AuthorizedKeysFile), never in the friend's home. CLOSE (lease end, idle, operator, preempt): remove the key block, then 'loginctl terminate-user fc-x' and 'systemctl stop user-<uid>.slice' (ends established shells and every child, including nohup/setsid and the user manager), then reset DeviceAllow to deny all NVIDIA nodes. Close is proven, not assumed: user slice cgroup empty AND occupancy empty on the lane before the session is 'closed'; otherwise the session is 'failed' and the lane quarantines (standard rule).",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/session"
+    }
+  ],
+  "$defs": {
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "session_id",
+        "lease_id",
+        "principal_id",
+        "kind",
+        "unix_user",
+        "key_fingerprint",
+        "host_id",
+        "opens_at",
+        "ends_at",
+        "idle_timeout_s",
+        "warn_before_s",
+        "last_activity_at",
+        "state",
+        "close_reason",
+        "device_allow",
+        "close_proof"
+      ],
+      "properties": {
+        "schema_version": {
+          "$ref": "common.schema.json#/$defs/schema_version"
+        },
+        "session_id": {
+          "$ref": "common.schema.json#/$defs/public_id"
+        },
+        "lease_id": {
+          "$ref": "common.schema.json#/$defs/public_id"
+        },
+        "principal_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "kind": {
+          "enum": [
+            "ssh"
+          ]
+        },
+        "unix_user": {
+          "type": "string",
+          "pattern": "^fc-[a-z0-9][a-z0-9_-]{0,28}$"
+        },
+        "key_fingerprint": {
+          "type": "string",
+          "pattern": "^SHA256:[A-Za-z0-9+/]{43}$"
+        },
+        "host_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "opens_at": {
+          "$ref": "common.schema.json#/$defs/utc_time"
+        },
+        "ends_at": {
+          "$ref": "common.schema.json#/$defs/utc_time"
+        },
+        "idle_timeout_s": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 300
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "warn_before_s": {
+          "type": "integer",
+          "minimum": 60,
+          "default": 600
+        },
+        "last_activity_at": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/utc_time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "enum": [
+            "requested",
+            "open",
+            "warned",
+            "closing",
+            "closed",
+            "failed"
+          ]
+        },
+        "close_reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "user",
+                "lease-end",
+                "idle",
+                "operator",
+                "preempted",
+                "gateway-error"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "device_allow": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^/dev/nvidia([0-9]{1,3}|ctl|-uvm|-uvm-tools)$"
+          }
+        },
+        "close_proof": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "user_slice_empty",
+                "occupancy_empty",
+                "key_removed",
+                "at"
+              ],
+              "properties": {
+                "user_slice_empty": {
+                  "type": "boolean"
+                },
+                "occupancy_empty": {
+                  "type": "boolean"
+                },
+                "key_removed": {
+                  "type": "boolean"
+                },
+                "at": {
+                  "$ref": "common.schema.json#/$defs/utc_time"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "closed",
+                  "failed"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "close_reason": {
+                "type": "string"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "close_reason": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "closed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "close_proof": {
+                "type": "object",
+                "properties": {
+                  "user_slice_empty": {
+                    "const": true
+                  },
+                  "occupancy_empty": {
+                    "const": true
+                  },
+                  "key_removed": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "x-examples": {
+    "valid": [
+      {
+        "schema_version": 2,
+        "session_id": "ses-000001",
+        "lease_id": "lse-0000102",
+        "principal_id": "friend-a",
+        "kind": "ssh",
+        "unix_user": "fc-frienda",
+        "key_fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "host_id": "host-1",
+        "opens_at": "2026-10-03T18:00:00Z",
+        "ends_at": "2026-10-03T21:00:00Z",
+        "idle_timeout_s": 3600,
+        "warn_before_s": 600,
+        "last_activity_at": null,
+        "state": "open",
+        "close_reason": null,
+        "device_allow": [
+          "/dev/nvidia0",
+          "/dev/nvidiactl",
+          "/dev/nvidia-uvm"
+        ],
+        "close_proof": null
+      }
+    ],
+    "invalid": [
+      {
+        "schema_version": 2,
+        "session_id": "ses-000002",
+        "lease_id": "lse-0000102",
+        "principal_id": "friend-a",
+        "kind": "jupyter",
+        "unix_user": "root",
+        "key_fingerprint": "md5:aa",
+        "host_id": "host-1",
+        "opens_at": "2026-10-03T18:00:00Z",
+        "ends_at": "2026-10-03T21:00:00Z",
+        "idle_timeout_s": 10,
+        "warn_before_s": 600,
+        "last_activity_at": null,
+        "state": "closed",
+        "close_reason": null,
+        "device_allow": [
+          "/dev/nvidia0"
+        ],
+        "close_proof": null
+      },
+      {
+        "schema_version": 2,
+        "session_id": "ses-000003",
+        "lease_id": "lse-0000102",
+        "principal_id": "friend-a",
+        "kind": "ssh",
+        "unix_user": "fc-frienda",
+        "key_fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "host_id": "host-1",
+        "opens_at": "2026-10-03T18:00:00Z",
+        "ends_at": "2026-10-03T21:00:00Z",
+        "idle_timeout_s": 3600,
+        "warn_before_s": 600,
+        "last_activity_at": null,
+        "state": "closed",
+        "close_reason": "lease-end",
+        "device_allow": [
+          "/dev/nvidia0",
+          "/dev/nvidiactl",
+          "/dev/nvidia-uvm"
+        ],
+        "close_proof": {
+          "user_slice_empty": false,
+          "occupancy_empty": true,
+          "key_removed": true,
+          "at": "2026-10-03T21:00:05Z"
+        }
+      }
+    ]
+  }
+}

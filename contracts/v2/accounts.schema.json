@@ -1,0 +1,598 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/accounts.schema.json",
+  "title": "Flightctl accounts v2 (principals, groups, API token metadata)",
+  "description": "NEW; takes over inventory-v1 identity_mapping. Authentication stays server-side: the authority resolves the socket peer with the PeerIdentity port (tailscale whois) to external ids and then to ONE principal. Round 3 (Sol 6 B6), one rule for every kind: (1) the PEER always authenticates; a request whose peer maps to no principal and no allowed_peers entry is denied; (2) a bearer API token never authenticates alone: it is accepted only from a peer listed in its principal's allowed_peers, and then it SELECTS that principal (an agent on a shared workstation) and NARROWS rights to the token's scopes; (3) humans (operator, friends) authenticate by their own tailnet login or shared node (whois external id); a human may also hold tokens (e.g. for scripts) under the same rule. A friend therefore needs a tailnet identity (node share or invite), never a host account or shell, to submit and fetch jobs. Tokens are shown once, stored as SHA-256, never logged. Oracle: tests/contracts_v2/validation.py auth_decision(). Round 4 (Sol 6 r3 B6): the request carries NO principal: the principal is always derived from the socket peer (or selected by a token from an allowed peer); an expired or revoked token, or a token from a peer not in its principal's allowed_peers/external_ids, is denied with no fallback to the peer's own principal for that request. Oracle auth_decision(peer_ids, accounts, token, now).",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/document"
+    },
+    {
+      "$ref": "#/$defs/token_metadata"
+    },
+    {
+      "$ref": "#/$defs/token_created"
+    },
+    {
+      "$ref": "#/$defs/whoami"
+    }
+  ],
+  "$defs": {
+    "principal_kind": {
+      "enum": [
+        "operator",
+        "human",
+        "agent",
+        "service"
+      ]
+    },
+    "external_id": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "tailnet-login",
+            "tailnet-node",
+            "tailnet-tag",
+            "ssh-key-fingerprint"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "principal_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "principal_id",
+        "principal",
+        "kind",
+        "display_name",
+        "groups",
+        "sponsor",
+        "external_ids",
+        "allowed_peers",
+        "unix_user",
+        "contact",
+        "enabled",
+        "aup_accepted_at"
+      ],
+      "properties": {
+        "principal_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "principal": {
+          "$ref": "common.schema.json#/$defs/principal"
+        },
+        "kind": {
+          "$ref": "#/$defs/principal_kind"
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "groups": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "common.schema.json#/$defs/short_identifier"
+          }
+        },
+        "sponsor": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/short_identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "external_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/external_id"
+          }
+        },
+        "allowed_peers": {
+          "description": "External ids from which a bearer token for this principal is accepted (e.g. the workstation node an agent runs on).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/external_id"
+          }
+        },
+        "unix_user": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-z_][a-z0-9_-]{0,31}$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Account jobs/sessions run as on lane hosts. Never the operator's own login for friends' work."
+        },
+        "contact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "email",
+            "slack"
+          ],
+          "properties": {
+            "email": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[^@\\s]+@[^@\\s]+$",
+                  "maxLength": 254
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "slack": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[A-Z0-9]{8,12}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Slack member id; delivery uses the site webhook/channel config."
+            }
+          }
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "false denies every NEW admission at once; running work is not killed except by operator action."
+        },
+        "aup_accepted_at": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/utc_time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "agent"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "sponsor": {
+                "$ref": "common.schema.json#/$defs/short_identifier"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "operator",
+                  "human",
+                  "service"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "sponsor": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "group_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "group_id",
+        "display_name",
+        "roles"
+      ],
+      "properties": {
+        "group_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "roles": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "operator",
+              "member",
+              "agent",
+              "service",
+              "viewer"
+            ]
+          }
+        }
+      }
+    },
+    "scope": {
+      "enum": [
+        "read",
+        "lease",
+        "queue",
+        "book",
+        "job",
+        "session",
+        "endpoint",
+        "tokens:self",
+        "notify:self"
+      ]
+    },
+    "document": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "document_id",
+        "revision",
+        "updated_at",
+        "principals",
+        "groups"
+      ],
+      "properties": {
+        "schema_version": {
+          "$ref": "common.schema.json#/$defs/schema_version"
+        },
+        "document_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "updated_at": {
+          "$ref": "common.schema.json#/$defs/utc_time"
+        },
+        "principals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/principal_record"
+          }
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/group_record"
+          }
+        }
+      }
+    },
+    "token_metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "token_id",
+        "principal_id",
+        "scopes",
+        "created_at",
+        "created_by",
+        "expires_at",
+        "last_used_at",
+        "revoked_at",
+        "prefix"
+      ],
+      "properties": {
+        "kind": {
+          "const": "api-token"
+        },
+        "token_id": {
+          "$ref": "common.schema.json#/$defs/public_id"
+        },
+        "principal_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "scopes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/scope"
+          }
+        },
+        "created_at": {
+          "$ref": "common.schema.json#/$defs/utc_time"
+        },
+        "created_by": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "expires_at": {
+          "$ref": "common.schema.json#/$defs/utc_time"
+        },
+        "last_used_at": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/utc_time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revoked_at": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/utc_time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "prefix": {
+          "type": "string",
+          "pattern": "^fct_[A-Za-z0-9]{6}$",
+          "description": "Non-secret display prefix."
+        }
+      }
+    },
+    "token_created": {
+      "description": "The only response that ever carries the secret. Not persisted in idempotency records (the replay returns token_metadata with secret_shown_once=true).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "metadata",
+        "secret"
+      ],
+      "properties": {
+        "kind": {
+          "const": "api-token-created"
+        },
+        "metadata": {
+          "$ref": "#/$defs/token_metadata"
+        },
+        "secret": {
+          "type": "string",
+          "pattern": "^fct_[A-Za-z0-9]{6}_[A-Za-z0-9_-]{43}$"
+        }
+      }
+    },
+    "whoami": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "principal_id",
+        "principal_kind",
+        "groups",
+        "roles",
+        "auth",
+        "enabled"
+      ],
+      "properties": {
+        "kind": {
+          "const": "whoami"
+        },
+        "principal_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "principal_kind": {
+          "$ref": "#/$defs/principal_kind"
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/short_identifier"
+          }
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "auth": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "peer",
+            "method",
+            "token_id"
+          ],
+          "properties": {
+            "peer": {
+              "$ref": "#/$defs/external_id"
+            },
+            "method": {
+              "enum": [
+                "tailnet-peer",
+                "tailnet-peer+token"
+              ]
+            },
+            "token_id": {
+              "anyOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/public_id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "x-examples": {
+    "valid": [
+      {
+        "schema_version": 2,
+        "document_id": "accounts",
+        "revision": 1,
+        "updated_at": "2026-10-02T00:00:00Z",
+        "principals": [
+          {
+            "principal_id": "owner",
+            "principal": {
+              "site_id": "site-a",
+              "tenant_id": "site-a",
+              "issuer": "tailnet-a",
+              "subject": "owner"
+            },
+            "kind": "operator",
+            "display_name": "Owner",
+            "groups": [
+              "operators"
+            ],
+            "sponsor": null,
+            "external_ids": [
+              {
+                "kind": "tailnet-login",
+                "value": "owner@example"
+              }
+            ],
+            "allowed_peers": [],
+            "unix_user": null,
+            "contact": {
+              "email": "owner@example.org",
+              "slack": "U0123ABCD"
+            },
+            "enabled": true,
+            "aup_accepted_at": null
+          },
+          {
+            "principal_id": "review-agent",
+            "principal": {
+              "site_id": "site-a",
+              "tenant_id": "site-a",
+              "issuer": "tailnet-a",
+              "subject": "review-agent"
+            },
+            "kind": "agent",
+            "display_name": "Review agent",
+            "groups": [
+              "agents"
+            ],
+            "sponsor": "owner",
+            "external_ids": [],
+            "allowed_peers": [
+              {
+                "kind": "tailnet-node",
+                "value": "host-0.example"
+              }
+            ],
+            "unix_user": "fc-agent",
+            "contact": {
+              "email": null,
+              "slack": null
+            },
+            "enabled": true,
+            "aup_accepted_at": null
+          }
+        ],
+        "groups": [
+          {
+            "group_id": "operators",
+            "display_name": "Operators",
+            "roles": [
+              "operator"
+            ]
+          },
+          {
+            "group_id": "agents",
+            "display_name": "Agents",
+            "roles": [
+              "agent"
+            ]
+          }
+        ]
+      },
+      {
+        "kind": "api-token",
+        "token_id": "tok-abc123def",
+        "principal_id": "review-agent",
+        "scopes": [
+          "read",
+          "queue",
+          "job"
+        ],
+        "created_at": "2026-10-02T00:00:00Z",
+        "created_by": "owner",
+        "expires_at": "2026-11-01T00:00:00Z",
+        "last_used_at": null,
+        "revoked_at": null,
+        "prefix": "fct_Ab12Cd"
+      }
+    ],
+    "invalid": [
+      {
+        "principal_id": "stray-agent",
+        "principal": {
+          "site_id": "site-a",
+          "tenant_id": "site-a",
+          "issuer": "tailnet-a",
+          "subject": "stray"
+        },
+        "kind": "agent",
+        "display_name": "Stray",
+        "groups": [],
+        "sponsor": null,
+        "external_ids": [],
+        "allowed_peers": [],
+        "unix_user": null,
+        "contact": {
+          "email": null,
+          "slack": null
+        },
+        "enabled": true,
+        "aup_accepted_at": null
+      },
+      {
+        "kind": "api-token",
+        "token_id": "tok-abc123def",
+        "principal_id": "review-agent",
+        "scopes": [],
+        "created_at": "2026-10-02T00:00:00Z",
+        "created_by": "owner",
+        "expires_at": "2026-11-01T00:00:00Z",
+        "last_used_at": null,
+        "revoked_at": null,
+        "prefix": "fct_Ab12Cd",
+        "secret": "x"
+      }
+    ]
+  }
+}

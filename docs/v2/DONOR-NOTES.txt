@@ -1,0 +1,64 @@
+DONOR NOTES: what lab-flightctl v2 borrows from other projects, under which licence, and how it is attributed
+(2 Oct 2026). Licences were read from each project's own repository on 2 Oct 2026 (LICENSE/COPYING files fetched
+raw; quoted lines below). lab-flightctl itself declares no licence yet (pyproject has none): the owner's call when the
+repo is shared; nothing below forces one.
+
+RULE APPLIED
+- GPL code (Slurm, runpodctl) is NEVER copied, translated or closely paraphrased into this repo. We borrow published
+  DESIGNS and VOCABULARY only, re-implemented from our own contracts. Calling a GPL tool as a separate program would be
+  allowed, but v2 does not do it.
+- Apache-2.0 / MIT / BSD code MAY be reused. If any file or substantial fragment is copied, the packet that copies it
+  must: keep the upstream copyright line and licence header, add the licence text under LICENSES/<spdx>.txt, add a
+  NOTICE entry (Apache-2.0: reproduce upstream NOTICE if one exists; none existed on 2 Oct for TensorHive, Kueue,
+  dcgm-exporter), and mark the file as modified (Apache-2.0 s4(b)). The gauge checks this (GATES G1 scope).
+- Proprietary vendor docs (RunPod, Vast.ai, Lambda, Paperspace) are read for ideas only; nothing is copied.
+
+PER PROJECT (licence, evidence, what we take, form of borrowing)
+1 Slurm (SchedMD/slurm)  GPL-2.0-or-later + OpenSSL linking exception.
+  Evidence: raw.githubusercontent.com/SchedMD/slurm/master/COPYING: "All Slurm code and documentation is available
+  under the GNU General Public License." ... "either version 2 of the License, or (at your option) any later version."
+  (GitHub's API says NOASSERTION because of the exception text; COPYING is authoritative; docs are under the same GPL.)
+  Borrowed DESIGNS (no code, no doc text):
+  - power save: SuspendProgram/ResumeProgram + ResumeTimeout + SuspendExcNodes -> power.schema.json, inventory power
+    profile (always-on hosts), wake_timeout_s -> 'unreachable', never free.
+  - QOS / association limits (MaxWall, GrpTRES, per-user GPU caps) -> quota.schema.json (two-level group/principal,
+    minimum wins).
+  - sacct / sreport -> usage.schema.json records and report groupings.
+  - advance reservations incl. MAINT and owner reservations, drain state -> window.schema.json.
+  - preemption with GraceTime -> unchanged plan r4 eviction matrix and grace (already ours).
+  - HealthCheckProgram draining unhealthy nodes -> watcher thermal refuse-new (B4).
+  Attribution: a "Design influences" paragraph in docs (no licence obligation for ideas; courtesy credit).
+2 TensorHive (roscisz/TensorHive)  Apache-2.0. No NOTICE file. Last push 2024-04-12, last release 1.1.0 (2022-02-02):
+  effectively unmaintained. Stack: Python (Flask-style backend) + Vue frontend.
+  Evidence: raw.githubusercontent.com/roscisz/TensorHive/master/LICENSE: "Apache License / Version 2.0, January 2004".
+  Borrowed DESIGNS: reservation calendar UX (drag a slot on a per-GPU calendar) for C11a/b; "violation detection"
+  (someone using a GPU reserved by another, warn by email) -> watcher collision events + notification topic; idle-time
+  job queue on unreserved GPUs -> standby-class jobs. Code reuse: PERMITTED with attribution, but NOT PLANNED in R1:
+  its stack (Vue SPA, its own user DB and SSH-based nvidia-smi polling) does not fit our authority-served UI with
+  tailnet identity, and an unmaintained dependency does not earn its place (standing order 7). If C11 decides to lift a
+  calendar component, the attribution rule above applies.
+3 Open OnDemand (OSC/ondemand)  MIT ("MIT License / Copyright (c) 2017-2025 Ohio Supercomputer Center", LICENSE.txt).
+  Borrowed DESIGNS: interactive sessions as batch-backed apps with explicit end and idle limits -> session.schema.json
+  (idle_timeout_s, warning before end). No code.
+4 Kueue (kubernetes-sigs/kueue)  Apache-2.0 (no NOTICE). Vocabulary only (cohorts, admission checks); nothing adopted
+  in R1 (fair share deferred).
+5 runpodctl (runpod/runpodctl)  GPL-3.0 ("GNU GENERAL PUBLIC LICENSE / Version 3, 29 June 2007"). CLI ergonomics read
+  for ideas only (templates, pods vs serverless). No code; stricter copyleft than Slurm, same rule.
+6 vast-cli (vast-ai/vast-cli)  MIT. Ideas only: scoped API keys with resource constraints -> accounts token scopes;
+  host reliability score (deferred). No code.
+7 dcgm-exporter (NVIDIA/dcgm-exporter)  Apache-2.0 (no NOTICE). Not used: our probe uses nvidia-smi queries; DCGM is
+  a heavier dependency that does not earn its place on four hosts. Metric names inform gpu-probe fields only.
+8 jupyterhub-idle-culler  BSD-3-Clause (COPYING.md). Idea only: idle culling with explicit timeout -> session/endpoint
+  idle rules.
+9 systemd (reference only)  LGPL-2.1-or-later with GPL-2.0 parts. We invoke systemctl/systemd-run/systemd-inhibit/
+  journalctl as programs; no linking, no code.
+10 RunPod / Vast.ai / Lambda / Paperspace documentation  proprietary (copyright notices or none found). Ideas only:
+  templates, stop-vs-terminate and what persists between slots (storage.wipe), per-second accounting as usage idea,
+  scoped keys, maintenance-reduces-reliability. No text copied.
+
+WHAT DOES NOT EARN ITS PLACE (standing order 7)
+- Adopting Slurm wholesale: it would replace identity, wake and fencing semantics we need (tailnet whois, FIDO2
+  overrides, quarantine-not-kill, desktop external tenants) and is GPL; borrowing its models gives the benefit
+  without the cost. (TARGET-MODEL's one-day Slurm spike remains available if the owner wants the question settled by
+  experiment; this plan does not need it.)
+- Forking TensorHive: unmaintained since 2024 and architecturally mismatched; ideas only.

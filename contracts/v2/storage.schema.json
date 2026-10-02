@@ -1,0 +1,565 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/storage.schema.json",
+  "title": "Flightctl storage and model store/cache v2",
+  "description": "NEW (the owner 2 Oct). A central MODEL STORE on a storage node holds published model files; each GPU host keeps a bounded CACHE that pulls from the store before a job starts (executor 'stage'), and popular models stay cached. Also per-principal scratch/output areas. Roots are named here and resolved to paths only in the site adapters file (no paths in the repo). A storage node may itself sleep: staging wakes it through the same Waker rules as a lane host.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/document"
+    },
+    {
+      "$ref": "#/$defs/cache_entry"
+    },
+    {
+      "$ref": "#/$defs/model_list"
+    }
+  ],
+  "$defs": {
+    "model_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+      "description": "Logical name (seeded from the site's model table keys)."
+    },
+    "model_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model_id",
+        "revision"
+      ],
+      "properties": {
+        "model_id": {
+          "$ref": "#/$defs/model_id"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "store": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "store_id",
+        "host_id",
+        "kind",
+        "root_ref",
+        "capacity_bytes",
+        "per_principal_bytes",
+        "retention_s",
+        "wipe"
+      ],
+      "properties": {
+        "store_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "host_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "kind": {
+          "enum": [
+            "model-store",
+            "model-cache",
+            "scratch",
+            "output",
+            "deploy"
+          ]
+        },
+        "root_ref": {
+          "$ref": "common.schema.json#/$defs/short_identifier",
+          "description": "Key into adapters file 'roots'; the path never appears in contracts."
+        },
+        "capacity_bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "per_principal_bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retention_s": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wipe": {
+          "enum": [
+            "never",
+            "after-retention",
+            "at-slot-end"
+          ],
+          "description": "Stated up front to friends: what persists between slots (TARGET-MODEL: slot is not a reservation of the next one)."
+        }
+      }
+    },
+    "model_file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "relpath",
+        "bytes",
+        "sha256"
+      ],
+      "properties": {
+        "relpath": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*\\.\\.)[A-Za-z0-9._/+-]{1,512}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "$ref": "common.schema.json#/$defs/sha256",
+          "description": "N2: required at publication; verified after transfer and before a cache entry becomes 'present'. Size is a progress check only."
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model_id",
+        "revision",
+        "format",
+        "store_id",
+        "files",
+        "total_bytes",
+        "vram_hint_bytes",
+        "pin",
+        "license_note"
+      ],
+      "properties": {
+        "model_id": {
+          "$ref": "#/$defs/model_id"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "format": {
+          "enum": [
+            "gguf",
+            "exl3",
+            "safetensors",
+            "other"
+          ]
+        },
+        "store_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/model_file"
+          }
+        },
+        "total_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "vram_hint_bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pin": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "common.schema.json#/$defs/short_identifier"
+          },
+          "description": "Hosts whose cache must always keep this model (never evicted)."
+        },
+        "license_note": {
+          "$ref": "common.schema.json#/$defs/nullable_text"
+        }
+      }
+    },
+    "cache_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "eviction",
+        "popular_window_s",
+        "popular_min_uses",
+        "min_free_bytes",
+        "verify"
+      ],
+      "properties": {
+        "eviction": {
+          "const": "lru-unpinned-unpopular-first"
+        },
+        "popular_window_s": {
+          "type": "integer",
+          "minimum": 3600
+        },
+        "popular_min_uses": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "min_free_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "verify": {
+          "const": "size+sha256"
+        }
+      }
+    },
+    "document": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "document_id",
+        "revision",
+        "updated_at",
+        "stores",
+        "models",
+        "cache_policy"
+      ],
+      "properties": {
+        "schema_version": {
+          "$ref": "common.schema.json#/$defs/schema_version"
+        },
+        "document_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "updated_at": {
+          "$ref": "common.schema.json#/$defs/utc_time"
+        },
+        "stores": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/store"
+          }
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/model"
+          }
+        },
+        "cache_policy": {
+          "$ref": "#/$defs/cache_policy"
+        }
+      }
+    },
+    "cache_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "host_id",
+        "model",
+        "state",
+        "bytes_present",
+        "last_used_at",
+        "uses_in_window",
+        "pinned",
+        "verified",
+        "error"
+      ],
+      "properties": {
+        "kind": {
+          "const": "cache-entry"
+        },
+        "host_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "model": {
+          "$ref": "#/$defs/model_ref"
+        },
+        "state": {
+          "enum": [
+            "absent",
+            "fetching",
+            "present",
+            "stale",
+            "evicting",
+            "failed"
+          ]
+        },
+        "bytes_present": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_used_at": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/utc_time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "uses_in_window": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pinned": {
+          "type": "boolean"
+        },
+        "verified": {
+          "enum": [
+            "none",
+            "size",
+            "size+sha256"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/typed_error"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "present"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "verified": {
+                "const": "size+sha256"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "failed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "error": {
+                "$ref": "common.schema.json#/$defs/typed_error"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "model_list": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "models",
+        "cache"
+      ],
+      "properties": {
+        "kind": {
+          "const": "model-list"
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/model"
+          }
+        },
+        "cache": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/cache_entry"
+          }
+        }
+      }
+    }
+  },
+  "x-examples": {
+    "valid": [
+      {
+        "schema_version": 2,
+        "document_id": "storage",
+        "revision": 1,
+        "updated_at": "2026-10-02T00:00:00Z",
+        "stores": [
+          {
+            "store_id": "models",
+            "host_id": "host-1",
+            "kind": "model-store",
+            "root_ref": "model-store",
+            "capacity_bytes": 1700000000000,
+            "per_principal_bytes": null,
+            "retention_s": null,
+            "wipe": "never"
+          },
+          {
+            "store_id": "cache-host-0",
+            "host_id": "host-0",
+            "kind": "model-cache",
+            "root_ref": "model-cache",
+            "capacity_bytes": 500000000000,
+            "per_principal_bytes": null,
+            "retention_s": null,
+            "wipe": "never"
+          },
+          {
+            "store_id": "scratch-host-1",
+            "host_id": "host-1",
+            "kind": "scratch",
+            "root_ref": "scratch",
+            "capacity_bytes": null,
+            "per_principal_bytes": 107374182400,
+            "retention_s": 604800,
+            "wipe": "after-retention"
+          }
+        ],
+        "models": [
+          {
+            "model_id": "small-q4",
+            "revision": 1,
+            "format": "gguf",
+            "store_id": "models",
+            "files": [
+              {
+                "relpath": "small/small-q4.gguf",
+                "bytes": 5400000000,
+                "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+              }
+            ],
+            "total_bytes": 5400000000,
+            "vram_hint_bytes": 7000000000,
+            "pin": [],
+            "license_note": "Apache-2.0 weights"
+          }
+        ],
+        "cache_policy": {
+          "eviction": "lru-unpinned-unpopular-first",
+          "popular_window_s": 604800,
+          "popular_min_uses": 3,
+          "min_free_bytes": 50000000000,
+          "verify": "size+sha256"
+        }
+      },
+      {
+        "kind": "cache-entry",
+        "host_id": "host-0",
+        "model": {
+          "model_id": "small-q4",
+          "revision": 1
+        },
+        "state": "present",
+        "bytes_present": 5400000000,
+        "last_used_at": "2026-10-02T00:00:00Z",
+        "uses_in_window": 4,
+        "pinned": false,
+        "verified": "size+sha256",
+        "error": null
+      }
+    ],
+    "invalid": [
+      {
+        "kind": "cache-entry",
+        "host_id": "host-0",
+        "model": {
+          "model_id": "small-q4",
+          "revision": 1
+        },
+        "state": "present",
+        "bytes_present": 0,
+        "last_used_at": null,
+        "uses_in_window": 0,
+        "pinned": false,
+        "verified": "none",
+        "error": null
+      },
+      {
+        "schema_version": 2,
+        "document_id": "storage",
+        "revision": 1,
+        "updated_at": "2026-10-02T00:00:00Z",
+        "stores": [],
+        "models": [
+          {
+            "model_id": "x",
+            "revision": 1,
+            "format": "gguf",
+            "store_id": "models",
+            "files": [
+              {
+                "relpath": "../etc/passwd",
+                "bytes": 1,
+                "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+              }
+            ],
+            "total_bytes": 1,
+            "vram_hint_bytes": null,
+            "pin": [],
+            "license_note": null
+          }
+        ],
+        "cache_policy": {
+          "eviction": "lru-unpinned-unpopular-first",
+          "popular_window_s": 604800,
+          "popular_min_uses": 3,
+          "min_free_bytes": 0,
+          "verify": "size+sha256"
+        }
+      },
+      {
+        "kind": "cache-entry",
+        "host_id": "host-0",
+        "model": {
+          "model_id": "small-q4",
+          "revision": 1
+        },
+        "state": "present",
+        "bytes_present": 5400000000,
+        "last_used_at": null,
+        "uses_in_window": 0,
+        "pinned": false,
+        "verified": "size",
+        "error": null
+      }
+    ]
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/template.schema.json",
+  "title": "Flightctl workload templates v2",
+  "description": "NEW (TARGET-MODEL s4; RunPod/Vast template idea, no code). A template is what runs: argv with typed whole-token parameters (no shell, no string interpolation inside a token), model references resolved through the model store/cache, VRAM need, compatible lane tiers, an optional health check (endpoints), and the acceptable-use pipeline it falls under. Seeded from the site's existing model table. Containers are reserved for later (kind 'container' is rejected in R1).",
+  "oneOf": [{ "$ref": "#/$defs/document" }],
+  "$defs": {
+    "param": {
+      "type": "object", "additionalProperties": false, "required": ["name", "type", "required", "default", "allowed"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$" },
+        "type": { "enum": ["string", "integer", "number", "boolean", "model", "port", "relpath"] },
+        "required": { "type": "boolean" },
+        "default": {},
+        "allowed": { "anyOf": [{ "type": "array", "minItems": 1 }, { "type": "null" }] }
+      }
+    },
+    "argv_token": {
+      "description": "Either a literal or exactly one parameter reference of the form {param}. Mixed text like 'x{param}' is invalid: a parameter is always a whole argv element.",
+      "type": "string", "maxLength": 4096,
+      "anyOf": [{ "pattern": "^[^{}]*$" }, { "pattern": "^\\{[a-z][a-z0-9_]{0,31}\\}$" }]
+    },
+    "template": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["template_id", "version", "kind", "argv", "params", "env", "model_params", "vram_required_bytes", "tiers", "access_modes", "health", "pipeline_ref", "default_max_s", "user_argv"],
+      "properties": {
+        "template_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "kind": { "enum": ["llama-server", "python-venv", "command"] },
+        "argv": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/argv_token" } },
+        "params": { "type": "array", "items": { "$ref": "#/$defs/param" } },
+        "env": { "type": "object", "propertyNames": { "pattern": "^[A-Z][A-Z0-9_]{0,63}$" }, "additionalProperties": { "$ref": "#/$defs/argv_token" } },
+        "model_params": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$" }, "description": "Params of type 'model'; each is resolved to a cached file path on the lane host by 'stage' before 'start'." },
+        "vram_required_bytes": { "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+        "tiers": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "common.schema.json#/$defs/short_identifier" } },
+        "access_modes": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["job", "endpoint", "session"] } },
+        "health": { "anyOf": [{ "type": "object", "additionalProperties": false, "required": ["kind", "port_param", "path", "timeout_s"], "properties": { "kind": { "const": "http" }, "port_param": { "type": "string" }, "path": { "type": "string", "pattern": "^/" }, "timeout_s": { "type": "integer", "minimum": 1 } } }, { "type": "null" }] },
+        "pipeline_ref": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "default_max_s": { "$ref": "common.schema.json#/$defs/positive_duration_s" },
+        "user_argv": { "enum": ["forbidden", "append"], "description": "append = the job may add extra argv elements after the template argv (still no shell)." }
+      }
+    },
+    "document": {
+      "type": "object", "additionalProperties": false, "required": ["schema_version", "document_id", "revision", "updated_at", "templates"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "document_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "updated_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "templates": { "type": "array", "items": { "$ref": "#/$defs/template" } }
+      }
+    }
+  },
+  "x-examples": {
+    "valid": [
+      { "schema_version": 2, "document_id": "templates", "revision": 1, "updated_at": "2026-10-02T00:00:00Z",
+        "templates": [{ "template_id": "llama-chat", "version": "1.0.0", "kind": "llama-server", "argv": ["{server_bin}", "--host", "127.0.0.1", "--port", "{port}", "-m", "{model}", "-c", "{ctx}"],
+          "params": [{ "name": "server_bin", "type": "relpath", "required": true, "default": "bin/llama-server", "allowed": null }, { "name": "port", "type": "port", "required": true, "default": 8311, "allowed": null }, { "name": "model", "type": "model", "required": true, "default": null, "allowed": null }, { "name": "ctx", "type": "integer", "required": false, "default": 32768, "allowed": null }],
+          "env": {}, "model_params": ["model"], "vram_required_bytes": 14000000000, "tiers": ["small"], "access_modes": ["endpoint", "job"],
+          "health": { "kind": "http", "port_param": "port", "path": "/health", "timeout_s": 600 }, "pipeline_ref": "chat", "default_max_s": 14400, "user_argv": "forbidden" }] }
+    ],
+    "invalid": [
+      { "schema_version": 2, "document_id": "templates", "revision": 1, "updated_at": "2026-10-02T00:00:00Z",
+        "templates": [{ "template_id": "bad", "version": "1.0.0", "kind": "command", "argv": ["sh", "-c", "run --model=/{model}"], "params": [], "env": {}, "model_params": [], "vram_required_bytes": null, "tiers": ["small"], "access_modes": ["job"], "health": null, "pipeline_ref": "batch", "default_max_s": 600, "user_argv": "forbidden" }] },
+      { "schema_version": 2, "document_id": "templates", "revision": 1, "updated_at": "2026-10-02T00:00:00Z",
+        "templates": [{ "template_id": "img", "version": "1.0.0", "kind": "container", "argv": ["x"], "params": [], "env": {}, "model_params": [], "vram_required_bytes": null, "tiers": ["small"], "access_modes": ["job"], "health": null, "pipeline_ref": "batch", "default_max_s": 600, "user_argv": "forbidden" }] }
+    ]
+  }
+}

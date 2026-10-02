@@ -1,0 +1,679 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/policy.schema.json",
+  "title": "Flightctl site policy v2",
+  "description": "SPLIT from common-v1 policy. Policy is data: every key the authority reads is defined here (Grok finding 6 / G18). Quotas are a separate confirmed document referenced by hash. Decided constants from plan r4 stay const.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "policy_id",
+    "revision",
+    "updated_at",
+    "purpose_rules",
+    "content_rules",
+    "timing",
+    "lease",
+    "quotas",
+    "approval_matrix",
+    "power",
+    "thermal",
+    "shadow",
+    "security_hooks",
+    "work"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "common.schema.json#/$defs/schema_version"
+    },
+    "policy_id": {
+      "$ref": "common.schema.json#/$defs/short_identifier"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "updated_at": {
+      "$ref": "common.schema.json#/$defs/utc_time"
+    },
+    "purpose_rules": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/identifier"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "content_rules": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/identifier"
+      },
+      "uniqueItems": true
+    },
+    "timing": {
+      "description": "Decided values (plan r4). Unchanged from v1.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_clock_skew_s",
+        "executor_beat_s",
+        "protected_stale_s",
+        "preemptible_stale_s",
+        "grace_service_s",
+        "grace_resident_s",
+        "grace_standby_s",
+        "queue_refresh_s",
+        "queue_expiry_s",
+        "booking_horizon_s",
+        "minimum_booking_s",
+        "booking_early_claim_s",
+        "booking_checkin_s",
+        "booking_warning_s",
+        "booking_completion_s"
+      ],
+      "properties": {
+        "max_clock_skew_s": {
+          "const": 30
+        },
+        "executor_beat_s": {
+          "const": 60
+        },
+        "protected_stale_s": {
+          "const": 600
+        },
+        "preemptible_stale_s": {
+          "const": 180
+        },
+        "grace_service_s": {
+          "const": 120
+        },
+        "grace_resident_s": {
+          "const": 120
+        },
+        "grace_standby_s": {
+          "const": 300
+        },
+        "queue_refresh_s": {
+          "const": 60
+        },
+        "queue_expiry_s": {
+          "const": 600
+        },
+        "booking_horizon_s": {
+          "const": 1209600
+        },
+        "minimum_booking_s": {
+          "const": 900
+        },
+        "booking_early_claim_s": {
+          "const": 900
+        },
+        "booking_checkin_s": {
+          "const": 900
+        },
+        "booking_warning_s": {
+          "const": 600
+        },
+        "booking_completion_s": {
+          "const": 600
+        }
+      }
+    },
+    "lease": {
+      "description": "G03/Grok 2. Rolling expiry inside a hard ceiling. Renew sets expiry = min(now + ttl_s, approved_max_end) and SUCCEEDS while now < approved_max_end. Ceiling (round 2, N3): ceiling_s = min(lane rules.max_lease_s, quota_max_lease_s if the principal's effective quota sets max_lease_s else class_ceiling_s[class], absolute_max_s). An explicit quota max_lease_s REPLACES the class default (it may raise it, e.g. a reviewed 12 h unattended workload), but never exceeds the lane cap or absolute_max_s. The requested ttl is never the ceiling. Executable oracle: tests/contracts_v2/validation.py lease_ceiling().",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "default_ttl_s",
+        "class_ceiling_s",
+        "renew_mode",
+        "holder_heartbeat_s",
+        "holder_stale_s",
+        "legacy_wait_default_s",
+        "client_wait_default_s",
+        "absolute_max_s",
+        "replay_window_s"
+      ],
+      "properties": {
+        "default_ttl_s": {
+          "$ref": "common.schema.json#/$defs/positive_duration_s"
+        },
+        "class_ceiling_s": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operator",
+            "booked",
+            "batch",
+            "service",
+            "resident",
+            "standby"
+          ],
+          "properties": {
+            "operator": {
+              "$ref": "common.schema.json#/$defs/positive_duration_s"
+            },
+            "booked": {
+              "$ref": "common.schema.json#/$defs/positive_duration_s"
+            },
+            "batch": {
+              "$ref": "common.schema.json#/$defs/positive_duration_s"
+            },
+            "service": {
+              "$ref": "common.schema.json#/$defs/positive_duration_s"
+            },
+            "resident": {
+              "$ref": "common.schema.json#/$defs/positive_duration_s"
+            },
+            "standby": {
+              "$ref": "common.schema.json#/$defs/positive_duration_s"
+            }
+          }
+        },
+        "renew_mode": {
+          "const": "rolling-within-ceiling"
+        },
+        "holder_heartbeat_s": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 300
+        },
+        "holder_stale_s": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 1800,
+          "description": "ACCEPTANCE T05 target: 120 (two missed heartbeats)."
+        },
+        "legacy_wait_default_s": {
+          "const": 7200,
+          "description": "lanes.sh wait default 120 min, kept for the legacy shim."
+        },
+        "client_wait_default_s": {
+          "const": 600,
+          "description": "New CLI wait default 10 min (P3 brief)."
+        },
+        "absolute_max_s": {
+          "const": 43200,
+          "description": "plan r4 operator maximum (12 h)."
+        },
+        "replay_window_s": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 3600,
+          "description": "D-token-4 (round 4, Sol 6 r3): raw lease tokens are NEVER stored in the main authority database: leases keep token_sha256 and the idempotency record keeps the response with the token REMOVED. The raw token needed for a same-request replay lives in a separate replay store (its own SQLite file, mode 0600, secure_delete=ON, WAL truncated after each scrub) that is excluded from every backup and scrubbed when this window ends. A backup taken during the window therefore never contains a token. Proof: tests/contracts_v2/test_v2_round4.py (backup taken while a token is live, examined after its deadline; negative control with the round-3 single-file design). Round 5 (Sol 6 r4) crash consistency: a grant commits the replay row FIRST, then the lease and token-free idempotency record in the main DB (source of truth); startup deletes replay rows with no committed idempotency record. Restore: if the main record exists but the replay row does not (main restored from backup, or replay store lost) within the window, the retry gets 409 replay_unavailable (no token, no second grant); the orphaned lease goes through holder-lost handling (stop + emptiness proof) before the lane frees, and the client acquires again with a new request_id. Reference: SplitStore in tests/contracts_v2/validation.py. Round 6 (Sol 6 r5): the token-free replay_deadline is stored in the MAIN idempotency record. A missing replay row is therefore read by the main DB alone: before replay_deadline it means the replay store was lost (409 replay_unavailable + holder-lost); at or after replay_deadline it is the routine scrub and the retry gets the specified grant replay with token null."
+        }
+      }
+    },
+    "quotas": {
+      "$ref": "common.schema.json#/$defs/config_ref"
+    },
+    "approval_matrix": {
+      "description": "Which override actions need what. the owner 2 Oct: FIDO2 approval for reordering/pre-empting someone else's work only when it is equal priority and being pre-empted. Evaluation: the most specific matching row wins (target-own < target-other < target-other-lower-class|target-other-equal-class|target-other-protected); no matching row = operator+fido2 (fail closed). Default also keeps plan r4's rule that stopping someone else's PROTECTED work with no beneficiary needs a signed approval (decision D-appr-1). Encoded as data so the owner can change it without code.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "when",
+          "requires"
+        ],
+        "properties": {
+          "action": {
+            "enum": [
+              "op-stop",
+              "op-extend",
+              "op-preempt",
+              "queue-reorder",
+              "queue-remove-other",
+              "booking-cancel-other",
+              "booking-displace",
+              "quarantine-clear",
+              "operator-admission",
+              "pipeline",
+              "lane-drain",
+              "window-set",
+              "principal-disable",
+              "token-revoke-other",
+              "config-activate",
+              "host-wake"
+            ]
+          },
+          "when": {
+            "enum": [
+              "always",
+              "target-own",
+              "target-other",
+              "target-other-equal-class",
+              "target-other-lower-class",
+              "target-other-protected"
+            ]
+          },
+          "requires": {
+            "enum": [
+              "none",
+              "operator",
+              "operator+fido2"
+            ]
+          }
+        }
+      }
+    },
+    "power": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "wake_on_acquire",
+        "wake_retry_after_s",
+        "wake_rate_limit_s",
+        "reads_never_wake",
+        "quarantine_hold_awake_s",
+        "quarantine_realert_s"
+      ],
+      "properties": {
+        "wake_on_acquire": {
+          "type": "boolean"
+        },
+        "wake_retry_after_s": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60
+        },
+        "wake_rate_limit_s": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 3600
+        },
+        "reads_never_wake": {
+          "const": true
+        },
+        "quarantine_hold_awake_s": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "WAKE-BRIEF Q4. null = a quarantined lane keeps its inhibitor until cleared."
+        },
+        "quarantine_realert_s": {
+          "type": "integer",
+          "minimum": 600,
+          "maximum": 86400,
+          "description": "D-pow-1: while a quarantined lane holds its host awake, re-send the operator 'quarantine' notification at this interval."
+        }
+      }
+    },
+    "thermal": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tier",
+          "max_temp_c",
+          "act"
+        ],
+        "properties": {
+          "tier": {
+            "$ref": "common.schema.json#/$defs/short_identifier"
+          },
+          "max_temp_c": {
+            "type": "integer",
+            "minimum": 40,
+            "maximum": 110
+          },
+          "act": {
+            "enum": [
+              "refuse-new",
+              "alert"
+            ],
+            "description": "Never a kill rule."
+          }
+        }
+      }
+    },
+    "shadow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clean_days_required",
+        "divergence_classes_blocking",
+        "min_path_counts",
+        "mirror_errors_block"
+      ],
+      "properties": {
+        "clean_days_required": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        },
+        "divergence_classes_blocking": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "grant-mismatch",
+              "holder-mismatch",
+              "release-mismatch",
+              "occupancy-mismatch",
+              "would-quarantine",
+              "would-wake-failed",
+              "adapter-error"
+            ]
+          }
+        },
+        "min_path_counts": {
+          "description": "N4: minimum mirrored decisions per path in the clean window before a flip; paths that do not occur naturally are exercised by the gauge through legacy lanes.sh with a dummy holder (legacy stays authoritative).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "acquire",
+            "renew",
+            "release",
+            "wait",
+            "busy",
+            "status"
+          ],
+          "properties": {
+            "acquire": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "renew": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "release": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "wait": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "busy": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "status": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "mirror_errors_block": {
+          "const": true
+        }
+      }
+    },
+    "security_hooks": {
+      "$ref": "../common.schema.json#/$defs/policy/properties/security_hooks"
+    },
+    "work": {
+      "description": "Round 4 (Sol 6 r3 B5). PARENT = an active lease held by a human principal on a host. CHILD = a session or job that names that lease_id (its own lease). Rule: at most ONE active parent per (human principal, host); children of that parent never consume a second slot (a session under one's own lease is allowed); a child naming any other lease, or a second parent, is refused 409 account_busy. Atomicity: the authority inserts the parent under a UNIQUE (principal_id, host_id) index for active parents inside the admission transaction; the helper records the parent lease_id per account under an exclusive lock (O_EXCL claim file) and accepts session-open/unit-start only for that lease_id. Both layers key on the same parent lease_id, so under concurrent requests exactly one parent wins in both. Agents are not limited (per-unit isolation). Oracles: admit_parent(), helper_claim(), work_admission(). Round 5: helper session-open and friend unit-start carry --parent-lease; the claim is released only after a proven close of the parent (claim-release) Round 6: a claim is removed ONLY by claim-release with that close proof (race-safe tombstone rename). claim-reconcile during A8 never removes: a claim the authority omits becomes 'orphaned-quarantined' (account blocked, operator alerted) and one naming another parent is a 'conflict'. Round 7 (Sol 6 r6): quarantine has an admission effect: a quarantined account accepts no new parent and no child, including children of the old parent, until an operator claim-clear with the close proof. Round 8 (Sol 6 r7): the helper states the same single rule; claim-clear is the operator's separate root-only program (helper-config x-operator-clear).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_active_parents_per_human_per_host",
+        "children_share_parent_slot"
+      ],
+      "properties": {
+        "max_active_parents_per_human_per_host": {
+          "const": 1
+        },
+        "children_share_parent_slot": {
+          "const": true
+        }
+      }
+    }
+  },
+  "x-examples": {
+    "valid": [
+      {
+        "schema_version": 2,
+        "policy_id": "default",
+        "revision": 1,
+        "updated_at": "2026-10-02T00:00:00Z",
+        "purpose_rules": [
+          "purpose-required",
+          "acceptable-use-current"
+        ],
+        "content_rules": [
+          "content-policy-current"
+        ],
+        "timing": {
+          "max_clock_skew_s": 30,
+          "executor_beat_s": 60,
+          "protected_stale_s": 600,
+          "preemptible_stale_s": 180,
+          "grace_service_s": 120,
+          "grace_resident_s": 120,
+          "grace_standby_s": 300,
+          "queue_refresh_s": 60,
+          "queue_expiry_s": 600,
+          "booking_horizon_s": 1209600,
+          "minimum_booking_s": 900,
+          "booking_early_claim_s": 900,
+          "booking_checkin_s": 900,
+          "booking_warning_s": 600,
+          "booking_completion_s": 600
+        },
+        "lease": {
+          "default_ttl_s": 14400,
+          "class_ceiling_s": {
+            "operator": 43200,
+            "booked": 43200,
+            "batch": 14400,
+            "service": 86400,
+            "resident": 86400,
+            "standby": 14400
+          },
+          "renew_mode": "rolling-within-ceiling",
+          "holder_heartbeat_s": 60,
+          "holder_stale_s": 120,
+          "legacy_wait_default_s": 7200,
+          "client_wait_default_s": 600,
+          "absolute_max_s": 43200,
+          "replay_window_s": 3600
+        },
+        "quotas": {
+          "document_id": "quotas",
+          "revision": 1,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "approval_matrix": [
+          {
+            "action": "op-preempt",
+            "when": "target-other-equal-class",
+            "requires": "operator+fido2"
+          },
+          {
+            "action": "op-preempt",
+            "when": "target-other-lower-class",
+            "requires": "operator"
+          },
+          {
+            "action": "queue-reorder",
+            "when": "target-other-equal-class",
+            "requires": "operator+fido2"
+          },
+          {
+            "action": "queue-reorder",
+            "when": "target-other-lower-class",
+            "requires": "operator"
+          },
+          {
+            "action": "op-stop",
+            "when": "target-other-protected",
+            "requires": "operator+fido2"
+          },
+          {
+            "action": "op-stop",
+            "when": "target-other",
+            "requires": "operator"
+          },
+          {
+            "action": "op-extend",
+            "when": "target-other",
+            "requires": "operator"
+          },
+          {
+            "action": "quarantine-clear",
+            "when": "always",
+            "requires": "operator"
+          },
+          {
+            "action": "operator-admission",
+            "when": "always",
+            "requires": "operator+fido2"
+          }
+        ],
+        "power": {
+          "wake_on_acquire": true,
+          "wake_retry_after_s": 10,
+          "wake_rate_limit_s": 60,
+          "reads_never_wake": true,
+          "quarantine_hold_awake_s": null,
+          "quarantine_realert_s": 21600
+        },
+        "thermal": [
+          {
+            "tier": "pair-24g",
+            "max_temp_c": 88,
+            "act": "refuse-new"
+          }
+        ],
+        "shadow": {
+          "clean_days_required": 3,
+          "divergence_classes_blocking": [
+            "grant-mismatch",
+            "holder-mismatch",
+            "release-mismatch",
+            "occupancy-mismatch",
+            "would-quarantine",
+            "adapter-error"
+          ],
+          "min_path_counts": {
+            "acquire": 10,
+            "renew": 5,
+            "release": 10,
+            "wait": 3,
+            "busy": 3,
+            "status": 20
+          },
+          "mirror_errors_block": true
+        },
+        "security_hooks": {
+          "supported_schemes": [
+            "ssh-sk",
+            "webauthn"
+          ],
+          "unsupported_supplied_action": "deny"
+        },
+        "work": {
+          "max_active_parents_per_human_per_host": 1,
+          "children_share_parent_slot": true
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "schema_version": 2,
+        "policy_id": "default",
+        "revision": 1,
+        "updated_at": "2026-10-02T00:00:00Z",
+        "purpose_rules": [
+          "purpose-required"
+        ],
+        "content_rules": [],
+        "timing": {
+          "max_clock_skew_s": 30,
+          "executor_beat_s": 60,
+          "protected_stale_s": 600,
+          "preemptible_stale_s": 180,
+          "grace_service_s": 120,
+          "grace_resident_s": 120,
+          "grace_standby_s": 300,
+          "queue_refresh_s": 60,
+          "queue_expiry_s": 600,
+          "booking_horizon_s": 1209600,
+          "minimum_booking_s": 900,
+          "booking_early_claim_s": 900,
+          "booking_checkin_s": 900,
+          "booking_warning_s": 600,
+          "booking_completion_s": 600
+        },
+        "lease": {
+          "default_ttl_s": 14400,
+          "class_ceiling_s": {
+            "operator": 43200,
+            "booked": 43200,
+            "batch": 14400,
+            "service": 86400,
+            "resident": 86400,
+            "standby": 14400
+          },
+          "renew_mode": "additive-to-max",
+          "holder_heartbeat_s": 60,
+          "holder_stale_s": 120,
+          "legacy_wait_default_s": 7200,
+          "client_wait_default_s": 600,
+          "absolute_max_s": 43200,
+          "replay_window_s": 3600
+        },
+        "quotas": {
+          "document_id": "quotas",
+          "revision": 1,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "approval_matrix": [
+          {
+            "action": "op-stop",
+            "when": "always",
+            "requires": "operator"
+          }
+        ],
+        "power": {
+          "wake_on_acquire": true,
+          "wake_retry_after_s": 10,
+          "wake_rate_limit_s": 60,
+          "reads_never_wake": true,
+          "quarantine_hold_awake_s": null,
+          "quarantine_realert_s": 21600
+        },
+        "thermal": [],
+        "shadow": {
+          "clean_days_required": 3,
+          "divergence_classes_blocking": [
+            "adapter-error"
+          ],
+          "min_path_counts": {
+            "acquire": 10,
+            "renew": 5,
+            "release": 10,
+            "wait": 3,
+            "busy": 3,
+            "status": 20
+          },
+          "mirror_errors_block": true
+        },
+        "security_hooks": {
+          "supported_schemes": [
+            "ssh-sk"
+          ],
+          "unsupported_supplied_action": "deny"
+        },
+        "work": {
+          "max_active_parents_per_human_per_host": 1,
+          "children_share_parent_slot": true
+        }
+      }
+    ]
+  }
+}

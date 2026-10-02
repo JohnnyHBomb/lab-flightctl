@@ -1,0 +1,82 @@
+{
+  "schema_version": 2,
+  "document_id": "accounts",
+  "revision": 1,
+  "updated_at": "2026-10-02T00:00:00Z",
+  "principals": [
+    {
+      "principal_id": "owner",
+      "principal": {
+        "site_id": "site-a",
+        "tenant_id": "site-a",
+        "issuer": "tailnet-a",
+        "subject": "owner"
+      },
+      "kind": "operator",
+      "display_name": "Owner",
+      "groups": [
+        "operators"
+      ],
+      "sponsor": null,
+      "external_ids": [
+        {
+          "kind": "tailnet-login",
+          "value": "owner@example"
+        }
+      ],
+      "allowed_peers": [],
+      "unix_user": null,
+      "contact": {
+        "email": "owner@example.org",
+        "slack": "U0123ABCD"
+      },
+      "enabled": true,
+      "aup_accepted_at": null
+    },
+    {
+      "principal_id": "review-agent",
+      "principal": {
+        "site_id": "site-a",
+        "tenant_id": "site-a",
+        "issuer": "tailnet-a",
+        "subject": "review-agent"
+      },
+      "kind": "agent",
+      "display_name": "Review agent",
+      "groups": [
+        "agents"
+      ],
+      "sponsor": "owner",
+      "external_ids": [],
+      "allowed_peers": [
+        {
+          "kind": "tailnet-node",
+          "value": "host-0.example"
+        }
+      ],
+      "unix_user": "fc-agent",
+      "contact": {
+        "email": null,
+        "slack": null
+      },
+      "enabled": true,
+      "aup_accepted_at": null
+    }
+  ],
+  "groups": [
+    {
+      "group_id": "operators",
+      "display_name": "Operators",
+      "roles": [
+        "operator"
+      ]
+    },
+    {
+      "group_id": "agents",
+      "display_name": "Agents",
+      "roles": [
+        "agent"
+      ]
+    }
+  ]
+}

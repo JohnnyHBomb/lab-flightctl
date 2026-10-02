@@ -1,0 +1,75 @@
+{
+  "schema_version": 2,
+  "document_id": "templates",
+  "revision": 1,
+  "updated_at": "2026-10-02T00:00:00Z",
+  "templates": [
+    {
+      "template_id": "llama-chat",
+      "version": "1.0.0",
+      "kind": "llama-server",
+      "argv": [
+        "{server_bin}",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "{port}",
+        "-m",
+        "{model}",
+        "-c",
+        "{ctx}"
+      ],
+      "params": [
+        {
+          "name": "server_bin",
+          "type": "relpath",
+          "required": true,
+          "default": "bin/llama-server",
+          "allowed": null
+        },
+        {
+          "name": "port",
+          "type": "port",
+          "required": true,
+          "default": 8311,
+          "allowed": null
+        },
+        {
+          "name": "model",
+          "type": "model",
+          "required": true,
+          "default": null,
+          "allowed": null
+        },
+        {
+          "name": "ctx",
+          "type": "integer",
+          "required": false,
+          "default": 32768,
+          "allowed": null
+        }
+      ],
+      "env": {},
+      "model_params": [
+        "model"
+      ],
+      "vram_required_bytes": 14000000000,
+      "tiers": [
+        "small"
+      ],
+      "access_modes": [
+        "endpoint",
+        "job"
+      ],
+      "health": {
+        "kind": "http",
+        "port_param": "port",
+        "path": "/health",
+        "timeout_s": 600
+      },
+      "pipeline_ref": "chat",
+      "default_max_s": 14400,
+      "user_argv": "forbidden"
+    }
+  ]
+}

@@ -1,0 +1,74 @@
+GATES: the per-packet proof gate for lab-flightctl v2 (contract set v2 revision 2, 2 Oct 2026)
+
+FLOW (the lab's pstack-derived workflow, "poteto mode")
+  1 contract freeze (contracts/v2, this branch)  ->  2 docs (README/ADAPTERS/LEGACY-COMPAT/MIGRATION/SLICES)
+  ->  3 independent cross-provider review (Sol 6) of contracts + plan; findings resolved and recorded
+      (round 1 -> RESPONSE-TO-SOL6.tsv)
+  ->  4 implementers deliver PACKET BY PACKET (each packet is one slice brief in SLICES.md, raced across the
+        seats it names; one packet in flight per dependency chain)
+  ->  5 GAUGE PROVES each packet against the gates below, on the real artefact, before the next packet starts
+  ->  6 the harness is picked (blind review ranks the race entries; the winner merges; harvests recorded)
+  No packet is "done" on narrative. A gate that was not run is a FAIL, not a pass. A skipped check is not acceptance.
+
+GATES EVERY PACKET MUST PASS (gauge reruns each one itself and files the evidence)
+  G0 BASE-FAIL    Every named acceptance test the packet adds FAILS on the base commit (or is an xfail(strict) repro
+                  that turns into a pass). Evidence: base run output with the named tests failing.
+  G1 RACE GATE    Committed, clean tree; report present; every named test defined under its exact name; scope
+                  respected; <= ~400 changed lines and <= 5 named tests unless the brief was split for proof (lesson 56;
+                  the cap never justifies a half-proven packet). FROZEN: no pre-existing test is changed, skipped or
+                  weakened EXCEPT under G1b. Evidence: gates/race_gate.py output.
+  G1b MIGRATION   EXECUTABLE (round 3): python tools/migration_gate.py --base <base> --head <head> --packet <ID> (exit 0
+                  required; its logic is tested in tests/contracts_v2/test_v2_round3.py incl. failure modes and this
+                  branch's real diff; round 4/5: a rewrite counts only if its replacement is a COLLECTED pytest node at head in a test file this
+                  packet added or modified, or exactly the path::name node the map names,
+                  never a name in a comment). It lists every pre-existing test file the diff touches (git diff base..head -- tests/
+                  plus scripted deletions) and checks each against docs/v2/migration-map.tsv rows whose packet is this
+                  packet. Touching any other pre-existing test = FAIL. For each 'rewrite' row the named replacement test
+                  exists in this packet, fails on base (G0) and passes on head; for each 'delete' row the obligation's
+                  CONFORMANCE.tsv row names its new home and that home's test passes. Evidence: the touched-tests list
+                  with the matching map rows.
+  G2 LAB-CI FULL  lab-ci runs the repo's own workflow job "full" (EVERY suite: authority, executor, client, chat,
+                  roster (until B3), discovery, contracts, contracts_v2 incl. the plan check, integration, conformance
+                  fakes) in its Linux container on a lab Docker host, plus portability and the external denylist scan.
+                  Hosted CI runs the same job. Linux only: no Windows or macOS job anywhere. Evidence: lab-ci
+                  summary.json + log, hosted run URL, both on the packet's head commit; pytest -o addopts="".
+  G3 REAL TWIN    For every port the packet delivers (SLICES.md 'Ports' column) the gauge runs the conformance
+  (STRICT)        suite on a real host of every host type the port serves:
+                    FLIGHTCTL_CONFORMANCE_STRICT=1 FLIGHTCTL_CONFORMANCE_PORTS=<ports> \
+                    FLIGHTCTL_CONFORMANCE_TARGET=<host> FLIGHTCTL_CONFORMANCE_EVIDENCE=<dir> pytest tests/conformance
+                  Strict mode makes a missing real twin (a setup ERROR, never xfail), an unregistered port or any
+                  undeclared skip a FAILURE (tested: test_b7_strict_missing_real_twin_fails_the_run); cases
+                  declared fake_only/not_dryrun are recorded as "n/a". Evidence: the dated conformance-<port>-<impl>-
+                  <host>-<stamp>.json files with "strict": true and "proven": true for every real/dryrun twin.
+                  Each case is attributed to its own port (port marker), never to a module. Read-only probes need no
+                  lane; anything that starts a process on a GPU host runs under a lane held through the CURRENT
+                  authority (legacy lanes.sh until that lane is live).
+  G4 REAL TIME    At least one test per seam the packet touches uses real time and real processes (marker realtime):
+                  real subprocess/pipe/socket/TLS/HTTP, real monotonic clock, no FakeClock. Evidence: its output with
+                  wall-clock durations.
+  G5 GAUGE NOTE   gauge writes PROOF-<packet>.txt in the packet's research dir: commands run (with cwd), results,
+                  evidence paths, deviations, and the verdict PROVEN / NOT PROVEN. Decision trail via decision-log.sh.
+
+ADDITIONAL GATE FOR ASSEMBLY PACKETS (A-ASM, B-ASM, C-ASM)
+  G6 LIVE ACCEPTANCE  The preregistered acceptance tests LISTED FOR THAT ASSEMBLY in SLICES.md ("Live acceptance tests
+                  runnable at each assembly") run on the real hosts exactly as written; a test listed for an assembly
+                  that cannot run there is a plan defect, not a skip. results.tsv has expected/observed/pass and evidence
+                  paths (event log excerpts, nvidia-smi before/after, systemd-inhibit --list, journal lines). Changing an
+                  expectation after a run counts as a new test. Before any lane flips live: the strict G3 evidence for
+                  every port in that assembly's prerequisite row, the shadow coverage report (policy.shadow.
+                  min_path_counts met, zero mirror errors, clean-days counter), the inhibitor proven while the legacy
+                  fence still stands (A-ASM step 4), and a recorded rollback rehearsal.
+
+GAUGE CHECKLIST (copy into each PROOF file)
+  [ ] base commit and head commit recorded; diff read by the gauge (standing order 8)
+  [ ] G0 base-fail output   [ ] G1 race gate   [ ] G1b touched-tests vs migration-map rows
+  [ ] G2 lab-ci full + hosted CI on head   [ ] G3 strict conformance evidence per delivered port and host type
+  [ ] G4 realtime test output
+  [ ] no lab hostnames/IPs/paths in repo files (tools/check_portability.py + external denylist)
+  [ ] report claims match the evidence (honesty check; a false claim is a fault)
+  [ ] verdict and next packet unblocked (or not)
+
+WHO
+  implementers: the race seats named per packet (Opus as Exemplar, Luna-max, Sol 6 (sol6-max), ASH-27B Q4/Q8 + MTP,
+  Qwen3.8-27B + MTP). gauge: a seat that did not author the packet (default: the lead; Astra or Grok as second gauge
+  for security packets A7, C2, C3, C7h, C9). Assembly packets: owned by the lead, never raced.

@@ -1,0 +1,847 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/gpu-probe.schema.json",
+  "title": "Flightctl GPU probe v2: inventory observation and occupancy observation",
+  "description": "SPLIT (Grok finding 3/4): the single v1 GPUProbe.inspect returned two incompatible shapes. v2 has InventoryProbe (what cards exist) and OccupancyProbe (who is on the lane's cards now), each with the REAL nvidia-smi query it parses (x-real-commands; field names measured on driver 610.57.04 with nvidia-smi --help-query-gpu / --help-query-compute-apps, 2 Oct). Any failure, timeout, '[N/A]'-only row or unparsable output is status 'unknown' with a reason: never empty, never free.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/inventory_observation"
+    },
+    {
+      "$ref": "#/$defs/occupancy_observation"
+    }
+  ],
+  "x-real-commands": {
+    "inventory": "nvidia-smi --query-gpu=index,uuid,pci.bus_id,name,memory.total,driver_version --format=csv,noheader,nounits",
+    "numa": "cat /sys/bus/pci/devices/<pci_bus_id normalised>/numa_node",
+    "occupancy_gpus": "nvidia-smi --query-gpu=uuid,memory.used,memory.total,utilization.gpu,temperature.gpu,power.draw,enforced.power.limit,clocks_event_reasons.hw_thermal_slowdown,clocks_event_reasons.sw_thermal_slowdown,ecc.errors.uncorrected.volatile.total --format=csv,noheader,nounits",
+    "occupancy_processes": "nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv,noheader,nounits",
+    "device_minor": "grep 'Device Minor' /proc/driver/nvidia/gpus/<pci_bus_id normalised>/information   (maps the card to /dev/nvidia<minor> for device-cgroup isolation; measured on driver 610.57.04, 2 Oct)",
+    "notes": "Values may be '[N/A]' or '[Not Supported]' (ECC on Titan RTX reads '[N/A]', measured): map to null for that field, never to zero. clocks_event_reasons.* print 'Active'/'Not Active' (measured). pci.bus_id prints an 8-digit uppercase domain; normalise to 4-digit lowercase. process_name is the FULL command line on driver 610 (measured: a browser GPU process line of ~900 characters) and may contain ', ': parse a process row as uuid, pid = first two fields and used_memory = LAST field; everything between is the name. Compute-apps lists compute contexts only: graphics/display memory shows in memory.used with no process row (measured: 529 MiB used, zero process rows on a display-driving card). Every command runs with a bounded timeout (default 10 s).",
+    "emptiness_rule": "Amendment 2 (Sol 6.1 cold review P1-1) replaces the size threshold. A lane is EMPTY only if: status ok; tenants empty; NO process attributed to the lease; the memory of noise processes sums to <= noise_cap_mib; and unexplained_mib < lane_noise_mib (graphics-only memory with no compute row). A process is NOISE only if its identity (owner uid, argv[0], context type G or C+G) matches the lane's noise_allowlist (noise_identity_ok); every other process is a TENANT whatever its size; unknown memory or identity is never noise. processes is PARTITIONED into lease / noise / external, and tenants == the external processes. occupancy_semantics() is the oracle; golden captures fix it. Rev 2: the context type is per (gpu_uuid, pid), never per pid.",
+    "occupancy_process_types": "nvidia-smi -q -d PIDS  (per process: 'Type' C, G or C+G and 'Used GPU Memory'; measured 2 Oct on driver 610.57.04: a desktop browser GPU process holds a 5 MiB C+G context on a compute card, compositor/terminal contexts are G and do not appear in --query-compute-apps)",
+    "process_identity": "stat /proc/<pid> (owner uid) and /proc/<pid>/cmdline (argv[0]); unreadable = null = never noise"
+  },
+  "$defs": {
+    "status": {
+      "enum": [
+        "ok",
+        "unknown"
+      ]
+    },
+    "inventory_device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "index",
+        "uuid",
+        "pci_bus_id",
+        "name",
+        "memory_total_mib",
+        "driver_version",
+        "numa_node",
+        "device_minor"
+      ],
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "uuid": {
+          "type": "string",
+          "pattern": "^GPU-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "pci_bus_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "memory_total_mib": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "driver_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "numa_node": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "device_minor": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "/proc/driver/nvidia/gpus/<bus>/information 'Device Minor' -> /dev/nvidia<minor>; null = unknown (device isolation for the lane is then refused)."
+        }
+      }
+    },
+    "inventory_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "host_id",
+        "observed_at",
+        "status",
+        "reason",
+        "vendor",
+        "devices"
+      ],
+      "properties": {
+        "kind": {
+          "const": "gpu-inventory"
+        },
+        "host_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "observed_at": {
+          "$ref": "common.schema.json#/$defs/utc_time"
+        },
+        "status": {
+          "$ref": "#/$defs/status"
+        },
+        "reason": {
+          "$ref": "common.schema.json#/$defs/nullable_text"
+        },
+        "vendor": {
+          "enum": [
+            "nvidia",
+            "none",
+            "unknown"
+          ]
+        },
+        "devices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/inventory_device"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "devices": {
+                "maxItems": 0
+              },
+              "vendor": {
+                "const": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "vendor": {
+                "const": "none"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "const": "ok"
+              },
+              "devices": {
+                "maxItems": 0
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "gpu_sample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "uuid",
+        "memory_used_mib",
+        "memory_total_mib",
+        "utilization_pct",
+        "temperature_c",
+        "power_draw_w",
+        "power_limit_w",
+        "thermal_slowdown",
+        "ecc_uncorrected"
+      ],
+      "properties": {
+        "uuid": {
+          "$ref": "#/$defs/inventory_device/properties/uuid"
+        },
+        "memory_used_mib": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "memory_total_mib": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "utilization_pct": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "temperature_c": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 130
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "power_draw_w": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "power_limit_w": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thermal_slowdown": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ecc_uncorrected": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "gpu_process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gpu_uuid",
+        "pid",
+        "process_name",
+        "used_memory_mib",
+        "attribution",
+        "uid",
+        "argv0",
+        "context_type"
+      ],
+      "properties": {
+        "gpu_uuid": {
+          "$ref": "#/$defs/inventory_device/properties/uuid"
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "process_name": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "used_memory_mib": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attribution": {
+          "description": "Set by the executor, not the probe: lease (inside the lease's unit cgroup or a registered holder pid), noise (an allow-listed desktop identity: noise_identity_ok, Amendment 2), external (anything else, WHATEVER its size).",
+          "enum": [
+            "unattributed",
+            "lease",
+            "noise",
+            "external"
+          ]
+        },
+        "uid": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Owner uid of /proc/<pid> (null = not readable: then never noise)."
+        },
+        "argv0": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 4096
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "argv[0] from /proc/<pid>/cmdline (null = not readable)."
+        },
+        "context_type": {
+          "anyOf": [
+            {
+              "enum": [
+                "C",
+                "G",
+                "C+G"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "nvidia-smi -q -d PIDS 'Type' (measured 2 Oct, driver 610.57.04: C, G, C+G). A pure compute 'C' context is never noise. Rev 2 (Sol 6.1 amd2): taken per DEVICE ENTRY (gpu_uuid, pid); the same pid can be C+G on one card and C on another."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "attribution": {
+                "const": "noise"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "used_memory_mib": {
+                "type": "integer"
+              },
+              "uid": {
+                "type": "integer"
+              },
+              "argv0": {
+                "type": "string"
+              },
+              "context_type": {
+                "enum": [
+                  "G",
+                  "C+G"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "occupancy_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "host_id",
+        "lane_id",
+        "observed_at",
+        "status",
+        "reason",
+        "expected_uuids",
+        "gpus",
+        "processes",
+        "tenants",
+        "noise",
+        "lane_memory_used_mib",
+        "thresholds",
+        "unexplained_mib",
+        "empty"
+      ],
+      "properties": {
+        "kind": {
+          "const": "gpu-occupancy"
+        },
+        "host_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "lane_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "observed_at": {
+          "$ref": "common.schema.json#/$defs/utc_time"
+        },
+        "status": {
+          "$ref": "#/$defs/status"
+        },
+        "reason": {
+          "$ref": "common.schema.json#/$defs/nullable_text"
+        },
+        "gpus": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/gpu_sample"
+          },
+          "description": "One sample per expected lane card (status ok)."
+        },
+        "processes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/gpu_process"
+          }
+        },
+        "tenants": {
+          "description": "Amendment 2: every process that is neither attributed to the lease nor an allow-listed desktop identity, WHATEVER its memory (a ~300 MiB stray CUDA context is a tenant: T10). Unknown memory or identity is never noise.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/gpu_process"
+          }
+        },
+        "noise": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/gpu_process"
+          }
+        },
+        "lane_memory_used_mib": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thresholds": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "lane_noise_mib",
+            "noise_cap_mib",
+            "noise_allowlist"
+          ],
+          "properties": {
+            "lane_noise_mib": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "noise_cap_mib": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Amendment 2: aggregate cap on the memory of allow-listed noise processes on the lane; above it the lane is not empty."
+            },
+            "noise_allowlist": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "argv0",
+                  "uid"
+                ],
+                "properties": {
+                  "argv0": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "uid": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              },
+              "description": "Amendment 2: approved desktop/display identities for this lane: argv[0] of /proc/<pid>/cmdline AND the owner uid of /proc/<pid>. An entry trusts that uid (argv[0] is forgeable only by its own processes); root and DynamicUser uids are never noise. Empty = nothing is noise."
+            }
+          }
+        },
+        "unexplained_mib": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Sum of memory.used over the lane's cards minus memory of lease-attributed and noise processes; null when status is unknown."
+        },
+        "empty": {
+          "type": "boolean",
+          "description": "The ONLY GPU-empty proof (x-real-commands.emptiness_rule). Consistency with the numbers is checked by occupancy_semantics()."
+        },
+        "expected_uuids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/inventory_device/properties/uuid"
+          },
+          "description": "Round 4 (Sol 6 r3 B2): the lane's card UUIDs from the confirmed inventory. With status ok, gpus must cover exactly these (all present, none extra, no duplicates) and every process must be on one of them; occupancy_semantics() enforces it."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "tenants": {
+                "maxItems": 0
+              },
+              "gpus": {
+                "maxItems": 0
+              },
+              "empty": {
+                "const": false
+              },
+              "unexplained_mib": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ok"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "gpus": {
+                "minItems": 1
+              },
+              "unexplained_mib": {
+                "type": "integer"
+              },
+              "lane_memory_used_mib": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "empty": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "const": "ok"
+              },
+              "tenants": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "x-examples": {
+    "valid": [
+      {
+        "kind": "gpu-inventory",
+        "host_id": "host-1",
+        "observed_at": "2026-10-02T00:00:00Z",
+        "status": "ok",
+        "reason": null,
+        "vendor": "nvidia",
+        "devices": [
+          {
+            "index": 0,
+            "uuid": "GPU-00000000-0000-0000-0000-000000000002",
+            "pci_bus_id": "0000:03:00.0",
+            "name": "Example T",
+            "memory_total_mib": 15360,
+            "driver_version": "600.1",
+            "numa_node": 0,
+            "device_minor": 0
+          }
+        ]
+      },
+      {
+        "kind": "gpu-inventory",
+        "host_id": "host-9",
+        "observed_at": "2026-10-02T00:00:00Z",
+        "status": "unknown",
+        "reason": "nvidia-smi timed out after 10 s",
+        "vendor": "unknown",
+        "devices": []
+      },
+      {
+        "kind": "gpu-occupancy",
+        "host_id": "host-0",
+        "lane_id": "lane-gpu0",
+        "observed_at": "2026-10-02T00:00:00Z",
+        "status": "ok",
+        "reason": null,
+        "gpus": [
+          {
+            "uuid": "GPU-00000000-0000-0000-0000-000000000001",
+            "memory_used_mib": 6,
+            "memory_total_mib": 24576,
+            "utilization_pct": 0,
+            "temperature_c": 41,
+            "power_draw_w": 18.2,
+            "power_limit_w": 200,
+            "thermal_slowdown": false,
+            "ecc_uncorrected": null
+          }
+        ],
+        "processes": [
+          {
+            "gpu_uuid": "GPU-00000000-0000-0000-0000-000000000001",
+            "pid": 4242,
+            "process_name": "browser-gpu",
+            "used_memory_mib": 5,
+            "attribution": "noise",
+            "uid": 1000,
+            "argv0": "browser",
+            "context_type": "C+G"
+          }
+        ],
+        "tenants": [],
+        "noise": [
+          {
+            "gpu_uuid": "GPU-00000000-0000-0000-0000-000000000001",
+            "pid": 4242,
+            "process_name": "browser-gpu",
+            "used_memory_mib": 5,
+            "attribution": "noise",
+            "uid": 1000,
+            "argv0": "browser",
+            "context_type": "C+G"
+          }
+        ],
+        "lane_memory_used_mib": 6,
+        "thresholds": {
+          "lane_noise_mib": 1024,
+          "noise_cap_mib": 64,
+          "noise_allowlist": [
+            {
+              "argv0": "browser",
+              "uid": 1000
+            }
+          ]
+        },
+        "unexplained_mib": 1,
+        "empty": true,
+        "expected_uuids": [
+          "GPU-00000000-0000-0000-0000-000000000001"
+        ]
+      }
+    ],
+    "invalid": [
+      {
+        "kind": "gpu-occupancy",
+        "host_id": "host-0",
+        "lane_id": "lane-gpu0",
+        "observed_at": "2026-10-02T00:00:00Z",
+        "status": "unknown",
+        "reason": null,
+        "gpus": [],
+        "processes": [],
+        "tenants": [],
+        "noise": [],
+        "lane_memory_used_mib": null,
+        "thresholds": {
+          "lane_noise_mib": 1024,
+          "noise_cap_mib": 64,
+          "noise_allowlist": [
+            {
+              "argv0": "browser",
+              "uid": 1000
+            }
+          ]
+        },
+        "unexplained_mib": null,
+        "empty": false,
+        "expected_uuids": [
+          "GPU-00000000-0000-0000-0000-000000000001"
+        ]
+      },
+      {
+        "kind": "gpu-occupancy",
+        "host_id": "host-0",
+        "lane_id": "lane-gpu0",
+        "observed_at": "2026-10-02T00:00:00Z",
+        "status": "ok",
+        "reason": null,
+        "gpus": [],
+        "processes": [],
+        "tenants": [],
+        "noise": [],
+        "lane_memory_used_mib": 0,
+        "thresholds": {
+          "lane_noise_mib": 1024,
+          "noise_cap_mib": 64,
+          "noise_allowlist": [
+            {
+              "argv0": "browser",
+              "uid": 1000
+            }
+          ]
+        },
+        "unexplained_mib": 0,
+        "empty": true,
+        "expected_uuids": [
+          "GPU-00000000-0000-0000-0000-000000000001"
+        ]
+      },
+      {
+        "kind": "gpu-occupancy",
+        "host_id": "host-0",
+        "lane_id": "lane-gpu0",
+        "observed_at": "2026-10-02T00:00:00Z",
+        "status": "ok",
+        "reason": null,
+        "gpus": [
+          {
+            "uuid": "GPU-00000000-0000-0000-0000-000000000001",
+            "memory_used_mib": 6,
+            "memory_total_mib": 24576,
+            "utilization_pct": 0,
+            "temperature_c": 41,
+            "power_draw_w": 18.2,
+            "power_limit_w": 200,
+            "thermal_slowdown": false,
+            "ecc_uncorrected": null
+          }
+        ],
+        "processes": [
+          {
+            "gpu_uuid": "GPU-00000000-0000-0000-0000-000000000001",
+            "pid": 4242,
+            "process_name": "browser-gpu",
+            "used_memory_mib": 5,
+            "attribution": "noise",
+            "uid": 1000,
+            "argv0": "browser",
+            "context_type": "C+G"
+          }
+        ],
+        "tenants": [
+          {
+            "gpu_uuid": "GPU-00000000-0000-0000-0000-000000000001",
+            "pid": 77,
+            "process_name": "python",
+            "used_memory_mib": null,
+            "attribution": "external",
+            "uid": null,
+            "argv0": null,
+            "context_type": null
+          }
+        ],
+        "noise": [
+          {
+            "gpu_uuid": "GPU-00000000-0000-0000-0000-000000000001",
+            "pid": 4242,
+            "process_name": "browser-gpu",
+            "used_memory_mib": 5,
+            "attribution": "noise",
+            "uid": 1000,
+            "argv0": "browser",
+            "context_type": "C+G"
+          }
+        ],
+        "lane_memory_used_mib": 6,
+        "thresholds": {
+          "lane_noise_mib": 1024,
+          "noise_cap_mib": 64,
+          "noise_allowlist": [
+            {
+              "argv0": "browser",
+              "uid": 1000
+            }
+          ]
+        },
+        "unexplained_mib": 1,
+        "empty": true,
+        "expected_uuids": [
+          "GPU-00000000-0000-0000-0000-000000000001"
+        ]
+      },
+      {
+        "vendor": "nvidia",
+        "model": "NVIDIA TITAN RTX",
+        "vram_bytes": 25769803776,
+        "count": 1,
+        "devices": []
+      }
+    ]
+  }
+}

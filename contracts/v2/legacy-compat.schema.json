@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/legacy-compat.schema.json",
+  "title": "Flightctl legacy lanes.sh compatibility v2: shim configuration and golden vectors",
+  "description": "NEW (G06, G11, CLI-DIFF). The shim is installed at the legacy lanes.sh path so existing callers keep working unmodified. Normative semantics are in LEGACY-COMPAT.md; this schema fixes the per-lane cut-over mode and the vector format that tests/contracts_v2/vectors/legacy-shim.json follows. Per-lane modes: 'legacy' (exec the renamed legacy script, nothing else), 'tee' (= shadow: legacy is authoritative, the same call is mirrored to the v2 authority with admission.shadow_of and nothing executes there), 'v2' (= live: v2 authority only; the legacy writer for that lane is disabled).",
+  "oneOf": [{ "$ref": "#/$defs/shim_config" }, { "$ref": "#/$defs/vector_file" }],
+  "$defs": {
+    "shim_config": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "endpoint_ref", "legacy_script_ref", "lanes", "defaults", "mirror_timeout_s"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "endpoint_ref": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "legacy_script_ref": { "$ref": "common.schema.json#/$defs/short_identifier", "description": "adapters.roots key of the renamed legacy script (kept for rollback)." },
+        "lanes": {
+          "type": "object", "propertyNames": { "$ref": "common.schema.json#/$defs/short_identifier" },
+          "additionalProperties": { "type": "object", "additionalProperties": false, "required": ["mode", "v2_lane"], "properties": { "mode": { "enum": ["legacy", "tee", "v2"] }, "v2_lane": { "$ref": "common.schema.json#/$defs/short_identifier" } } }
+        },
+        "defaults": {
+          "type": "object", "additionalProperties": false, "required": ["ttl_min", "wait_max_min", "token_format", "class"],
+          "properties": { "ttl_min": { "const": 240 }, "wait_max_min": { "const": 120 }, "token_format": { "const": "hex16" }, "class": { "const": "batch" } }
+        },
+        "mirror_timeout_s": { "type": "integer", "minimum": 1, "maximum": 30, "description": "tee mode: the mirror RPC is bounded and its failure never changes the legacy result or exit code (logged as adapter-error divergence)." }
+      }
+    },
+    "vector": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "mode", "argv", "env", "rpc", "stdout", "stdout_regex", "exit"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z0-9_-]{3,64}$" },
+        "mode": { "enum": ["v2", "tee"] },
+        "argv": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "env": { "type": "object", "additionalProperties": { "type": "string" } },
+        "rpc": {
+          "description": "Expected RPC calls in order, each with the scripted v2 response.",
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": false, "required": ["op", "lane", "args_subset", "response_status", "response_data"], "properties": { "op": { "$ref": "rpc-ops.schema.json#/$defs/op_name" }, "lane": { "anyOf": [{ "type": "string" }, { "type": "null" }] }, "args_subset": { "type": "object" }, "response_status": { "enum": [200, 202, 403, 409, 503] }, "response_data": {} } }
+        },
+        "stdout": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "stdout_regex": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "exit": { "type": "integer", "minimum": 0, "maximum": 255 }
+      }
+    },
+    "vector_file": {
+      "type": "object", "additionalProperties": false, "required": ["schema_version", "kind", "vectors"],
+      "properties": { "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" }, "kind": { "const": "legacy-shim-vectors" }, "vectors": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/vector" } } }
+    }
+  },
+  "x-examples": {
+    "valid": [
+      { "schema_version": 2, "endpoint_ref": "controller", "legacy_script_ref": "legacy-lanes", "lanes": { "lane-gpu1": { "mode": "v2", "v2_lane": "lane-gpu1" }, "lane-gpu0": { "mode": "tee", "v2_lane": "lane-gpu0" } }, "defaults": { "ttl_min": 240, "wait_max_min": 120, "token_format": "hex16", "class": "batch" }, "mirror_timeout_s": 5 }
+    ],
+    "invalid": [
+      { "schema_version": 2, "endpoint_ref": "controller", "legacy_script_ref": "legacy-lanes", "lanes": {}, "defaults": { "ttl_min": 240, "wait_max_min": 10, "token_format": "urlsafe", "class": "batch" }, "mirror_timeout_s": 5 }
+    ]
+  }
+}

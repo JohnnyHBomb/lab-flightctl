@@ -1,0 +1,13 @@
+{
+  "provenance": "Format fixture for the C7h effective-privilege audit. 'real-operator' is REAL `sudo -n -l` output captured read-only for the current user on the controller host (sudo 1.9.17p2, 2 Oct 2026), sanitised for portability: user and host renamed, command paths replaced by neutral names with the SAME wrapping (4-space grants, 8-space continuation lines). The other cases follow that format: the intended helper-only grant, and Sol 6's round-3 group-grant counterexample as sudo -l shows it after expanding %group.",
+  "cases": [
+    { "name": "real-operator", "user": "operator", "expect_grants": 6, "expect_ok": false,
+      "text": "Matching Defaults entries for operator on host-a:\n    secure_path=/usr/local/sbin\\:/usr/local/bin\\:/usr/bin, passwd_tries=10\n\nRunas and Command-specific defaults for operator:\n    Defaults!/usr/bin/tool-v env_keep+=\"SUDO_EDITOR EDITOR VISUAL\"\n\nUser operator may run the following commands on host-a:\n    (ALL) ALL\n    (ALL) !/usr/bin/tool-a\n    (root) NOPASSWD: /usr/bin/tool-a ^--detect (/dev/(usb/)?hiddev[0-9]+)(\n        /dev/(usb/)?hiddev[0-9]+)*$, /usr/bin/tool-a\n        ^/dev/(usb/)?hiddev[0-9]+$, /usr/bin/tool-a\n        ^/dev/(usb/)?hiddev[0-9]+ -- [+-]?[0-9]{1,3}%$\n    (root) NOPASSWD: /usr/bin/tool-b one, /usr/bin/tool-b\n        two, /usr/bin/tool-b three\n    (root) NOPASSWD: /usr/bin/tool-c\n        [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]\n    (root) NOPASSWD: /usr/bin/tool-d ^set-zone\n        [A-Za-z0-9_+][A-Za-z0-9_+.-]*(/[A-Za-z0-9_+][A-Za-z0-9_+.-]*)*$\n" },
+    { "name": "helper-only", "user": "runner", "expect_grants": 1, "expect_ok": true,
+      "text": "Matching Defaults entries for runner on host-a:\n    env_reset, !setenv, secure_path=/usr/sbin\\:/usr/bin\\:/sbin\\:/bin\n\nUser runner may run the following commands on host-a:\n    (root) NOPASSWD: /usr/local/libexec/flightctl-helper\n" },
+    { "name": "sol6-r3-group-grant", "user": "runner", "expect_grants": 2, "expect_ok": false,
+      "text": "Matching Defaults entries for runner on host-a:\n    env_reset, !setenv, secure_path=/usr/sbin\\:/usr/bin\\:/sbin\\:/bin\n\nUser runner may run the following commands on host-a:\n    (root) NOPASSWD: /usr/local/libexec/flightctl-helper\n    (ALL) NOPASSWD: ALL\n" },
+    { "name": "setenv-tag", "user": "runner", "expect_grants": 1, "expect_ok": false,
+      "text": "Matching Defaults entries for runner on host-a:\n    env_reset, secure_path=/usr/sbin\\:/usr/bin\\:/sbin\\:/bin\n\nUser runner may run the following commands on host-a:\n    (root) NOPASSWD: SETENV: /usr/local/libexec/flightctl-helper\n" }
+  ]
+}

@@ -1,0 +1,976 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/rpc-envelope.schema.json",
+  "title": "Flightctl RPC envelope v2 (POST /v2/rpc), typed results and idempotency record",
+  "description": "SUPERSEDES rpc-envelope-v1 on the /v2 path; /v1/rpc is served by the same authority through a v1->v2 adapter for one release (MIGRATION.md). Status codes and CLI exits are unchanged: 200->0, 202->5, 403->2, 409->1, 503->3, explicit yield->4. New: 202 'waking' is a pending result the client wait loop retries (WAKE-BRIEF Q1); errors keep a typed cause chain (Grok finding 7); quota denials carry the evaluation; idempotency scope is (authenticated principal, request_id) and a grant's token is kept in the idempotency record only for replay_window_s, then scrubbed.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/response"
+    },
+    {
+      "$ref": "#/$defs/idempotency_record"
+    }
+  ],
+  "$defs": {
+    "grant_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "operation",
+        "lease_id",
+        "token",
+        "token_format",
+        "generation",
+        "lane_id",
+        "expires_at",
+        "approved_max_end",
+        "lease",
+        "adoption"
+      ],
+      "properties": {
+        "kind": {
+          "const": "grant"
+        },
+        "operation": {
+          "enum": [
+            "acquire",
+            "claim",
+            "endpoint-load",
+            "job-submit"
+          ]
+        },
+        "lease_id": {
+          "$ref": "common.schema.json#/$defs/public_id"
+        },
+        "token": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/lease_token"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "null only on a replay after the replay window scrubbed it, or for job/endpoint grants whose token stays server-side."
+        },
+        "token_format": {
+          "$ref": "common.schema.json#/$defs/token_format"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "lane_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "expires_at": {
+          "$ref": "common.schema.json#/$defs/utc_time"
+        },
+        "approved_max_end": {
+          "$ref": "common.schema.json#/$defs/utc_time"
+        },
+        "lease": {
+          "$ref": "lease.schema.json#/$defs/read_form"
+        },
+        "adoption": {
+          "enum": [
+            "fresh-acquire",
+            "authenticated-adoption",
+            "booking-check-in"
+          ]
+        }
+      }
+    },
+    "pending_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "operation",
+        "reason",
+        "retry_after_s",
+        "wait_until",
+        "queue_id",
+        "wake_attempt_id"
+      ],
+      "properties": {
+        "kind": {
+          "const": "pending"
+        },
+        "operation": {
+          "enum": [
+            "acquire",
+            "claim",
+            "queue",
+            "release",
+            "job-submit",
+            "endpoint-load",
+            "session-open",
+            "op-stop",
+            "job-output-get"
+          ]
+        },
+        "reason": {
+          "enum": [
+            "waking",
+            "release-confirming",
+            "staging",
+            "starting",
+            "stopping",
+            "ceiling-unconfirmed"
+          ]
+        },
+        "retry_after_s": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300
+        },
+        "wait_until": {
+          "$ref": "common.schema.json#/$defs/utc_time",
+          "description": "Bounds the client's wait. Never authorises freeing hardware."
+        },
+        "queue_id": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wake_attempt_id": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/public_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "reason": {
+                "const": "waking"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "wake_attempt_id": {
+                "$ref": "common.schema.json#/$defs/public_id"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "status_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "lane"
+      ],
+      "properties": {
+        "kind": {
+          "const": "status"
+        },
+        "lane": {
+          "$ref": "snapshot.schema.json#/properties/lanes/items"
+        }
+      }
+    },
+    "mutation_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "operation",
+        "record_type",
+        "record_id",
+        "state",
+        "detail"
+      ],
+      "properties": {
+        "kind": {
+          "const": "mutation"
+        },
+        "operation": {
+          "$ref": "rpc-ops.schema.json#/$defs/op_name"
+        },
+        "record_type": {
+          "enum": [
+            "lease",
+            "booking",
+            "queue",
+            "endpoint",
+            "approval",
+            "window",
+            "job",
+            "session",
+            "principal",
+            "token",
+            "subscription",
+            "config",
+            "lane",
+            "host",
+            "cache"
+          ]
+        },
+        "record_id": {
+          "$ref": "common.schema.json#/$defs/identifier"
+        },
+        "state": {
+          "type": "string",
+          "pattern": "^[a-z][a-z-]{1,31}$"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "expires_at": {
+                  "$ref": "common.schema.json#/$defs/utc_time"
+                },
+                "clamped_to_max": {
+                  "type": "boolean"
+                },
+                "position": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "record_result": {
+      "description": "Single-record reads and list results; each embeds the record's own contract.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "job"
+          ],
+          "properties": {
+            "kind": {
+              "const": "job"
+            },
+            "job": {
+              "$ref": "job.schema.json#/$defs/job"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "jobs"
+          ],
+          "properties": {
+            "kind": {
+              "const": "job-list"
+            },
+            "jobs": {
+              "type": "array",
+              "items": {
+                "$ref": "job.schema.json#/$defs/job"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "lines",
+            "next_cursor"
+          ],
+          "properties": {
+            "kind": {
+              "const": "logs"
+            },
+            "lines": {
+              "$ref": "executor.schema.json#/$defs/reply/properties/log_lines"
+            },
+            "next_cursor": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "session"
+          ],
+          "properties": {
+            "kind": {
+              "const": "session"
+            },
+            "session": {
+              "$ref": "session.schema.json#/$defs/session"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "endpoint"
+          ],
+          "properties": {
+            "kind": {
+              "const": "endpoint"
+            },
+            "endpoint": {
+              "$ref": "endpoint.schema.json#/$defs/endpoint"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "templates"
+          ],
+          "properties": {
+            "kind": {
+              "const": "template-list"
+            },
+            "templates": {
+              "type": "array",
+              "items": {
+                "$ref": "template.schema.json#/$defs/template"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "tokens"
+          ],
+          "properties": {
+            "kind": {
+              "const": "token-list"
+            },
+            "tokens": {
+              "type": "array",
+              "items": {
+                "$ref": "accounts.schema.json#/$defs/token_metadata"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "approval"
+          ],
+          "properties": {
+            "kind": {
+              "const": "approval"
+            },
+            "approval": {
+              "anyOf": [
+                {
+                  "$ref": "../approval-v1.schema.json"
+                },
+                {
+                  "$ref": "approval.schema.json"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "result_data": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/grant_result"
+        },
+        {
+          "$ref": "#/$defs/pending_result"
+        },
+        {
+          "$ref": "#/$defs/status_result"
+        },
+        {
+          "$ref": "snapshot.schema.json"
+        },
+        {
+          "$ref": "event.schema.json#/$defs/page"
+        },
+        {
+          "$ref": "../rpc-envelope-v1.schema.json#/$defs/projection_result"
+        },
+        {
+          "$ref": "#/$defs/mutation_result"
+        },
+        {
+          "$ref": "../rpc-envelope-v1.schema.json#/$defs/queue_result"
+        },
+        {
+          "$ref": "../rpc-envelope-v1.schema.json#/$defs/booking_result"
+        },
+        {
+          "$ref": "usage.schema.json#/$defs/report"
+        },
+        {
+          "$ref": "accounts.schema.json#/$defs/whoami"
+        },
+        {
+          "$ref": "accounts.schema.json#/$defs/token_created"
+        },
+        {
+          "$ref": "storage.schema.json#/$defs/model_list"
+        },
+        {
+          "$ref": "#/$defs/record_result"
+        },
+        {
+          "$ref": "#/$defs/output_list"
+        },
+        {
+          "$ref": "#/$defs/output_chunk"
+        }
+      ]
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "retryable",
+        "failure_class",
+        "cause",
+        "details"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "common.schema.json#/$defs/error_code"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "failure_class": {
+          "enum": [
+            "client",
+            "policy",
+            "conflict",
+            "transport",
+            "state",
+            "timeout",
+            "quota",
+            "power"
+          ]
+        },
+        "cause": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/typed_error"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "details": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "quota": {
+                  "$ref": "quota.schema.json#/$defs/evaluation"
+                },
+                "approval_required": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "action",
+                    "requires"
+                  ],
+                  "properties": {
+                    "action": {
+                      "type": "string"
+                    },
+                    "requires": {
+                      "enum": [
+                        "operator",
+                        "operator+fido2"
+                      ]
+                    }
+                  }
+                },
+                "next_fit": {
+                  "anyOf": [
+                    {
+                      "$ref": "common.schema.json#/$defs/utc_time"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "holder": {
+                  "anyOf": [
+                    {
+                      "$ref": "lease.schema.json#/$defs/read_form"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "queue_head": {
+                  "anyOf": [
+                    {
+                      "$ref": "common.schema.json#/$defs/identifier"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "request_id",
+        "status",
+        "data",
+        "error"
+      ],
+      "properties": {
+        "schema": {
+          "const": 2
+        },
+        "request_id": {
+          "$ref": "common.schema.json#/$defs/identifier"
+        },
+        "status": {
+          "enum": [
+            200,
+            202,
+            403,
+            409,
+            503
+          ]
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/result_data"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/error"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": 200
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/result_data",
+                "not": {
+                  "type": "object",
+                  "required": [
+                    "kind"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "pending"
+                    }
+                  }
+                }
+              },
+              "error": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": 202
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/pending_result"
+              },
+              "error": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  403,
+                  409,
+                  503
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "type": "null"
+              },
+              "error": {
+                "$ref": "#/$defs/error"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "idempotency_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "principal_id",
+        "request_id",
+        "request_fingerprint",
+        "stored_at",
+        "replay_window_s",
+        "token_scrubbed",
+        "response",
+        "replay_deadline"
+      ],
+      "properties": {
+        "schema_version": {
+          "$ref": "common.schema.json#/$defs/schema_version"
+        },
+        "principal_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "request_id": {
+          "$ref": "common.schema.json#/$defs/identifier"
+        },
+        "request_fingerprint": {
+          "$ref": "common.schema.json#/$defs/sha256",
+          "description": "sha256 of the canonical request (method and params, JCS-serialised). Round 8 (Sol 6 r7): a request from the SAME principal with a stored request_id and a DIFFERENT fingerprint gets 409 conflict at any time (inside or after the replay window, with or without the replay row) and never sees the stored response, lease id or token."
+        },
+        "stored_at": {
+          "$ref": "common.schema.json#/$defs/utc_time"
+        },
+        "replay_window_s": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 3600
+        },
+        "token_scrubbed": {
+          "type": "boolean"
+        },
+        "response": {
+          "$ref": "#/$defs/response"
+        },
+        "replay_deadline": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/utc_time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Round 6: end of the raw-token replay window for a grant (null for non-grant records). Lives in the main record so a missing replay-store row is interpreted without the replay store: before it -> 409 replay_unavailable; at/after it -> grant replay with token null."
+        }
+      },
+      "description": "Round 9 (Sol 6 r8): keyed by (principal_id, request_id), and so is the replay-store row. A request_id is only meaningful within its authenticated principal: another principal using the same request_id, even with the same payload, gets a fresh decision and never this record's response, lease id or token."
+    },
+    "output_list": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "job_id",
+        "files",
+        "expires_at"
+      ],
+      "properties": {
+        "kind": {
+          "const": "output-list"
+        },
+        "job_id": {
+          "$ref": "common.schema.json#/$defs/public_id"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "relpath",
+              "bytes",
+              "sha256"
+            ],
+            "properties": {
+              "relpath": {
+                "type": "string",
+                "pattern": "^(?!/)(?!.*\\.\\.)[A-Za-z0-9._/-]{1,512}$"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "sha256": {
+                "$ref": "common.schema.json#/$defs/sha256"
+              }
+            }
+          }
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/utc_time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "output_chunk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "job_id",
+        "relpath",
+        "offset",
+        "data_b64",
+        "eof",
+        "file_sha256"
+      ],
+      "properties": {
+        "kind": {
+          "const": "output-chunk"
+        },
+        "job_id": {
+          "$ref": "common.schema.json#/$defs/public_id"
+        },
+        "relpath": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*\\.\\.)[A-Za-z0-9._/-]{1,512}$"
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "data_b64": {
+          "type": "string",
+          "maxLength": 5592408
+        },
+        "eof": {
+          "type": "boolean"
+        },
+        "file_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        }
+      }
+    }
+  },
+  "x-examples": {
+    "valid": [
+      {
+        "schema": 2,
+        "request_id": "req-1",
+        "status": 202,
+        "data": {
+          "kind": "pending",
+          "operation": "acquire",
+          "reason": "waking",
+          "retry_after_s": 10,
+          "wait_until": "2026-10-02T10:03:00Z",
+          "queue_id": "q-0001",
+          "wake_attempt_id": "wake-000013"
+        },
+        "error": null
+      },
+      {
+        "schema": 2,
+        "request_id": "req-2",
+        "status": 403,
+        "data": null,
+        "error": {
+          "code": "quota_exceeded",
+          "message": "gpu_hours_per_week limit reached for group friends",
+          "retryable": false,
+          "failure_class": "quota",
+          "cause": null,
+          "details": {
+            "quota": {
+              "kind": "quota-evaluation",
+              "decision": "deny",
+              "limit": "gpu_hours_per_week",
+              "set_by": "friends",
+              "current": 23.5,
+              "requested": 2,
+              "window": "rolling-7d"
+            }
+          }
+        }
+      },
+      {
+        "schema": 2,
+        "request_id": "req-3",
+        "status": 503,
+        "data": null,
+        "error": {
+          "code": "unavailable",
+          "message": "executor reserve not confirmed",
+          "retryable": true,
+          "failure_class": "state",
+          "cause": {
+            "code": "transport_failed",
+            "message": "ssh: connect to host host-1 port 22: Connection timed out",
+            "layer": "transport",
+            "cause": null
+          },
+          "details": null
+        }
+      },
+      {
+        "schema": 2,
+        "request_id": "req-4",
+        "status": 200,
+        "data": {
+          "kind": "mutation",
+          "operation": "renew",
+          "record_type": "lease",
+          "record_id": "lse-0000100",
+          "state": "running",
+          "detail": {
+            "expires_at": "2026-10-02T10:40:00Z",
+            "clamped_to_max": false
+          }
+        },
+        "error": null
+      }
+    ],
+    "invalid": [
+      {
+        "schema": 2,
+        "request_id": "req-5",
+        "status": 200,
+        "data": {
+          "kind": "pending",
+          "operation": "acquire",
+          "reason": "waking",
+          "retry_after_s": 10,
+          "wait_until": "2026-10-02T10:03:00Z",
+          "queue_id": null,
+          "wake_attempt_id": "wake-000013"
+        },
+        "error": null
+      },
+      {
+        "schema": 2,
+        "request_id": "req-6",
+        "status": 503,
+        "data": null,
+        "error": {
+          "code": "unavailable",
+          "message": "executor reserve was not accepted",
+          "retryable": true,
+          "failure_class": "state"
+        }
+      },
+      {
+        "schema": 2,
+        "request_id": "req-7",
+        "status": 202,
+        "data": {
+          "kind": "pending",
+          "operation": "acquire",
+          "reason": "waking",
+          "retry_after_s": 10,
+          "wait_until": "2026-10-02T10:03:00Z",
+          "queue_id": null,
+          "wake_attempt_id": null
+        },
+        "error": null
+      }
+    ]
+  }
+}

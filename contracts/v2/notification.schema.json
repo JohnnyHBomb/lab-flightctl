@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/notification.schema.json",
+  "title": "Flightctl notifications v2 (subscriptions, messages, deliveries)",
+  "description": "NEW (the owner 2 Oct: email and Slack for now). Messages are derived from committed events; delivery is asynchronous and never blocks a state transition. Channel secrets (SMTP credentials, Slack webhook URL) live in a site secret file named by the adapters file, never in contracts, events or logs. Message bodies never contain lease tokens or API secrets.",
+  "oneOf": [{ "$ref": "#/$defs/subscription" }, { "$ref": "#/$defs/message" }],
+  "$defs": {
+    "topic": { "enum": ["job-started", "job-finished", "job-failed", "lease-expiring", "lease-expired", "booking-reminder", "booking-ending", "preempted", "quarantine", "host-did-not-wake", "quota-near", "operator-override", "session-ending", "shadow-divergence", "adapter-refused"] },
+    "channel": { "enum": ["email", "slack"] },
+    "subscription": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "subscription_id", "principal_id", "topics", "channel", "enabled"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "subscription_id": { "$ref": "common.schema.json#/$defs/public_id" },
+        "principal_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "topics": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/topic" } },
+        "channel": { "$ref": "#/$defs/channel" },
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "message_id", "topic", "principal_id", "channel", "event_seq", "subject", "body", "created_at", "delivery"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "message_id": { "$ref": "common.schema.json#/$defs/public_id" },
+        "topic": { "$ref": "#/$defs/topic" },
+        "principal_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "channel": { "$ref": "#/$defs/channel" },
+        "event_seq": { "type": "integer", "minimum": 1 },
+        "subject": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "body": { "type": "string", "minLength": 1, "maxLength": 4000 },
+        "created_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "delivery": {
+          "type": "object", "additionalProperties": false, "required": ["state", "attempts", "last_attempt_at", "error", "dry_run"],
+          "properties": {
+            "state": { "enum": ["pending", "sent", "failed", "suppressed"] },
+            "attempts": { "type": "integer", "minimum": 0, "maximum": 10 },
+            "last_attempt_at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/utc_time" }, { "type": "null" }] },
+            "error": { "anyOf": [{ "$ref": "common.schema.json#/$defs/typed_error" }, { "type": "null" }] },
+            "dry_run": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  },
+  "x-examples": {
+    "valid": [
+      { "schema_version": 2, "subscription_id": "sub-000001", "principal_id": "friend-a", "topics": ["job-finished", "job-failed", "booking-reminder"], "channel": "email", "enabled": true },
+      { "schema_version": 2, "message_id": "msg-000001", "topic": "job-finished", "principal_id": "friend-a", "channel": "slack", "event_seq": 57, "subject": "job-0000042 succeeded", "body": "Your job job-0000042 on lane-gpu1 succeeded after 58 min. Logs: flightctl job logs job-0000042", "created_at": "2026-10-02T11:00:00Z", "delivery": { "state": "sent", "attempts": 1, "last_attempt_at": "2026-10-02T11:00:02Z", "error": null, "dry_run": false } }
+    ],
+    "invalid": [{ "schema_version": 2, "subscription_id": "sub-000002", "principal_id": "friend-a", "topics": ["everything"], "channel": "sms", "enabled": true }]
+  }
+}

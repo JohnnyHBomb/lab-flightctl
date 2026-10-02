@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/window.schema.json",
+  "title": "Flightctl calendar windows v2 (maintenance, owner-reserved, drain, quiet hours)",
+  "description": "NEW (TARGET-MODEL s5 MUST; Slurm MAINT/owner reservation and drain-state design, no code). A window is not a booking: it changes admission rules for a lane, a host or the site. Drain = a window starting now with end null and rule no-admission: running work continues, nothing new is admitted. Bookings may not overlap maintenance or owner-reserved windows on the same scope. Recurrence (e.g. no unattended heavy work overnight on a desktop-shared card) uses a small weekly rule, not RRULE.",
+  "oneOf": [{ "$ref": "#/$defs/window" }],
+  "$defs": {
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "window_id", "scope", "kind", "start", "end", "weekly", "rule", "class_ceiling", "reason", "created_by", "created_at", "state"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "window_id": { "$ref": "common.schema.json#/$defs/public_id" },
+        "scope": {
+          "type": "object", "additionalProperties": false, "required": ["kind", "id"],
+          "properties": { "kind": { "enum": ["lane", "host", "site"] }, "id": { "anyOf": [{ "$ref": "common.schema.json#/$defs/short_identifier" }, { "type": "null" }] } }
+        },
+        "kind": { "enum": ["maintenance", "owner-reserved", "drain", "quiet-hours"] },
+        "start": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "end": { "anyOf": [{ "$ref": "common.schema.json#/$defs/utc_time" }, { "type": "null" }] },
+        "weekly": {
+          "anyOf": [
+            { "type": "null" },
+            { "type": "object", "additionalProperties": false, "required": ["days", "from_local", "to_local"],
+              "properties": { "days": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] } }, "from_local": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" }, "to_local": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" } } }
+          ]
+        },
+        "rule": { "enum": ["no-admission", "operator-only", "class-ceiling"] },
+        "class_ceiling": { "anyOf": [{ "$ref": "common.schema.json#/$defs/class" }, { "type": "null" }] },
+        "reason": { "$ref": "common.schema.json#/$defs/text" },
+        "created_by": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "created_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "state": { "enum": ["scheduled", "active", "ended", "removed"] }
+      },
+      "allOf": [
+        { "if": { "properties": { "rule": { "const": "class-ceiling" } } }, "then": { "properties": { "class_ceiling": { "$ref": "common.schema.json#/$defs/class" } } }, "else": { "properties": { "class_ceiling": { "type": "null" } } } },
+        { "if": { "properties": { "kind": { "const": "drain" } } }, "then": { "properties": { "rule": { "const": "no-admission" }, "weekly": { "type": "null" } } } },
+        { "if": { "properties": { "scope": { "properties": { "kind": { "const": "site" } } } } }, "then": { "properties": { "scope": { "properties": { "id": { "type": "null" } } } } }, "else": { "properties": { "scope": { "properties": { "id": { "type": "string" } } } } } }
+      ]
+    }
+  },
+  "x-examples": {
+    "valid": [
+      { "schema_version": 2, "window_id": "win-000001", "scope": { "kind": "host", "id": "host-1" }, "kind": "maintenance", "start": "2026-10-05T08:00:00Z", "end": "2026-10-05T12:00:00Z", "weekly": null, "rule": "no-admission", "class_ceiling": null, "reason": "driver upgrade", "created_by": "owner", "created_at": "2026-10-02T00:00:00Z", "state": "scheduled" },
+      { "schema_version": 2, "window_id": "win-000002", "scope": { "kind": "lane", "id": "lane-desk" }, "kind": "quiet-hours", "start": "2026-10-02T00:00:00Z", "end": null, "weekly": { "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "from_local": "23:00", "to_local": "07:00" }, "rule": "class-ceiling", "class_ceiling": "standby", "reason": "no unattended heavy work overnight on the desktop card", "created_by": "owner", "created_at": "2026-10-02T00:00:00Z", "state": "active" },
+      { "schema_version": 2, "window_id": "win-000003", "scope": { "kind": "lane", "id": "lane-gpu1" }, "kind": "drain", "start": "2026-10-02T00:00:00Z", "end": null, "weekly": null, "rule": "no-admission", "class_ceiling": null, "reason": "cutover", "created_by": "owner", "created_at": "2026-10-02T00:00:00Z", "state": "active" }
+    ],
+    "invalid": [
+      { "schema_version": 2, "window_id": "win-000004", "scope": { "kind": "lane", "id": "lane-gpu1" }, "kind": "drain", "start": "2026-10-02T00:00:00Z", "end": null, "weekly": null, "rule": "operator-only", "class_ceiling": null, "reason": "x", "created_by": "owner", "created_at": "2026-10-02T00:00:00Z", "state": "active" },
+      { "schema_version": 2, "window_id": "win-000005", "scope": { "kind": "site", "id": "lane-gpu1" }, "kind": "maintenance", "start": "2026-10-02T00:00:00Z", "end": null, "weekly": null, "rule": "class-ceiling", "class_ceiling": null, "reason": "x", "created_by": "owner", "created_at": "2026-10-02T00:00:00Z", "state": "active" }
+    ]
+  }
+}

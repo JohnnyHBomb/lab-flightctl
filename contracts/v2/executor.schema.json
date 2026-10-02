@@ -1,0 +1,1507 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/executor.schema.json",
+  "title": "Flightctl executor protocol v2 (authority <-> per-host executor)",
+  "description": "SEMANTIC v2 of executor-v1. Fixes: G02 (deadlines are durations anchored by the executor on its OWN monotonic clock; no cross-host boot_id comparison), G03 (beat carries renewed durations; the authority sends it every executor_beat_s for every live lease), Grok finding 1 (the full identity incl. unit and run_id is assigned BEFORE reserve and never changes; stop verifies the same identity), Grok finding 7 (typed errors with cause are preserved), WAKE-BRIEF Q2 (a reserve rejected with definite=true wrote no fence and is a definite non-reservation), G20 (work_mode holder|unit; argv workloads), G05 (inspect returns the occupancy shape the probe defines). Raw lease tokens never reach the executor: it stores token_sha256. Round 2: beat may not carry max-end; 'extend' (approval_id required) is the only way to move the host ceiling later (N1). Reserve order: take the inhibitor, then write the fence; if the fence write fails the inhibitor is released before a definite refusal, and if that release fails the reply is uncertain (D-pow-3: definite means NO fence and NO inhibitor persisted). 'output' serves owner job-output chunks (B6). Round 4 (N1): a reserve is NOT a grant until the host has ACKNOWLEDGED a ceiling at or before the approved end: authority_receive_time + max_end_remaining_s <= approved_max_end. Otherwise the authority sends a shorten-only 'ceiling' message and grants only after that message's reply confirms the bound; if the correction is lost, no grant is issued (202 pending 'ceiling-unconfirmed' until wait_until, then the reservation is stopped, or the lane quarantined if the stop is uncertain).",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/reply"
+    }
+  ],
+  "$defs": {
+    "kind": {
+      "enum": [
+        "reserve",
+        "stage",
+        "start",
+        "beat",
+        "stop",
+        "inspect",
+        "logs",
+        "extend",
+        "output",
+        "ceiling"
+      ]
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lane",
+        "generation",
+        "lease_id",
+        "token_sha256",
+        "run_id",
+        "unit"
+      ],
+      "properties": {
+        "lane": {
+          "$ref": "common.schema.json#/$defs/lane_ref"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "lease_id": {
+          "$ref": "common.schema.json#/$defs/public_id"
+        },
+        "token_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "run_id": {
+          "$ref": "common.schema.json#/$defs/public_id"
+        },
+        "unit": {
+          "$ref": "unit.schema.json#/$defs/unit_name"
+        }
+      }
+    },
+    "execution_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "class",
+        "protected",
+        "preemptible",
+        "grace_s",
+        "work_mode",
+        "holder_binding",
+        "external_tenant"
+      ],
+      "properties": {
+        "class": {
+          "$ref": "common.schema.json#/$defs/class"
+        },
+        "protected": {
+          "type": "boolean"
+        },
+        "preemptible": {
+          "type": "boolean"
+        },
+        "grace_s": {
+          "$ref": "common.schema.json#/$defs/duration_s"
+        },
+        "work_mode": {
+          "description": "holder = leases-only (the caller runs its own process; executor fences, holds the inhibitor and proves GPU emptiness; inspect of the unit is honestly 'absent'). unit = the executor starts the workload as a transient user unit and proves cgroup + GPU emptiness.",
+          "enum": [
+            "holder",
+            "unit"
+          ]
+        },
+        "holder_binding": {
+          "enum": [
+            "client-heartbeat",
+            "unit",
+            "ttl-only"
+          ]
+        },
+        "external_tenant": {
+          "$ref": "inventory.schema.json#/$defs/lane_rules/properties/external_tenant"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "protected": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "preemptible": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "work_mode": {
+                "const": "unit"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "holder_binding": {
+                "const": "unit"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "deadlines": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "items": {
+        "$ref": "common.schema.json#/$defs/relative_deadline"
+      }
+    },
+    "workload": {
+      "description": "argv-unit workload resolved by the authority from a template (template.schema.json). No shell: argv is passed as a list. Paths are relative to site roots the executor resolves from its own config (model cache root, scratch root), never absolute in the message.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "template_ref",
+        "argv",
+        "env",
+        "run_as",
+        "workdir_ref",
+        "cards",
+        "log_capture",
+        "health",
+        "work_id"
+      ],
+      "properties": {
+        "kind": {
+          "const": "argv-unit"
+        },
+        "template_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "template_id",
+            "version"
+          ],
+          "properties": {
+            "template_id": {
+              "$ref": "common.schema.json#/$defs/short_identifier"
+            },
+            "version": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+            }
+          }
+        },
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "env": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+            "not": {
+              "enum": [
+                "LD_PRELOAD",
+                "LD_LIBRARY_PATH_OVERRIDE",
+                "CUDA_VISIBLE_DEVICES",
+                "FLIGHTCTL_RUN_ID"
+              ]
+            }
+          },
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "run_as": {
+          "type": "string",
+          "pattern": "^[a-z_][a-z0-9_-]{0,31}$"
+        },
+        "workdir_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "root",
+            "relpath"
+          ],
+          "properties": {
+            "root": {
+              "enum": [
+                "scratch",
+                "output",
+                "model-cache",
+                "template"
+              ]
+            },
+            "relpath": {
+              "type": "string",
+              "pattern": "^(?!/)(?!.*\\.\\.)[A-Za-z0-9._/-]{0,512}$"
+            }
+          }
+        },
+        "cards": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "gpu-probe.schema.json#/$defs/inventory_device/properties/uuid"
+          }
+        },
+        "log_capture": {
+          "const": "journal"
+        },
+        "health": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "port",
+                "path",
+                "timeout_s"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "http"
+                },
+                "port": {
+                  "type": "integer",
+                  "minimum": 1024,
+                  "maximum": 65535
+                },
+                "path": {
+                  "type": "string",
+                  "pattern": "^/[A-Za-z0-9._/-]{0,128}$"
+                },
+                "timeout_s": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "work_id": {
+          "$ref": "common.schema.json#/$defs/public_id",
+          "description": "Amendment 2 (Sol 6.1 P1-3): the authority's public job/work id, passed to the helper as unit-start --job and recorded in the helper's job registry. Lease and lane identity travel in the start request's identity."
+        }
+      }
+    },
+    "stop_authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "approval_id",
+        "reason"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "owner-release",
+            "controller-match",
+            "operator-stop",
+            "approved-forced-preemption",
+            "expiry",
+            "holder-lost"
+          ]
+        },
+        "approval_id": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "$ref": "common.schema.json#/$defs/text"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "approved-forced-preemption"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "approval_id": {
+                "$ref": "common.schema.json#/$defs/identifier"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "request_base": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "kind",
+        "controller_request_id",
+        "controller_id",
+        "sent_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "$ref": "common.schema.json#/$defs/schema_version"
+        },
+        "kind": {
+          "$ref": "#/$defs/kind"
+        },
+        "controller_request_id": {
+          "$ref": "common.schema.json#/$defs/identifier"
+        },
+        "controller_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "sent_at": {
+          "$ref": "common.schema.json#/$defs/utc_time",
+          "description": "Audit and skew estimate only."
+        }
+      }
+    },
+    "reserve_request": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/request_base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "identity",
+            "execution_policy",
+            "deadlines",
+            "awake"
+          ],
+          "properties": {
+            "kind": {
+              "const": "reserve"
+            },
+            "identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "execution_policy": {
+              "$ref": "#/$defs/execution_policy"
+            },
+            "deadlines": {
+              "$ref": "#/$defs/deadlines"
+            },
+            "awake": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "hold_inhibitor"
+              ],
+              "properties": {
+                "hold_inhibitor": {
+                  "type": "boolean",
+                  "description": "Round 8: the authority sets this true for every lane on a host whose inventory power.mode is 'sleeps'; for such a lane a reply without a held inhibitor never confirms the ceiling."
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "stage_request": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/request_base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "identity",
+            "models"
+          ],
+          "properties": {
+            "kind": {
+              "const": "stage"
+            },
+            "identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "models": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "storage.schema.json#/$defs/model_ref"
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "start_request": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/request_base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "identity",
+            "execution_policy",
+            "workload"
+          ],
+          "properties": {
+            "kind": {
+              "const": "start"
+            },
+            "identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "execution_policy": {
+              "$ref": "#/$defs/execution_policy"
+            },
+            "workload": {
+              "$ref": "#/$defs/workload"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "beat_request": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/request_base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "identity",
+            "deadlines"
+          ],
+          "properties": {
+            "kind": {
+              "const": "beat"
+            },
+            "identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "deadlines": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 3,
+              "items": {
+                "allOf": [
+                  {
+                    "$ref": "common.schema.json#/$defs/relative_deadline"
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "expiry",
+                          "heartbeat-stale",
+                          "grace"
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "stop_request": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/request_base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "identity",
+            "execution_policy",
+            "stop_authority"
+          ],
+          "properties": {
+            "kind": {
+              "const": "stop"
+            },
+            "identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "execution_policy": {
+              "$ref": "#/$defs/execution_policy"
+            },
+            "stop_authority": {
+              "$ref": "#/$defs/stop_authority"
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "execution_policy": {
+                "properties": {
+                  "protected": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "stop_authority": {
+                "properties": {
+                  "mode": {
+                    "enum": [
+                      "owner-release",
+                      "operator-stop",
+                      "approved-forced-preemption",
+                      "holder-lost"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "inspect_request": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/request_base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "scope",
+            "identity"
+          ],
+          "properties": {
+            "kind": {
+              "const": "inspect"
+            },
+            "scope": {
+              "enum": [
+                "lease",
+                "lane",
+                "host"
+              ]
+            },
+            "identity": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/identity"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lane": {
+              "anyOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/lane_ref"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "scope": {
+                "const": "lease"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "identity": {
+                "$ref": "#/$defs/identity"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "scope": {
+                "const": "lane"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "lane"
+            ],
+            "properties": {
+              "lane": {
+                "$ref": "common.schema.json#/$defs/lane_ref"
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "logs_request": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/request_base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "identity",
+            "after_cursor",
+            "limit"
+          ],
+          "properties": {
+            "kind": {
+              "const": "logs"
+            },
+            "identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "after_cursor": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5000
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "request": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/reserve_request"
+        },
+        {
+          "$ref": "#/$defs/stage_request"
+        },
+        {
+          "$ref": "#/$defs/start_request"
+        },
+        {
+          "$ref": "#/$defs/beat_request"
+        },
+        {
+          "$ref": "#/$defs/stop_request"
+        },
+        {
+          "$ref": "#/$defs/inspect_request"
+        },
+        {
+          "$ref": "#/$defs/logs_request"
+        },
+        {
+          "$ref": "#/$defs/extend_request"
+        },
+        {
+          "$ref": "#/$defs/output_request"
+        },
+        {
+          "$ref": "#/$defs/ceiling_request"
+        }
+      ]
+    },
+    "fence_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "state",
+        "local_deadlines",
+        "inhibitor_held",
+        "rebooted_since_reserve"
+      ],
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "state": {
+          "enum": [
+            "reserved",
+            "staging",
+            "starting",
+            "running",
+            "stopping",
+            "quarantined",
+            "closed"
+          ]
+        },
+        "local_deadlines": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/local_deadline"
+          }
+        },
+        "inhibitor_held": {
+          "type": "boolean"
+        },
+        "rebooted_since_reserve": {
+          "type": "boolean",
+          "description": "The persisted fence's boot_id differs from the host's current boot: every process of that lease is gone; the GPU must still be probed before free."
+        }
+      }
+    },
+    "reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "controller_request_id",
+        "echoed_identity",
+        "ok",
+        "definite",
+        "observed_state",
+        "host_boot",
+        "host_utc",
+        "fences",
+        "unit",
+        "occupancy",
+        "inhibitor",
+        "stage",
+        "log_lines",
+        "next_cursor",
+        "error",
+        "dry_run",
+        "output",
+        "max_end_remaining_s"
+      ],
+      "properties": {
+        "schema_version": {
+          "$ref": "common.schema.json#/$defs/schema_version"
+        },
+        "kind": {
+          "$ref": "#/$defs/kind"
+        },
+        "controller_request_id": {
+          "$ref": "common.schema.json#/$defs/identifier"
+        },
+        "echoed_identity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/identity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "definite": {
+          "type": "boolean",
+          "description": "true: the reply is certain (success, or a refusal that changed nothing). false: outcome uncertain -> the authority keeps exclusion (quarantine/stopping), never frees."
+        },
+        "observed_state": {
+          "enum": [
+            "free",
+            "reserved",
+            "staging",
+            "starting",
+            "running",
+            "stopping",
+            "quarantined",
+            "unknown"
+          ]
+        },
+        "host_boot": {
+          "$ref": "common.schema.json#/$defs/host_boot"
+        },
+        "host_utc": {
+          "$ref": "common.schema.json#/$defs/utc_time"
+        },
+        "fences": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/fence_summary"
+          },
+          "description": "The executor's PERSISTED fences on this lane, read back from its fence store after the change. Round 8 (Sol 6 r7): a successful non-dry-run reserve must report at least one; the authority counts a reserve or ceiling reply only if exactly one fence on the lane has the echoed identity, a fenced state equal to observed_state, rebooted_since_reserve false and, where the lane requires an inhibitor, inhibitor_held true together with a held reply.inhibitor named flightctl-awake-<lane>-g<generation>.service (validation.fence_evidence_ok)."
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "$ref": "unit.schema.json#/$defs/observation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "occupancy": {
+          "anyOf": [
+            {
+              "$ref": "gpu-probe.schema.json#/$defs/occupancy_observation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inhibitor": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "held",
+                "unit",
+                "what"
+              ],
+              "properties": {
+                "held": {
+                  "type": "boolean"
+                },
+                "unit": {
+                  "type": "string",
+                  "pattern": "^flightctl-awake-[a-z0-9._-]+-g[0-9]+\\.service$"
+                },
+                "what": {
+                  "const": "idle"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stage": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "state",
+                "bytes_done",
+                "bytes_total"
+              ],
+              "properties": {
+                "state": {
+                  "enum": [
+                    "present",
+                    "fetching",
+                    "failed"
+                  ]
+                },
+                "bytes_done": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "bytes_total": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "log_lines": {
+          "type": "array",
+          "maxItems": 5000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "at",
+              "stream",
+              "text"
+            ],
+            "properties": {
+              "at": {
+                "$ref": "common.schema.json#/$defs/utc_time"
+              },
+              "stream": {
+                "enum": [
+                  "stdout",
+                  "stderr",
+                  "system"
+                ]
+              },
+              "text": {
+                "type": "string",
+                "maxLength": 16384
+              }
+            }
+          }
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 512
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/typed_error"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dry_run": {
+          "type": "boolean"
+        },
+        "output": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "rpc-envelope.schema.json#/$defs/output_chunk"
+            },
+            {
+              "$ref": "rpc-envelope.schema.json#/$defs/output_list"
+            }
+          ]
+        },
+        "max_end_remaining_s": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Round 4 (Sol 6 r3 N1): seconds until the host-local max-end at the moment the host built this reply (null if no fence). The host's ceiling is then at most authority_receive_time + max_end_remaining_s (the reply was built before it was received), with no clock comparison."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "ok": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "definite": {
+                "const": true
+              },
+              "error": {
+                "type": "null"
+              },
+              "observed_state": {
+                "not": {
+                  "enum": [
+                    "unknown",
+                    "quarantined"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "ok": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "error": {
+                "$ref": "common.schema.json#/$defs/typed_error"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "stop"
+              },
+              "ok": {
+                "const": true
+              },
+              "dry_run": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "occupancy"
+            ],
+            "properties": {
+              "observed_state": {
+                "const": "free"
+              },
+              "occupancy": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "const": "ok"
+                  },
+                  "tenants": {
+                    "maxItems": 0
+                  },
+                  "empty": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "status",
+                  "tenants",
+                  "empty"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "reserve"
+              },
+              "ok": {
+                "const": false
+              },
+              "definite": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "observed_state": {
+                "const": "free"
+              },
+              "fences": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "reserve"
+              },
+              "ok": {
+                "const": true
+              },
+              "dry_run": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "fences": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "extend_request": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/request_base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "identity",
+            "approval_id",
+            "max_end"
+          ],
+          "properties": {
+            "kind": {
+              "const": "extend"
+            },
+            "identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "approval_id": {
+              "$ref": "common.schema.json#/$defs/identifier"
+            },
+            "max_end": {
+              "allOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/relative_deadline"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "max-end"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "output_request": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/request_base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "job_id",
+            "relpath",
+            "offset",
+            "length",
+            "expect_sha256"
+          ],
+          "properties": {
+            "kind": {
+              "const": "output"
+            },
+            "job_id": {
+              "$ref": "common.schema.json#/$defs/public_id"
+            },
+            "relpath": {
+              "type": "string",
+              "pattern": "^(?!/)(?!.*\\.\\.)[A-Za-z0-9._/-]{0,512}$"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "length": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4194304
+            },
+            "expect_sha256": {
+              "$ref": "common.schema.json#/$defs/sha256"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false,
+      "description": "Round 3 containment (Sol 6 new finding): the executor opens the file by walking from a directory fd of the job's output root, one component at a time with O_NOFOLLOW|O_DIRECTORY (final component O_NOFOLLOW, then fstat S_ISREG), so no symlink or '..' can leave the root; it reads only from that fd and refuses with conflict 'output changed' if the opened file's size/sha256 differ from expect_sha256 (the value job-output-list returned): a path swapped between list and get is refused. Reference: tests/contracts_v2/validation.py contained_open(). Round 4 (Sol 6 r3) trusted staging: the job unit writes only into a fresh per-job staging directory owned by the job account (as the host sees it: Amendment 2, the recorded uid or the overflow uid when id-mapped). After the unit is stopped and its cgroup is empty, the executor (via flightctl-helper output-collect) walks staging with O_NOFOLLOW, accepts only regular files with st_nlink == 1 and st_uid == the namespace-aware expected owner of the job's own StateDirectory (Amendment 2: output_owner_expected; checked with fstat on the opened fd), and COPIES their bytes into the job's directory in an executor-owned output store, recording each copy's sha256. Everything else (symlink, hard link, device, fifo, foreign owner) is skipped and listed as rejected. job-output-list/get serve only those copies, so smuggled hard links never reach a reader. Absolute or '..' paths are refused before the walk. Reference: stage_outputs(), contained_open()."
+    },
+    "ceiling_request": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/request_base"
+        },
+        {
+          "type": "object",
+          "required": [
+            "identity",
+            "max_end"
+          ],
+          "properties": {
+            "kind": {
+              "const": "ceiling"
+            },
+            "identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "max_end": {
+              "allOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/relative_deadline"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "max-end"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false,
+      "description": "Shorten-only: the host sets max-end = min(current, received). Never moves it later (only 'extend' with an approval does)."
+    }
+  },
+  "x-examples": {
+    "valid": [
+      {
+        "schema_version": 2,
+        "kind": "reserve",
+        "controller_request_id": "creq-1",
+        "controller_id": "controller-a",
+        "sent_at": "2026-10-02T10:00:00Z",
+        "identity": {
+          "lane": {
+            "site_id": "site-a",
+            "host_id": "host-1",
+            "lane_id": "lane-gpu1"
+          },
+          "generation": 7,
+          "lease_id": "lse-0000100",
+          "token_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "run_id": "run-0000007a",
+          "unit": "flightctl-lane-gpu1-g7.service"
+        },
+        "execution_policy": {
+          "class": "batch",
+          "protected": true,
+          "preemptible": false,
+          "grace_s": 0,
+          "work_mode": "holder",
+          "holder_binding": "client-heartbeat",
+          "external_tenant": {
+            "policy": "collision",
+            "lane_noise_mib": 1024,
+            "noise_cap_mib": 64,
+            "noise_allowlist": [
+              {
+                "argv0": "browser",
+                "uid": 1000
+              }
+            ]
+          }
+        },
+        "deadlines": [
+          {
+            "kind": "expiry",
+            "in_s": 1800,
+            "sender_utc": "2026-10-02T10:00:00Z"
+          },
+          {
+            "kind": "max-end",
+            "in_s": 14400,
+            "sender_utc": "2026-10-02T10:00:00Z"
+          },
+          {
+            "kind": "heartbeat-stale",
+            "in_s": 600,
+            "sender_utc": "2026-10-02T10:00:00Z"
+          }
+        ],
+        "awake": {
+          "hold_inhibitor": true
+        }
+      },
+      {
+        "schema_version": 2,
+        "kind": "beat",
+        "controller_request_id": "creq-2",
+        "controller_id": "controller-a",
+        "sent_at": "2026-10-02T10:01:00Z",
+        "identity": {
+          "lane": {
+            "site_id": "site-a",
+            "host_id": "host-1",
+            "lane_id": "lane-gpu1"
+          },
+          "generation": 7,
+          "lease_id": "lse-0000100",
+          "token_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "run_id": "run-0000007a",
+          "unit": "flightctl-lane-gpu1-g7.service"
+        },
+        "deadlines": [
+          {
+            "kind": "expiry",
+            "in_s": 1740,
+            "sender_utc": "2026-10-02T10:01:00Z"
+          },
+          {
+            "kind": "heartbeat-stale",
+            "in_s": 600,
+            "sender_utc": "2026-10-02T10:01:00Z"
+          }
+        ]
+      },
+      {
+        "schema_version": 2,
+        "kind": "reserve",
+        "controller_request_id": "creq-1",
+        "echoed_identity": null,
+        "ok": false,
+        "definite": true,
+        "observed_state": "free",
+        "host_boot": {
+          "host_id": "host-1",
+          "boot_id": "e8a72066-3f84-4fbb-bfd5-9e055bee90c0",
+          "observed_at": "2026-10-02T10:00:01Z"
+        },
+        "host_utc": "2026-10-02T10:00:01Z",
+        "fences": [],
+        "unit": null,
+        "occupancy": null,
+        "inhibitor": null,
+        "stage": null,
+        "log_lines": [],
+        "next_cursor": null,
+        "error": {
+          "code": "inhibitor_failed",
+          "message": "systemd-inhibit refused: Access denied",
+          "layer": "executor",
+          "cause": null
+        },
+        "dry_run": false,
+        "output": null,
+        "max_end_remaining_s": null
+      }
+    ],
+    "invalid": [
+      {
+        "schema_version": 2,
+        "kind": "reserve",
+        "controller_request_id": "creq-1",
+        "controller_id": "controller-a",
+        "sent_at": "2026-10-02T10:00:00Z",
+        "identity": {
+          "lane": {
+            "site_id": "site-a",
+            "host_id": "host-1",
+            "lane_id": "lane-gpu1"
+          },
+          "generation": 7,
+          "lease_id": "lse-0000100",
+          "token": "token-abcdefghijklmnop",
+          "run_id": "run-0000007a",
+          "unit": null
+        },
+        "execution_policy": {
+          "class": "batch",
+          "protected": true,
+          "preemptible": false,
+          "grace_s": 0,
+          "work_mode": "holder",
+          "holder_binding": "ttl-only",
+          "external_tenant": {
+            "policy": "collision",
+            "lane_noise_mib": 1024,
+            "noise_cap_mib": 64,
+            "noise_allowlist": [
+              {
+                "argv0": "browser",
+                "uid": 1000
+              }
+            ]
+          }
+        },
+        "deadlines": [
+          {
+            "kind": "max-end",
+            "boot_id": "boot-a",
+            "deadline_s": 100,
+            "utc_anchor": "2026-09-27T20:00:00Z",
+            "monotonic_anchor_s": 10
+          }
+        ],
+        "awake": {
+          "hold_inhibitor": true
+        }
+      },
+      {
+        "schema_version": 2,
+        "kind": "stop",
+        "controller_request_id": "creq-9",
+        "echoed_identity": null,
+        "ok": true,
+        "definite": true,
+        "observed_state": "free",
+        "host_boot": {
+          "host_id": "host-1",
+          "boot_id": "e8a72066-3f84-4fbb-bfd5-9e055bee90c0",
+          "observed_at": "2026-10-02T10:00:01Z"
+        },
+        "host_utc": "2026-10-02T10:00:01Z",
+        "fences": [],
+        "unit": null,
+        "occupancy": null,
+        "inhibitor": null,
+        "stage": null,
+        "log_lines": [],
+        "next_cursor": null,
+        "error": null,
+        "dry_run": false,
+        "output": null,
+        "max_end_remaining_s": null
+      },
+      {
+        "schema_version": 2,
+        "kind": "beat",
+        "controller_request_id": "creq-3",
+        "controller_id": "controller-a",
+        "sent_at": "2026-10-02T10:01:00Z",
+        "identity": {
+          "lane": {
+            "site_id": "site-a",
+            "host_id": "host-1",
+            "lane_id": "lane-gpu1"
+          },
+          "generation": 7,
+          "lease_id": "lse-0000100",
+          "token_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "run_id": "run-0000007a",
+          "unit": "flightctl-lane-gpu1-g7.service"
+        },
+        "deadlines": [
+          {
+            "kind": "max-end",
+            "in_s": 99999,
+            "sender_utc": "2026-10-02T10:01:00Z"
+          }
+        ]
+      }
+    ]
+  }
+}

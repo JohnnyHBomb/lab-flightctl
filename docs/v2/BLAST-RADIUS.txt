@@ -1,0 +1,69 @@
+BLAST RADIUS: packages or slices this refactor proposes to scrap or retire (2 Oct 2026)
+Each entry: what goes, what is affected, what replaces it, and the amendments made so the plan stays coherent.
+
+R1  RETIRE the v1 P4 package: the repo's roster/{run_arm,run_local_arm,run_queue}.sh and tests/roster/** (9 named
+    acceptance tests, 1918 lines across tests/roster/*.py, measured with wc -l).
+  Why: these scripts exec a FLIGHTCTL_CLIENT/FLIGHTCTL_BRIDGE that the repo never shipped (Grok P4 section;
+    RUNNABLE.tsv row), and no lab caller uses them: the lab's real roster harness is a separate, lab-side copy that calls
+    lanes.sh directly (CLI-DIFF/GAPS G11). Keeping two roster implementations means two lifecycles to maintain.
+  Affected:
+    - slices: none of the v2 packets build on them. The roster handoff gap G12 moves to the shim (B3) and to jobs (C7b1, C7b2).
+    - contracts: none change. admission.batch (batch registration, visible successors) stays in common-v1 and is
+      accepted by the v2 queue path, so a future roster client can still register a whole manifest.
+    - tests: tests/roster/** stays GREEN and frozen until packet B3, which deletes it together with the scripts. Its
+      named obligations are mapped in CONFORMANCE.tsv (P4 rows -> moved/dropped).
+    - legacy callers: none. Lab roster scripts keep calling lanes.sh, which becomes the shim (B3, T09b).
+    - docs: README and release packaging (deploy/flightctl_release.py lists repo files explicitly) drop roster/*.sh in
+      B3; MIGRATION.md lists the deletion.
+  Replaces it: the shim (A10/B3) for existing roster arms; 'flightctl run' with client heartbeat (B2) and batch jobs
+    (C7b1, C7b2) for new work. Lesson 50a (token-bound cleanup) stays a lab-side rule for the lab roster scripts.
+  Amendments made: B3 scope includes the retirement; MIGRATION.md obsolete-test table row; CONFORMANCE.tsv P4 rows.
+  Round 2 (Sol 6 agreed with R1, N6 condition): before the deletion, B3 must pass two replacement tests on the
+    shim/job path: test_shim_cleanup_releases_only_own_token (token-bound cleanup: a late cleanup with an old token
+    never releases a successor) and test_batch_manifest_successors_visible_via_queue (visible handoff: a registered
+    batch shows every arm, successors ineligible). The deletion rows in docs/v2/migration-map.tsv are owned by B3 and
+    checked by gate G1b, so the scripts cannot be removed in any other packet.
+  Other round-2 plan changes are re-orderings and splits, not scraps (no new BLAST-RADIUS entry): B1a/B1b moved
+    before A-ASM as A11/A12; C5a/C5b swapped (usage before quotas); A5b split into A5b1/A5b2 and C7b into C7b1/C7b2
+    for complete proof; new packet C7h (root helper).
+
+Not scrapped (amended or reduced, listed for completeness; no package removed):
+  - P6 release tool: kept; the real backend is REDUCED from 15 to 5 methods (B5). The assembled-scenario gate moves to the
+    ASM packets.
+  - P7 discovery: kept; the AMD/sysfs parser path is DROPPED (no AMD compute lane; its input format was imagined,
+    Grok 4). Re-add with real captures if an AMD compute card ever becomes a lane.
+  - executor-v1 image_digest workloads: DEFERRED to the containers work after R1; R1 runs argv workloads only.
+  - ROADMAP S00-S33: all kept and mapped by the crosswalk in SLICES.md; nothing dropped.
+
+C9 DEFERRAL OPTION (Amendment 2 note for the owner; NOT decided; Sol 6.1 cold review "over-engineering" point)
+Option: keep the C9 design dormant and move its construction and proof out of R1 to a session-enablement milestone.
+What would move (counted from the tree at Amendment 2):
+  Packets:
+    - C9 entirely (20 named acceptance tests, incl. the runbook, per-host gate, disable ordering and binding tests).
+    - From C7h ONLY the friend-session parts: session-open/close, claim-release/reconcile, the claim-clear program
+      and its operator sudoers rule, the session-probe program, friend_accounts and the friend unit-start branch.
+      C7h's agent parts stay in R1: unit-start for DynamicUser jobs, unit-stop, output-collect, the install audit,
+      DeviceAllow (C7b1/C7c/C8 depend on them). Friend-only C7h tests that would move: test_parent_claim_lifecycle,
+      test_claim_rollback_unlinks_only_its_own_inode, test_quarantine_and_start_are_serialised,
+      test_claim_clear_requires_operator_sudo_path, test_claim_clear_prompts_every_time, test_session_probe_bounds,
+      test_probe_sweep_requires_real_monotonic_clock, test_friend_flag_off_refuses_creation_allows_cleanup,
+      test_session_close_order_key_then_terminate_then_slice_stop (9 of C7h's 17 named tests).
+    - C-ASM: drop session_gateway from its assembly prerequisites (its strict G3 conformance moves too).
+  Contract text kept dormant (unchanged): session.schema.json, helper-config friend/claim/probe fields, inventory
+    friend_sessions_enabled/c9_proof, the Amendment 1 runbook and oracles. Their contract tests stay green.
+  Migration-map rows: none are owned by C9; the two C7h rows (Amendment 2, test_v2_freeze.py) stay with C7h because
+    the install audit stays in R1.
+  CONFORMANCE rows that name C9 (14, counted at Amendment 2): the target row "SSH sessions bound to a lease",
+    sol6-B5, amd1-Q1, amd1-Q4, sol6amd1r2-Q4, sol6amd1r4-Q4, sol6amd1r8-Q1, amd1r9-review, amd1r10-obl-1/-2/-3,
+    sol6amd1r10-Q4, and the C9 parts of sol61-P1-3 (session adapter conformance) and sol61-P2 (credential obligation).
+    Rows homed at C7h: 15, of which 12 concern friend paths (claims, quarantine, claim-clear, probe) and would move;
+    sol6r4-new (agent staging isolation), sol6r6-new (helper sudo secure_path) and the install-audit parts stay.
+  Gates: G3 strict conformance for session_gateway leaves C-ASM; G6 at C-ASM loses nothing (the friend SSH scenario
+    is already removed from R1 by Amendment 1); the C9 pre-enablement security review is unchanged (it was always
+    before enablement).
+  Plan checks that would need edits: tests/contracts_v2/test_v2_plan.py (assembly-port order: session_gateway would
+    have no R1 deliverer), test_v2_amendment1.py::test_r1_plan_has_no_friend_sessions (expects the C9 row in
+    milestone C), conformance registry OWED_BY['session_gateway'] = 'C9'.
+  Cost avoided in R1 (estimate, inferred): the three privileged programs' friend paths, the persistent claims store,
+    the sshd runbook tooling and their onlab proofs; risk retained: none for R1 users (all friend flags are off).
+
