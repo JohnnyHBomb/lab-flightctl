@@ -209,7 +209,7 @@ def _tree(tmp_path: Path, pkg_src: str = C9_PKG_SRC, *, loader: bool = False) ->
         (prefix / rel).parent.mkdir(parents=True, exist_ok=True)
         (prefix / rel).write_text(text, encoding="utf-8")
     for d in [tmp_path, prefix, *[p for p in prefix.rglob("*") if p.is_dir()]]:
-        os.chmod(d, 0o755)
+        os.chmod(d, 0o755)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- tmp fixture: a traversable, not group/other-writable dir is what the loader must accept
     for p in prefix.rglob("*"):
         if p.is_file():
             os.chmod(p, 0o644)
@@ -471,19 +471,19 @@ def test_seam_loader_rejects_before_import(tmp_path: Path, label) -> None:
         os.chmod(prefix / "flightctl/c9/extra.py", 0o644)
     elif label == "bytecode cache":
         (prefix / "flightctl/c9/__pycache__").mkdir()
-        os.chmod(prefix / "flightctl/c9/__pycache__", 0o755)
+        os.chmod(prefix / "flightctl/c9/__pycache__", 0o755)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- tmp fixture: a stray cache dir the loader must refuse
         (prefix / "flightctl/c9/__pycache__/x.pyc").write_bytes(b"\0")
         os.chmod(prefix / "flightctl/c9/__pycache__/x.pyc", 0o644)
     elif label == "symlink":
         (prefix / "flightctl/c9/link.py").symlink_to(prefix / "flightctl/c9_seams.py")
     elif label == "group-writable":
-        os.chmod(prefix / "flightctl/c9_seams.py", 0o664)
+        os.chmod(prefix / "flightctl/c9_seams.py", 0o664)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- deliberate group-writable tmp file: proves the loader refuses it
     elif label == "missing manifest file":
         manifest = dict(manifest, **{"flightctl/c9/claims.py": "0" * 64})
     elif label == "writable prefix itself":
-        os.chmod(prefix, 0o777)
+        os.chmod(prefix, 0o777)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- deliberate world-writable tmp prefix: proves the loader refuses it
     elif label == "writable ancestor":
-        os.chmod(tmp_path, 0o777)
+        os.chmod(tmp_path, 0o777)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- deliberate world-writable tmp ancestor: proves the loader refuses it
     elif label == "prefix outside the trust root":
         trust = tmp_path / "elsewhere"
         trust.mkdir()

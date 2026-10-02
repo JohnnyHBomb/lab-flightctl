@@ -195,6 +195,17 @@ Normative documents in this directory:
     - Rev 4 (Sol 6.1 amd3r3): only the rollback unit's sweep or an expired-window sweep closes the window. The step-7 revoke leaves it open for the measurement.
     - The guard trusts exact stdlib only. A nested site-packages or dist-packages directory and the interpreter's purelib/platlib are refused.
     - Imports bind to the canonical prefix, and modules already loaded from outside refuse the load.
+78. **Adapter follow-ups from race R-A0b (Amendment 4).**
+    - A refused adapter config exits 3 with one `adapter-refused:` stderr line per problem; no event is written.
+    - The example file is `config/adapters-v2.json.example`.
+    - The oracle now refuses a `shadow_real` port other than the inhibitor, as the schema does.
+    - In profile `sim` a lane override must be `fake` too.
+    - A packet that adds a `tests/<dir>` may append exactly that token to ci.yml's `full` job.
+    - The ~400-line cap is a hard gate for race entries; a harvested merge may exceed it, with its counts reported.
+    - Rev 2: no read-only port is `dryrun` on any lane.
+    - Rev 2: a `sim` lane runs on fake lane-scoped ports in every profile.
+    - Rev 2: the orphaned `adapter-refused` topic and `adapter_refused` code are removed.
+    - Rev 2: the pr job's Semgrep step scans `flightctl`, `deploy` and `tests`.
 
 ## Lifecycle tables
 

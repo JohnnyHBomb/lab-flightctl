@@ -5,7 +5,7 @@
   "description": "NEW (the owner 2 Oct: email and Slack for now). Messages are derived from committed events; delivery is asynchronous and never blocks a state transition. Channel secrets (SMTP credentials, Slack webhook URL) live in a site secret file named by the adapters file, never in contracts, events or logs. Message bodies never contain lease tokens or API secrets.",
   "oneOf": [{ "$ref": "#/$defs/subscription" }, { "$ref": "#/$defs/message" }],
   "$defs": {
-    "topic": { "enum": ["job-started", "job-finished", "job-failed", "lease-expiring", "lease-expired", "booking-reminder", "booking-ending", "preempted", "quarantine", "host-did-not-wake", "quota-near", "operator-override", "session-ending", "shadow-divergence", "adapter-refused"] },
+    "topic": { "enum": ["job-started", "job-finished", "job-failed", "lease-expiring", "lease-expired", "booking-reminder", "booking-ending", "preempted", "quarantine", "host-did-not-wake", "quota-near", "operator-override", "session-ending", "shadow-divergence"] },
     "channel": { "enum": ["email", "slack"] },
     "subscription": {
       "type": "object",

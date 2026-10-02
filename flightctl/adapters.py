@@ -112,6 +112,10 @@ def check_config(config) -> list[Problem]:
     for lane, entry in sorted(config["lanes"].items()):
         mode, overrides = entry["mode"], entry.get("ports", {})
         effective, exception = ports | overrides, entry.get("shadow_real", [])
+        problems.extend(Problem(p, lane, f"lane {lane}: port {p} is read-only and has no dryrun twin")
+                        for p, i in overrides.items() if i == "dryrun" and p not in _MUTATING)
+        problems.extend(Problem(p, lane, f"lane {lane} is sim but port {p} is {effective[p]} (a sim lane runs on fakes)")
+                        for p in sorted(set(_CRITICAL) | set(_MUTATING) | set(overrides)) if mode == "sim" and effective[p] != "fake")
         if exception and mode != "shadow":
             problems.append(Problem("inhibitor", lane, f"lane {lane} is {mode}; shadow_real needs a shadow lane"))
         if mode == "live":

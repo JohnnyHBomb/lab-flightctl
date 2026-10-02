@@ -283,7 +283,6 @@
         "cache_fetch_failed",
         "external_tenant",
         "thermal_limit",
-        "adapter_refused",
         "account_busy",
         "replay_unavailable"
       ]
