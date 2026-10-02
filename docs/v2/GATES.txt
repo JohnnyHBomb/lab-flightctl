@@ -40,6 +40,10 @@ GATES EVERY PACKET MUST PASS (gauge reruns each one itself and files the evidenc
                   undeclared skip a FAILURE (tested: test_b7_strict_missing_real_twin_fails_the_run); cases
                   declared fake_only/not_dryrun are recorded as "n/a". Evidence: the dated conformance-<port>-<impl>-
                   <host>-<stamp>.json files with "strict": true and "proven": true for every real/dryrun twin.
+                  Amendment 3 rev 2: cases marked friend_flags("off"|"on") apply only when
+                  FLIGHTCTL_CONFORMANCE_FRIEND_FLAGS (default off, every R1 host) matches, and are "n/a" otherwise;
+                  the case asserts the target's read-back flag state. Implementations register from
+                  tests/conformance/impl_*.py, which the conformance conftest imports.
                   Each case is attributed to its own port (port marker), never to a module. Read-only probes need no
                   lane; anything that starts a process on a GPU host runs under a lane held through the CURRENT
                   authority (legacy lanes.sh until that lane is live).
@@ -71,4 +75,4 @@ GAUGE CHECKLIST (copy into each PROOF file)
 WHO
   implementers: the race seats named per packet (Opus as Exemplar, Luna-max, Sol 6 (sol6-max), ASH-27B Q4/Q8 + MTP,
   Qwen3.8-27B + MTP). gauge: a seat that did not author the packet (default: the lead; Astra or Grok as second gauge
-  for security packets A7, C2, C3, C7h, C9). Assembly packets: owned by the lead, never raced.
+  for security packets A7, C2, C3, C7h, C9w, C9). Assembly packets: owned by the lead, never raced.

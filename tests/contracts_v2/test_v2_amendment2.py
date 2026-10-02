@@ -388,6 +388,7 @@ CONFORMANCE_RECEIVERS = {
     "test_work_support.py": {"backend": "ReleaseBackend", "cache": "ModelCache", "gw": "SessionGateway", "notifier": "Notifier",
                              "obs": "LegacyObserver", "probe": "HealthProbe"},
     "test_workload_runner.py": {"runner": "WorkloadRunner"},
+    "test_session_gateway_c9.py": {"gw": "SessionGateway"},  # Amendment 3 rev 2: C9's new file (its touch set), mapped in R1
     "test_executor_transport.py": {"rig.transport": "ExecutorTransport"},  # rev 3: dotted receivers are bound too
 }
 NOT_PORTS = {"registry", "rig", "re", "time", "boot", "reply", "sb", "UNIT"}

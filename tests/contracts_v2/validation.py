@@ -2059,3 +2059,181 @@ def probe_sweep(keys_dir: str, cfg: Mapping[str, Any], invocation: Mapping[str, 
             os.unlink(f)
     audit.append({"event": f"probe-swept-{mode}", "mode": mode, "account": probe_account, "at": now, "caller": caller})
     return True
+
+
+
+# ---------------------------------------------------------------- Amendment 3 rev 2 (Sol 6.1 amd3): C9w session boundary
+SESSION_KEY_TYPES = ("ssh-ed25519", "sk-ssh-ed25519@openssh.com", "ecdsa-sha2-nistp256", "sk-ecdsa-sha2-nistp256@openssh.com")
+
+
+P256_P = 2**256 - 2**224 + 2**192 + 2**96 - 1
+P256_B = 0x5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B
+
+
+def _ssh_fields(blob: bytes) -> list[bytes] | None:
+    """Split an SSH wire blob into its length-prefixed strings; None unless it is consumed exactly."""
+    import struct
+    fields, i = [], 0
+    while i < len(blob):
+        if len(blob) - i < 4:
+            return None
+        (n,) = struct.unpack(">I", blob[i:i + 4])
+        if n > len(blob) - i - 4:
+            return None
+        fields.append(blob[i + 4:i + 4 + n])
+        i += 4 + n
+    return fields
+
+
+def _key_structure_problem(key_type: str, fields: list[bytes]) -> str | None:
+    """Amendment 3 rev 3 (Sol 6.1 amd3r2): the COMPLETE public-key structure of each supported type (RFC 8709, RFC 5656,
+    OpenSSH PROTOCOL.u2f), so the stored form is canonical only for a well-formed key."""
+    if not fields or fields[0] != key_type.encode():
+        return "the type inside the key blob differs from the declared type"
+    rest = fields[1:]
+    sk = key_type.startswith("sk-")
+    if sk:
+        if not rest or not rest[-1].startswith(b"ssh:") or len(rest[-1]) > 128:
+            return "a security-key blob ends with an application string starting 'ssh:'"
+        rest = rest[:-1]
+    if key_type in ("ssh-ed25519", "sk-ssh-ed25519@openssh.com"):
+        return None if len(rest) == 1 and len(rest[0]) == 32 else "an Ed25519 key is exactly one 32-byte public key"
+    if len(rest) != 2 or rest[0] != b"nistp256":
+        return "an ECDSA P-256 key names curve nistp256 and carries one point"
+    point = rest[1]
+    if len(point) != 65 or point[0] != 4:
+        return "the P-256 point must be uncompressed (0x04 || X || Y, 65 bytes)"
+    x, y = int.from_bytes(point[1:33], "big"), int.from_bytes(point[33:], "big")
+    if not (x < P256_P and y < P256_P) or (y * y - (x * x * x - 3 * x + P256_B)) % P256_P != 0:
+        return "the P-256 point is not on the curve"
+    return None
+
+
+def parse_session_key(text: str) -> tuple[dict[str, str] | None, list[str]]:
+    """P1-4 key enrolment: accept ONE bare OpenSSH public key line ('<type> <base64> [comment]'). Refused: options before
+    the type (the helper writes its own restrict/expiry-time/command options), line breaks or control characters, an
+    unknown type, invalid base64, or (rev 3) a blob that is not the complete, exactly consumed structure of its type:
+    Ed25519 one 32-byte key; ECDSA curve nistp256 and an uncompressed point on the curve; sk- types also an 'ssh:'
+    application. Returns the canonical form '<type> <base64>' (comment dropped) and the ssh-keygen SHA256 fingerprint."""
+    import base64
+    import binascii
+    import hashlib
+    if not isinstance(text, str) or any(ord(c) < 0x20 or ord(c) > 0x7E for c in text) or len(text) > 2048:
+        return None, ["the key must be one printable ASCII line with no control characters or line breaks"]
+    parts = text.split(" ")
+    if len(parts) < 2 or parts[0] not in SESSION_KEY_TYPES:
+        return None, [f"the line must start with a key type from {SESSION_KEY_TYPES} (no options)"]
+    if len(parts) > 2 and (parts[2] == "" or len(" ".join(parts[2:])) > 100):
+        return None, ["the comment must be one short field"]
+    try:
+        blob = base64.b64decode(parts[1], validate=True)
+    except (binascii.Error, ValueError):
+        return None, ["the key body is not valid base64"]
+    fields = _ssh_fields(blob)
+    if fields is None:
+        return None, ["the key blob is truncated or has trailing bytes"]
+    problem = _key_structure_problem(parts[0], fields)
+    if problem:
+        return None, [problem]
+    canonical_b64 = base64.b64encode(blob).decode("ascii")
+    fpr = "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode("ascii").rstrip("=")
+    return {"key_type": parts[0], "public_key": f"{parts[0]} {canonical_b64}", "key_fingerprint": fpr}, []
+
+
+def session_key_enrol(registry: dict[str, dict[str, Any]], principal_id: str, text: str, *, friend_sessions_on: bool, now: str,
+                      label: str | None = None) -> dict[str, Any]:
+    """session-key-enrol: creates friend state, so it is refused while features.friend_sessions is off (checked FIRST,
+    before the key is even parsed). The principal comes from the authenticated peer, never from the request.
+    Rev 3 (Sol 6.1 amd3r2): a REVOKED fingerprint is never re-enrolled, by anyone, until the operator purges its record
+    (session-key-revoke with purge): a revocation usually means the key is lost or compromised, and a friend-side
+    re-enrolment would silently undo it."""
+    if not friend_sessions_on:
+        return {"ok": False, "error": {"code": "unavailable", "message": "friend_sessions is off"}}
+    key, problems = parse_session_key(text)
+    if key is None:
+        return {"ok": False, "error": {"code": "invalid", "message": problems[0]}}
+    held = registry.get(key["key_fingerprint"])
+    if held is not None and held["revoked_at"] is not None:
+        return {"ok": False, "error": {"code": "conflict", "message": "this key was revoked; only an operator purge allows it again"}}
+    if held is not None and held["principal_id"] != principal_id:
+        return {"ok": False, "error": {"code": "conflict", "message": "key enrolled by another principal"}}
+    record = {"schema_version": 2, "principal_id": principal_id, "label": label, "enrolled_at": now, "revoked_at": None, **key}
+    registry[key["key_fingerprint"]] = record
+    return {"ok": True, "error": None, "key": dict(record)}
+
+
+def session_key_list(registry: Mapping[str, Mapping[str, Any]], principal_id: str, *, operator: bool = False) -> list[dict[str, Any]]:
+    """session-key-list: read-only, works while off; a friend sees only their own keys."""
+    return [dict(r) for _, r in sorted(registry.items()) if operator or r["principal_id"] == principal_id]
+
+
+def session_key_revoke(registry: dict[str, dict[str, Any]], principal_id: str, fingerprint: str, *, now: str,
+                       operator: bool = False, purge: bool = False) -> dict[str, Any]:
+    """session-key-revoke: cleanup, works while off. Another principal's key is 'not_found' (no existence oracle). The
+    revoked record stays as a tombstone that blocks re-enrolment; rev 3: purge=True (operator only, an already revoked
+    key) deletes the tombstone, the one route by which that key may be enrolled again."""
+    record = registry.get(fingerprint)
+    if record is None or (record["principal_id"] != principal_id and not operator):
+        return {"ok": False, "error": {"code": "not_found", "message": "no such key"}}
+    if purge:
+        if not operator:
+            return {"ok": False, "error": {"code": "denied", "message": "only the operator purges a revoked key"}}
+        if record["revoked_at"] is None:
+            return {"ok": False, "error": {"code": "conflict", "message": "revoke before purging"}}
+        del registry[fingerprint]
+        return {"ok": True, "error": None}
+    if record["revoked_at"] is None:
+        record["revoked_at"] = now
+    return {"ok": True, "error": None}
+
+
+def resolve_session_key(registry: Mapping[str, Mapping[str, Any]], principal_id: str, fingerprint: str) -> str | None:
+    """session-open's fingerprint -> key resolution: only the caller's own, unrevoked key resolves."""
+    record = registry.get(fingerprint)
+    if record is None or record["principal_id"] != principal_id or record["revoked_at"] is not None:
+        return None
+    return record["public_key"]
+
+
+def session_attribution(cgroup_path: str, open_sessions: Sequence[Mapping[str, Any]], lane_id: str) -> str | None:
+    """P1-4 attribution: the parent lease of a process ONLY through the executor's session registry: its cgroup lies
+    inside the user slice an OPEN entry records for THIS lane. No uid input exists: a friend-uid process anywhere else
+    is not attributed (the caller then reports it 'external')."""
+    import re
+    if not cgroup_path.startswith("/") or "/../" in cgroup_path + "/" or "/./" in cgroup_path + "/":
+        return None
+    found = None
+    for entry in open_sessions:
+        if entry.get("state") != "open" or entry.get("lane_id") != lane_id or not re.fullmatch(r"user-[1-9][0-9]{0,9}\.slice", entry.get("slice", "")):
+            continue
+        if (cgroup_path + "/").startswith(f"/user.slice/{entry['slice']}/"):
+            if found is not None and found != entry["parent_lease_id"]:
+                return None  # two open entries claim one slice: ambiguous, never attribute
+            found = entry["parent_lease_id"]
+    return found
+
+
+def executor_session_closes(registry: Sequence[Mapping[str, Any]], *, mono_now: float, lease_deadline_mono: Mapping[str, float],
+                            reconcile_active: Sequence[str] | None = None) -> list[tuple[str, str]]:
+    """P1-4 executor lifecycle: which open registry entries the executor closes by itself, and why. local-expiry: the
+    entry's own monotonic deadline passed; controller-loss: its parent lease's executor-side deadline lapsed (no beat);
+    reconcile: the authority's active list omits it. A missing parent deadline counts as lapsed (fail closed)."""
+    closes = []
+    for entry in registry:
+        if entry["state"] != "open":
+            continue
+        if reconcile_active is not None and entry["session_id"] not in reconcile_active:
+            closes.append((entry["session_id"], "reconcile"))
+        elif mono_now >= entry["expires_mono"]:
+            closes.append((entry["session_id"], "local-expiry"))
+        elif mono_now >= lease_deadline_mono.get(entry["parent_lease_id"], float("-inf")):
+            closes.append((entry["session_id"], "controller-loss"))
+    return closes
+
+
+# P1-5 seam loading: Amendment 3 rev 3 moved the loader, its three-state enablement model and the import trust boundary
+# into the stdlib-only module c9_loader.py (it is exercised under the production interpreter flags, python3 -I -S -B).
+from .c9_loader import (C9_BODY_STATES, C9_LOADER_STATES, C9_PACKAGES, C9_WINDOW_MAX_TTL_S, C9ImportGuard, c9_absent_audit,  # noqa: E402,F401
+                        c9_body_allowed, c9_loader_state, c9_seam_load, c9_window_close, c9_window_open, c9_window_read,
+                        c9_window_sweep, c9_window_valid, preloaded_outside_modules, release_stale_removals, stdlib_trusted,
+                        third_party_locations, trusted_import_context)

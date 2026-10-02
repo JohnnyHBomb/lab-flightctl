@@ -164,7 +164,7 @@ Normative documents in this directory:
 
 ### Amendment 1 (owner decisions of 2 Oct 2026; second commit after the freeze; see `docs/v2/AMENDMENT-1.md`)
 
-66. **Friend sessions are flag-gated and off in R1** (Q1). `features.friend_sessions` is false, and so is every host's `friend_sessions_enabled` (rev 7/8: a host needs the global flag AND its own per-host flag with a recorded runbook proof bound to that host's identity, sshd configuration and evidence artefact; the helper sees both flags and re-checks the binding itself): friends get API-queued jobs under a per-job DynamicUser, like agents. The infrastructure for per-friend accounts, the helper's claims and quarantine, the session contract and C9 stays specified, built and tested.
+66. **Friend sessions are flag-gated and off in R1** (Q1). `features.friend_sessions` is false, and so is every host's `friend_sessions_enabled` (rev 7/8: a host needs the global flag AND its own per-host flag with a recorded runbook proof bound to that host's identity, sshd configuration and evidence artefact; the helper sees both flags and re-checks the binding itself): friends get API-queued jobs under a per-job DynamicUser, like agents. Amendment 3 (owner's C9 decision): R1 builds every pathway C9 uses, refusing while off (packet C9w); C9's bodies come after R1, in milestone D.
 67. **A7 uses a private-CA certificate** (Q2). The new `adapters.tls` block holds the cert, key and chain files and the rotation thresholds. It is CA-agnostic. The `tailscale cert` dependency is removed. Peer identity is unchanged. Revision 2: `tls.trust_anchor` lists the only roots a chain may terminate at. When the served certificate expires with no valid replacement, the listener stops serving TLS (fail closed).
 68. **The sshd change is deferred to C9 enablement** (Q4). It happens through a lockout-safe runbook and only on `ssh_server: openssh` hosts. C9 tests against a dedicated test sshd. Revision 2: the runbook discovers the effective key settings with `sshd -T` and preserves them. Flag off refuses only the paths that create friend work; cleanup stays available.
 
@@ -176,6 +176,25 @@ Normative documents in this directory:
 72. **The frozen carried cases assert against the production audit** (P1-4). Migration-map rows let C7h, and the packets that fix A0c's repros, remove their strict-xfail marks.
 73. **T04 is split** (P1-5). The holder variant runs at A-ASM; the managed-unit variant runs at C7b1 and C-ASM.
 74. **GPU job-path proofs per lane** (P2): a CUDA job through the production path; cancel or preempt with GPU memory allocated; controller loss; no successor before teardown.
+
+### Amendment 3 (owner's C9 decision; see `docs/v2/AMENDMENT-3.md`)
+
+75. **C9 is a self-contained build on pre-built pathways.** R1 packet C9w delivers every pathway C9 uses, wired end to end and refusing while the friend flags are off. These are: the SessionGateway real and fake twins, the session RPC ops, the authority gates, the helper dispatch points and stub programs, the claim store's cleanup paths, disable ordering and the C9 seams. C9 moves to milestone D (session enablement, after R1). It builds only the bodies behind those pathways, and may touch only its declared new paths plus three documentation extension points (`tools/touch_set_gate.py`).
+76. **The C9 boundary is closed and pinned (Amendment 3 rev 2, Sol 6.1 amd3).** C9's touch set and its 20 R1 pathways are pinned in `tests/contracts_v2/test_v2_amendment3.py`, and its new paths are checked absent at the R1 release tag `v2-r1`. The gate checks the three documentation extension points line by line. R1 also delivers:
+    - friend key enrolment: `session-key-enrol`, `session-key-list` and `session-key-revoke`. Enrol is refused while off. session-open resolves its fingerprint to the caller's own key.
+    - the executor `session` kind: register, close and reconcile, plus the local-expiry and controller-loss closes.
+    - attribution of a friend's processes only through a registered session slice, never by uid.
+    - verified C9 package loading, with no package in R1 and stale packages removed.
+    - both operator sudoers rules, installed against refusing stub programs.
+   The R1 session conformance cases expect a typed refusal and a seeded cleanup. The success proof is C9's.
+77. **The C9 loader has three states (Amendment 3 rev 3, Sol 6.1 amd3r2).**
+    - The states are `off`, `window` and `on`. The window is opened per host by the operator and is time-bounded. In it, only the probe ADD and the binding measurement may load, so the flags-off runbook probe works in exactly one state. Friend creation needs `on`.
+    - C9 code runs under `python3 -I -S -B`. Its `sys.path` holds only the stdlib and the verified prefix, and an authoritative meta-path guard refuses any other module.
+    - The prefix and its ancestors are inspected. Any filesystem error or import-time exception refuses.
+    - Keys are checked structurally. A revoked key comes back only after an operator purge. A `closed` registry entry must carry an all-true proof.
+    - Rev 4 (Sol 6.1 amd3r3): only the rollback unit's sweep or an expired-window sweep closes the window. The step-7 revoke leaves it open for the measurement.
+    - The guard trusts exact stdlib only. A nested site-packages or dist-packages directory and the interpreter's purelib/platlib are refused.
+    - Imports bind to the canonical prefix, and modules already loaded from outside refuse the load.
 
 ## Lifecycle tables
 

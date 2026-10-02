@@ -81,11 +81,16 @@ def test_flag_wording_is_precise_everywhere() -> None:
 
 def test_r1_plan_has_no_friend_sessions() -> None:
     c9 = section("### C9: ")
-    assert "NOT enabled" in c9 and "features.friend_sessions" in c9
+    assert "NOT in R1" in c9 and "features.friend_sessions" in c9  # Amendment 3: milestone D
     casm = section("### C-ASM: ")
     assert "opens a session" not in casm and "per-job DynamicUser" in casm
     row = next(l for l in SLICES.splitlines() if l.startswith("| C9 |"))
-    assert "not enabled" in row and "| C |" in row  # still built in milestone C
+    # Amendment 3 (owner's C9 decision): C9 is NOT in R1 (milestone D, after C-ASM); C9w delivers its pathways in R1
+    assert "NOT in R1" in row and "| D |" in row
+    c9w = next(l for l in SLICES.splitlines() if l.startswith("| C9w |"))
+    assert "| C |" in c9w and "refusing" in c9w
+    index = [l.split("|")[1].strip().strip("*") for l in SLICES.split("## Packet index", 1)[1].split("**Assembly prerequisites**", 1)[0].splitlines() if l.startswith("|")]
+    assert index.index("C9w") < index.index("C-ASM") < index.index("C9")
 
 
 # ------------------------------------------------------------------ Q2 private-CA TLS

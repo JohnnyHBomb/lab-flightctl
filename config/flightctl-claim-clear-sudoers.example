@@ -2,6 +2,7 @@
 # Round 8: the operator alone may lift a friend-account quarantine. NO NOPASSWD: sudo re-authenticates the human.
 # Round 9: timestamp_timeout=0 scoped to the program, so a cached sudo credential never satisfies it (always prompt).
 # The program is mode 0700 root:root; the executor and friend accounts must have no route to it.
+# Amendment 3 rev 2: installed in R1 by C7h, against the refusing stub program (the clear body is a C9 body).
 Defaults:opr env_reset, !setenv, secure_path="/usr/sbin:/usr/bin:/sbin:/bin"
 Defaults!/usr/local/libexec/flightctl-claim-clear timestamp_timeout=0
 opr ALL=(root) /usr/local/libexec/flightctl-claim-clear

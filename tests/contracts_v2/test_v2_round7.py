@@ -412,7 +412,7 @@ def plan_problems(text: str) -> list[str]:
             rows.append((cells[0].strip("*"), cells[2]))
     ids = [r[0] for r in rows]
     problems = []
-    order = {"A": 0, "B": 1, "C": 2}
+    order = {"A": 0, "B": 1, "C": 2, "D": 3}  # D: session enablement after R1 (Amendment 3)
     if [order[m] for _, m in rows] != sorted(order[m] for _, m in rows):
         problems.append("milestone column not monotone")
     cw = text.split("Crosswalk to ROADMAP.tsv.", 1)[1].split("\n## ", 1)[0]

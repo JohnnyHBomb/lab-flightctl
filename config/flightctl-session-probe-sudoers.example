@@ -1,4 +1,5 @@
-# /etc/sudoers.d/flightctl-session-probe (example; install with visudo -cf, mode 0440 root:root; only when enabling C9)
+# /etc/sudoers.d/flightctl-session-probe (example; install with visudo -cf, mode 0440 root:root)
+# Amendment 3 rev 2: installed in R1 by C7h, against the refusing stub program (the add path is a C9 body).
 # Amendment 1 rev 4: the operator alone may write the C9 runbook's short-lived probe key. NO NOPASSWD, and
 # timestamp_timeout=0 so every invocation prompts. The program is mode 0700 root:root.
 Defaults:opr env_reset, !setenv, secure_path="/usr/sbin:/usr/bin:/sbin:/bin"

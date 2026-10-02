@@ -223,7 +223,12 @@ class SessionGateway(Protocol):
     sshd ignores it without PermitUserEnvironment). Close removes the key, runs loginctl terminate-user
     and systemctl stop user-<uid>.slice, resets DeviceAllow, and returns a close_proof (user slice empty,
     key removed); the executor adds occupancy emptiness before the lane is freed. Gated on the owner's
-    Q1 answer (OPEN-QUESTIONS). Conformance: tests/conformance/test_work_support.py session cases."""
+    Q1 answer (OPEN-QUESTIONS). Conformance: tests/conformance/test_work_support.py session cases.
+    Amendment 3 rev 2 (Sol 6.1 amd3): while the friend flags are off, open crosses the real wire and returns a typed
+    'unavailable' refusal with no side effect, and close still works on an existing session. public_key is the
+    canonical enrolled key that the authority resolved from the caller's fingerprint (resolve_session_key). An ok open
+    reports the slice it configured (user-<uid>.slice). The executor records that slice against parent_lease_id and
+    lane_id in its session registry, which is the only input to session attribution (session_attribution)."""
 
     def open(self, host_id: str, unix_user: str, public_key: str, *, parent_lease_id: str, lane_id: str, expires_at: datetime,
              device_minors: Sequence[int], cards: Sequence[str], timeout_s: float) -> Result: ...

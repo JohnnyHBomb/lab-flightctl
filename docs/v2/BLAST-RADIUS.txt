@@ -35,6 +35,15 @@ Not scrapped (amended or reduced, listed for completeness; no package removed):
   - executor-v1 image_digest workloads: DEFERRED to the containers work after R1; R1 runs argv workloads only.
   - ROADMAP S00-S33: all kept and mapped by the crosswalk in SLICES.md; nothing dropped.
 
+C9 DEFERRAL (DECIDED by the owner in Amendment 3, in a narrower form than the option below: R1 builds every pathway C9
+uses (packet C9w, refusing while off); C9 builds only the bodies, in milestone D. What actually moved: C9 to milestone D
+after C-ASM; 5 friend-WORKING C7h tests to C9 (rev 2, Sol 6.1 amd3: 7 in the first draft; test_claim_clear_prompts_every_time
+and test_probe_sweep_requires_real_monotonic_clock need no creation body and stay R1, as do
+test_friend_flag_off_refuses_creation_allows_cleanup and test_session_close_order_key_then_terminate_then_slice_stop); C9's refusal tests and
+the refusing session_gateway conformance to C9w; C-ASM's session_gateway prerequisite to C9w; registry OWED_BY
+session_gateway -> C9w; the C9 touch set is enforced by tests/contracts_v2/test_v2_amendment3.py and
+tools/touch_set_gate.py (rev 2: pinned, checked at the R1 tag v2-r1, extension points checked line by line).
+The option text below is kept as written for the record.)
 C9 DEFERRAL OPTION (Amendment 2 note for the owner; NOT decided; Sol 6.1 cold review "over-engineering" point)
 Option: keep the C9 design dormant and move its construction and proof out of R1 to a session-enablement milestone.
 What would move (counted from the tree at Amendment 2):

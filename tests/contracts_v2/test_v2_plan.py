@@ -9,7 +9,7 @@ from tests.conformance import registry
 
 DOCS = Path(__file__).parents[2] / "docs" / "v2"
 SLICES = (DOCS / "SLICES.md").read_text(encoding="utf-8")
-MILESTONE_ORDER = {"A": 0, "B": 1, "C": 2}
+MILESTONE_ORDER = {"A": 0, "B": 1, "C": 2, "D": 3}  # D = session enablement, after R1 (Amendment 3)
 
 
 def _index() -> list[dict]:
@@ -93,7 +93,7 @@ def test_crosswalk_follows_the_schedule_and_covers_every_packet() -> None:
 
 
 def test_milestone_column_is_monotone_and_dependencies_never_point_to_a_later_milestone() -> None:
-    order = {"A": 0, "B": 1, "C": 2}
+    order = {"A": 0, "B": 1, "C": 2, "D": 3}  # D: session enablement after R1 (Amendment 3)
     last = 0
     for row in ROWS:
         m = order[row["milestone"]]
