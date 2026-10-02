@@ -95,6 +95,25 @@
     "notifications": false,
     "fido2_approvals": false,
     "release_backend": false,
-    "shadow_observer": true
+    "shadow_observer": true,
+    "friend_sessions": false
+  },
+  "tls": {
+    "mode": "private-ca",
+    "server_name": "controller-a.example.internal",
+    "cert_file": "/etc/flightctl/tls/server.crt",
+    "key_file": "/etc/flightctl/tls/server.key",
+    "chain_file": "/etc/flightctl/tls/chain.crt",
+    "rotation": {
+      "check_interval_s": 3600,
+      "renew_before_s": 1209600,
+      "alert_before_s": 259200
+    },
+    "trust_anchor": {
+      "root_ca_files": [
+        "/etc/flightctl/tls/root_ca.crt"
+      ],
+      "pinned_root_sha256": null
+    }
   }
 }

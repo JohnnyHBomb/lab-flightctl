@@ -1,6 +1,10 @@
 OPEN QUESTIONS for the owner (revision 2, 2 Oct 2026). Everything else was decided conservatively under the owner's
 prior approval and is recorded in decisions.tsv (lab side) with the decision ids referenced in the contracts.
 
+Q1  ANSWERED 2 Oct 2026 (Amendment 1): (c) for release 1, with the infrastructure for (a) built behind the
+    friend_sessions flag (off) plus a per-host enable (inventory friend_sessions_enabled + recorded C9 runbook proof,
+    rev 7). No friend SSH sessions and no friend shell jobs in R1; friends get API-queued jobs
+    under a per-job DynamicUser like agents. Original question kept below for the record.
 Q1  How should friends' jobs and SSH sessions be isolated from the owner's account on the lane hosts?
     Round 2 specifies the recommended option fully (session.schema.json, slice C7h flightctl-helper, slice C9):
       (a) one unix account per friend (fc-<name>, linger off) plus the minimal root helper, called through one
@@ -12,13 +16,27 @@ Q1  How should friends' jobs and SSH sessions be isolated from the owner's accou
 
 OWNER ACTIONS (not questions; already-decided items that need your hands)
   - Approve the forced-command key line on each lane host (A-ASM) and the tailnet ACL/share for friends (C-ASM).
-  - Enable HTTPS certificates for the tailnet (admin console) and let the controller run `tailscale cert` (A7, needed
-    for the browser approval flow; observed today: CertDomains is null). Note: per Tailscale's documentation, issued
-    certificate names appear in public certificate-transparency logs.
+  - (Amendment 1, replaces the tailnet-certificate action) Run the site's private CA (step-ca first; Vault PKI later)
+    and its renewer for the A7 certificate; fill adapters.tls. Reason for the change: tailnet certificates would put
+    the lab's names in public certificate-transparency logs.
+  - (Amendment 1) Distribute the private root CA to friend devices (and own browsers, CLI hosts and agent hosts),
+    by a channel other than the HTTPS listener it secures, before friends are onboarded (C-ASM). The same root file(s)
+    go into adapters.tls.trust_anchor.root_ca_files (rev 2).
   - Install flightctl-helper + its sudoers rule and its persistent claims directory on lane hosts (C7h, sudo; no shared
     service account is needed any more: agents use per-job DynamicUser); add
-    sshd AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/flightctl-keys/%u (root-owned keys dir) before C9.
-  - Name the operator account for claim-clear (helper.json operator_account) and install its sudoers rule WITHOUT
+    sshd key configuration (add the root-owned managed keys dir to the host's EFFECTIVE key paths, discovered and
+    verified with sshd -T as the C9 pre-enable runbook specifies; no fixed value is given here): DEFERRED by
+    Amendment 1 (Q4) to C9 enablement, done only via the C9 pre-enable runbook (lockout-safe) on openssh hosts.
+    For the runbook's login proof (rev 4) also create the dedicated probe account (helper.json probe_account) and
+    install config/flightctl-session-probe-sudoers.example on the operator account, only on hosts being enabled.
+  - (Amendment 1, Q3) Operator account DECIDED; the name is site data, recorded in the lab site-config drafts, not
+    in this repo. Its claim-clear rule goes on that account. The C7h install audit requires that account to have NO
+    NOPASSWD route reaching claim-clear (any wildcard, directory, ALL or alias grant counts) and no exempt_group
+    membership that skips the prompt.
+  - (Amendment 1) The executor must run under a DEDICATED account, distinct from the operator account: the install
+    audit requires the executor's only sudo grant to be the helper, and helper-config rejects operator_account ==
+    caller_account. Create it and move the forced-command key to it before C7h's install.
+  - (Q3 answered: the operator account is decided, see above) Install the claim-clear sudoers rule on that account WITHOUT
     NOPASSWD and with Defaults!<program> timestamp_timeout=0 (config/flightctl-claim-clear-sudoers.example). If that account already has a NOPASSWD route to ALL,
     the C7h install audit fails until that route requires re-authentication (round 8).
   - Test store-host WoL on its routed link (G23), before A12's gauge run on that host.

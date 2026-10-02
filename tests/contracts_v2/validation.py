@@ -106,6 +106,7 @@ FEATURE_PORTS = {
     "fido2_approvals": ("signer",),
     "release_backend": ("release_backend",),
     "shadow_observer": ("legacy_observer",),
+    "friend_sessions": ("session_gateway",),
 }
 
 
@@ -174,7 +175,450 @@ def adapters_semantics(config: Mapping[str, Any]) -> list[str]:
                     problems.append(f"lane {lane} is shadow but {port} is {effective[port]} (shadow needs real reads)")
         if mode == "off" and overrides:
             problems.append(f"lane {lane} is off but carries port overrides")
+    problems += amendment1_adapters_semantics(config)
     return problems
+
+
+def amendment1_adapters_semantics(config: Mapping[str, Any]) -> list[str]:
+    """Amendment 1 (owner decisions of 2 Oct 2026): friend sessions are flag-gated (off in R1) and the A7 listener uses
+    a private-CA certificate with a sane rotation window."""
+    problems = []
+    features = config.get("features", {})
+    if features.get("sessions") and not features.get("friend_sessions"):
+        problems.append("feature 'sessions' (friend SSH sessions) requires 'friend_sessions'")
+    tls = config.get("tls")
+    if not tls:
+        problems.append("tls block missing (A7 serves a private-CA certificate)")
+    else:
+        rot = tls["rotation"]
+        if not rot["alert_before_s"] < rot["renew_before_s"]:
+            problems.append("tls.rotation.alert_before_s must be below renew_before_s (alert only after renewal was due)")
+        if not rot["check_interval_s"] < rot["alert_before_s"]:
+            problems.append("tls.rotation.check_interval_s must be below alert_before_s (an expiry must be seen before it bites)")
+        if len({tls["cert_file"], tls["key_file"], tls["chain_file"]}) != 3:
+            problems.append("tls cert_file, key_file and chain_file must be distinct files")
+        anchor = tls.get("trust_anchor") or {}
+        if set(anchor.get("root_ca_files", [])) & {tls["cert_file"], tls["key_file"], tls["chain_file"]}:
+            problems.append("tls trust_anchor root_ca_files must not be the served cert, key or chain file (rev 2)")
+        if not anchor.get("root_ca_files"):
+            problems.append("tls trust_anchor has no root_ca_files (rev 2: chains are verified only against them)")
+    return problems
+
+
+def tls_cert_decision(*, server_name: str, cert_names: list[str], not_before: float, not_after: float, now: float,
+                      alert_before_s: int, chain_ok: bool, key_matches: bool, chain_root_sha256: str | None,
+                      anchor_sha256s: set[str], pinned_root_sha256s: set[str] | None = None) -> str:
+    """Amendment 1 A7 oracle for ONE certificate file set (at start and on every change). 'refuse' / 'alert' (serve and
+    alert) / 'serve'. Revision 2 (Sol 6 amd1): the TRUST ANCHOR is adapters.tls.trust_anchor: the chain must verify
+    (chain_ok) and terminate at a root whose SHA-256 is one of the configured root_ca_files (anchor_sha256s); if
+    pinned_root_sha256 is configured, the root must also be pinned. A chain rooted anywhere else (including a public
+    or system CA) is refused. Exact SAN match only (no wildcard certificates)."""
+    if not (chain_ok and key_matches) or chain_root_sha256 is None or chain_root_sha256 not in anchor_sha256s:
+        return "refuse"
+    if pinned_root_sha256s and chain_root_sha256 not in pinned_root_sha256s:
+        return "refuse"
+    if server_name not in cert_names or not (not_before <= now < not_after):
+        return "refuse"
+    return "alert" if not_after - now <= alert_before_s else "serve"
+
+
+def tls_listener_action(*, candidate: str | None, incumbent: str | None) -> str:
+    """Amendment 1 rev 3 (Sol 6 amd1 r2): what the listener serves, decided at start, on every file change, on every
+    CONFIG change (server_name, trust_anchor root files, pins) and every check_interval_s. candidate = tls_cert_decision
+    of the files on disk under the CURRENT config and time (None if unreadable). incumbent = tls_cert_decision RE-RUN on
+    the certificate being served, also under the CURRENT config and time (None if nothing is served): expiry is not the
+    only way an incumbent stops being acceptable; a removed root, a removed pin or a changed server_name revoke it too.
+    'use-candidate' when the candidate is 'serve'/'alert'; else 'keep-incumbent' only when the re-validated incumbent is
+    'serve'/'alert'; else 'stop-tls' (new handshakes refused, fail closed) with an operator alert."""
+    if candidate in ("serve", "alert"):
+        return "use-candidate"
+    if incumbent in ("serve", "alert"):
+        return "keep-incumbent"
+    return "stop-tls"
+
+
+FRIEND_CREATING_SUBCOMMANDS = frozenset({"session-open"})  # plus unit-start with --account (friend)
+FRIEND_CLEANUP_SUBCOMMANDS = frozenset({"session-close", "account-check", "claim-release", "claim-reconcile"})
+
+
+C9_BINDING_KEYS = ("host_id", "sshd_host_key_sha256", "machine_id_sha256", "sshd_effective_sha256", "proof_id")
+
+
+def helper_binding_ok(cfg: Mapping[str, Any], live: Mapping[str, Any] | None) -> bool:
+    """Amendment 1 rev 8/9 (Sol 6 amd1 r7, r8): before any friend CREATION the helper compares helper.json c9_binding with
+    the LIVE facts it measures on its own host at that moment: host id, sshd_host_keys_sha256 over ALL host keys,
+    SHA-256 of /etc/machine-id and sshd_effective_digest (global AND per-relevant-user `sshd -T`). Any difference (sshd config changed since the proof,
+    host re-imaged, binding copied from another host) or missing data refuses creation (fail closed)."""
+    binding = cfg.get("c9_binding")
+    if not isinstance(binding, Mapping) or not live:
+        return False
+    return all(binding.get(k) is not None and binding.get(k) == live.get(k) for k in C9_BINDING_KEYS if k != "proof_id") and bool(binding.get("proof_id"))
+
+
+def helper_subcommand_enabled(cfg: Mapping[str, Any], subcommand: str, *, friend: bool = False,
+                              live: Mapping[str, Any] | None = None) -> bool:
+    """Amendment 1 rev 2/8: the helper refuses only the paths that CREATE friend work (session-open, unit-start
+    --account) unless it can see BOTH gates itself: helper.json friend_sessions_global (the site flag) AND
+    friend_sessions_host (this host's inventory flag) AND friend_sessions (their conjunction) are all true, and the
+    live host facts match c9_binding (helper_binding_ok). Either flag false = off. Cleanup and safety paths stay
+    available for earlier friend work: session-close, unit-stop, output-collect, claim-release, claim-reconcile,
+    account-check (read-only). Agent work is unaffected. claim-clear is never a helper subcommand."""
+    known = {"unit-start", "unit-stop", "output-collect"} | FRIEND_CREATING_SUBCOMMANDS | FRIEND_CLEANUP_SUBCOMMANDS
+    if subcommand == "claim-clear" or subcommand not in known:
+        return False
+    if subcommand in FRIEND_CREATING_SUBCOMMANDS or (subcommand == "unit-start" and friend):
+        return (cfg.get("friend_sessions") is True and cfg.get("friend_sessions_global") is True
+                and cfg.get("friend_sessions_host") is True and helper_binding_ok(cfg, live))
+    return True
+
+
+def sshd_effective(sshd_T_output: str) -> dict[str, list[str]]:
+    """Parse `sshd -T` / `sshd -T -C user=..,host=..,addr=..` output (lower-case 'keyword value...' lines) into
+    {keyword: [tokens]} for the key-related keywords the C9 runbook must preserve."""
+    out: dict[str, list[str]] = {}
+    for line in sshd_T_output.splitlines():
+        parts = line.strip().split()
+        # rev 10: keywords compared case-insensitively (measured: OpenSSH 10.5p1 prints "AuthorizedKeysFile", older
+        # releases print "authorizedkeysfile")
+        if parts and parts[0].lower() in ("authorizedkeysfile", "authorizedkeyscommand", "authorizedkeyscommanduser"):
+            out[parts[0].lower()] = parts[1:]
+    return out
+
+
+MANAGED_KEYS = "/etc/ssh/flightctl-keys/%u"
+
+
+def sshd_keys_plan(before: Mapping[str, list[str]]) -> list[str]:
+    """C9 runbook step 3 (Amendment 1 rev 2): the new AuthorizedKeysFile value = every EFFECTIVE existing path, in
+    order (whatever the host uses: the default '.ssh/authorized_keys .ssh/authorized_keys2', or e.g. /etc/ssh/keys/%u),
+    then the managed directory. 'none' (no files) is preserved as no files: the managed dir alone is NOT added on such a
+    host (stop: keys come only from AuthorizedKeysCommand there, which the runbook does not change)."""
+    files = list(before.get("authorizedkeysfile", []))
+    if not files or files == ["none"]:
+        raise ValueError("host has no AuthorizedKeysFile (keys via AuthorizedKeysCommand only): stop, needs its own review")
+    return files + ([MANAGED_KEYS] if MANAGED_KEYS not in files else [])
+
+
+def sshd_change_verified(before: Mapping[str, list[str]], after: Mapping[str, list[str]]) -> list[str]:
+    """C9 runbook step 4: compare `sshd -T` (global and per relevant user via -C) before and after the drop-in, BEFORE
+    the reload. Every previous AuthorizedKeysFile path must still be there in the same order, the managed directory must
+    be added, and AuthorizedKeysCommand / AuthorizedKeysCommandUser must be unchanged."""
+    problems = []
+    old, new = before.get("authorizedkeysfile", []), after.get("authorizedkeysfile", [])
+    if new[: len(old)] != old:
+        problems.append(f"previous AuthorizedKeysFile paths not preserved in order: {old} -> {new}")
+    if MANAGED_KEYS not in new:
+        problems.append("managed key directory missing from the effective AuthorizedKeysFile (drop-in not effective, e.g. set after an earlier value)")
+    for kw in ("authorizedkeyscommand", "authorizedkeyscommanduser"):
+        if before.get(kw) != after.get(kw):
+            problems.append(f"{kw} changed: {before.get(kw)} -> {after.get(kw)}")
+    return problems
+
+
+C9_PROOF_TRUE = ("sshd_verified", "probe_login_ok", "probe_key_removed", "no_conditional_key_settings")  # rev 10
+PROOF_CLOCK_SKEW_S = 300
+
+
+def c9_proof_ok(host: Mapping[str, Any]) -> bool:
+    """Amendment 1 rev 7/8: shape of the host's recorded C9 runbook proof: proof id, artefact SHA-256, date, runbook
+    revision, the HOST BINDING (host_id, sshd host key SHA-256, machine-id SHA-256, effective `sshd -T` SHA-256) and the
+    three outcomes, all true."""
+    import re
+
+    proof = host.get("c9_proof")
+    hexes = ("artefact_sha256", "sshd_host_key_sha256", "machine_id_sha256", "sshd_effective_sha256")
+    return (isinstance(proof, Mapping) and bool(re.fullmatch(r"[a-z0-9][a-z0-9._-]{2,63}", str(proof.get("proof_id", ""))))
+            and all(re.fullmatch(r"[0-9a-f]{64}", str(proof.get(k, ""))) for k in hexes) and bool(proof.get("recorded_at"))
+            and bool(proof.get("host_id")) and all(proof.get(k) is True for k in C9_PROOF_TRUE))
+
+
+def authority_admits_friend_work(adapters: Mapping[str, Any], host: Mapping[str, Any], artefact_store: Mapping[str, Mapping[str, str]],
+                                 now: float) -> tuple[bool, str | None]:
+    """Amendment 1 rev 7/8: the authority's admission for a friend session or friend-account job on a host, before
+    any helper call. Gates, in order: global flag; openssh host; the host's own flag; a well-formed proof; the proof is
+    BOUND to this host (proof host_id == inventory host_id; proof host key, machine-id and effective sshd -T hashes ==
+    the values the inventory probe last OBSERVED on this host, so a copied proof, a re-imaged host or a changed sshd
+    config is refused); the evidence artefact exists in the authority's artefact store under proof_id with the same
+    SHA-256 and host; and the proof is not dated in the future (more than PROOF_CLOCK_SKEW_S ahead of now: a clock
+    rollback or a forged date)."""
+    import datetime
+
+    if adapters.get("features", {}).get("friend_sessions") is not True:
+        return False, "feature friend_sessions is off"
+    if not c9_host_eligible(host):
+        return False, "host ssh_server is not openssh"
+    if host.get("friend_sessions_enabled") is not True:
+        return False, "host friend_sessions_enabled is false"
+    if not c9_proof_ok(host):
+        return False, "host has no valid C9 runbook proof"
+    proof = host["c9_proof"]
+    if proof["host_id"] != host.get("host_id"):
+        return False, "proof is bound to another host"
+    for key in ("sshd_host_key_sha256", "machine_id_sha256", "sshd_effective_sha256"):
+        if host.get(key) is None or proof[key] != host.get(key):
+            return False, f"proof {key} does not match the host's observed value"
+    stored = artefact_store.get(proof["proof_id"])
+    if not stored or stored.get("sha256") != proof["artefact_sha256"] or stored.get("host_id") != host.get("host_id"):
+        return False, "proof artefact missing or does not match the stored artefact"
+    recorded = datetime.datetime.fromisoformat(str(proof["recorded_at"]).replace("Z", "+00:00")).timestamp()
+    if recorded > now + PROOF_CLOCK_SKEW_S:
+        return False, "proof is dated in the future (clock rollback?)"
+    return True, None
+
+
+def friend_session_host_allowed(adapters: Mapping[str, Any], host: Mapping[str, Any], artefact_store: Mapping[str, Mapping[str, str]],
+                                now: float) -> bool:
+    return authority_admits_friend_work(adapters, host, artefact_store, now)[0]
+
+
+def helper_flag_expected(adapters: Mapping[str, Any], host: Mapping[str, Any], artefact_store: Mapping[str, Mapping[str, str]],
+                         now: float) -> bool:
+    return friend_session_host_allowed(adapters, host, artefact_store, now)
+
+
+def friend_sessions_consistent(adapters: Mapping[str, Any], hosts: list[Mapping[str, Any]], helper_by_host: Mapping[str, Mapping[str, Any]],
+                               artefact_store: Mapping[str, Mapping[str, str]], now: float) -> list[str]:
+    """Rev 8 (replaces the old global-equality rule): the PER-HOST consistency check that must PASS before activation
+    (C9 runbook step 8) and at every C-ASM/deploy check. For each host with a helper.json: friend_sessions_global ==
+    the site flag; friend_sessions_host == the host's inventory flag; friend_sessions == the authority's admission
+    result for that host; when on, c9_binding equals the proof's binding. A mixed deployment (only proven hosts on) is
+    valid."""
+    problems = []
+    site_flag = adapters.get("features", {}).get("friend_sessions") is True
+    for host in hosts:
+        cfg = helper_by_host.get(host["host_id"])
+        if cfg is None:
+            continue
+        hid = host["host_id"]
+        if (cfg.get("friend_sessions_global") is True) != site_flag:
+            problems.append(f"host {hid}: helper friend_sessions_global != site flag {site_flag}")
+        if (cfg.get("friend_sessions_host") is True) != (host.get("friend_sessions_enabled") is True):
+            problems.append(f"host {hid}: helper friend_sessions_host != inventory friend_sessions_enabled")
+        want = helper_flag_expected(adapters, host, artefact_store, now)
+        if (cfg.get("friend_sessions") is True) != want:
+            problems.append(f"host {hid}: helper friend_sessions={cfg.get('friend_sessions')} but admission for this host is {want}")
+        if want:
+            proof = host["c9_proof"]
+            binding = cfg.get("c9_binding") or {}
+            if any(binding.get(k) != proof.get(k) for k in C9_BINDING_KEYS):
+                problems.append(f"host {hid}: helper c9_binding does not equal the host's proof binding")
+    return problems
+
+
+SSHD_MAIN_CONFIG = "/etc/ssh/sshd_config"
+# Rev 10 (Sol 6 amd1 r9): directives that are permitted inside a Match block (sshd_config(5), OpenSSH 10.5p1, read
+# locally 2 Oct 2026) AND that select which keys or credentials authenticate a user, or enable a way in that bypasses the
+# managed key path. Any of them in a CONDITIONAL context makes the host ineligible for C9 (refused, not enumerated).
+SSHD_KEY_RELEVANT = frozenset({
+    # key sources
+    "authorizedkeysfile", "authorizedkeyscommand", "authorizedkeyscommanduser",
+    # certificate / principal authorisation of a key for a user
+    "trustedusercakeys", "authorizedprincipalsfile", "authorizedprincipalscommand", "authorizedprincipalscommanduser",
+    # whether and which public keys are accepted
+    "pubkeyauthentication", "revokedkeys",
+    # other ways in that bypass the managed key path
+    "authenticationmethods", "passwordauthentication", "kbdinteractiveauthentication", "permitemptypasswords",
+    "pamservicename", "hostbasedauthentication", "hostbasedusesnamefrompacketonly", "ignorerhosts",
+    "gssapiauthentication", "kerberosauthentication",
+})
+# Match-permitted but deliberately NOT listed (they only restrict, or do not choose a credential): AllowUsers/DenyUsers,
+# AllowGroups/DenyGroups, RefuseConnection, MaxAuthTries, PubkeyAcceptedAlgorithms, PubkeyAuthOptions,
+# CASignatureAlgorithms, HostbasedAcceptedAlgorithms, ForceCommand, ChrootDirectory, PermitRootLogin (root is never a
+# friend), ExposeAuthInfo, and every forwarding/session/timeout keyword.
+
+
+# Rev 11 (Sol 6 amd1 r10): keyword ALIASES, canonicalised before the Match check. Evidence (measured 2 Oct 2026 on
+# OpenSSH 10.5p1, scratch alias_sweep.py: every keyword-shaped string in the sshd binary set to a non-default value under
+# `sshd -T -f <scratch>`, recording which canonical keyword changed): challengeresponseauthentication and
+# skeyauthentication -> kbdinteractiveauthentication (both accepted inside Match and effective there);
+# dsaauthentication -> pubkeyauthentication (rejected inside Match by this release); hostdsakey -> hostkey. Recognised
+# but not value-tested, mapped by name (inferred): pubkeyacceptedkeytypes, hostbasedacceptedkeytypes. Deprecated and
+# ignored on 10.5p1 (measured) but functional on old releases, mapped conservatively: authorizedkeysfile2. The local
+# sshd_config(5) documents only ChallengeResponseAuthentication as an alias. No OpenSSH source is installed here.
+SSHD_KEYWORD_ALIASES = {
+    "challengeresponseauthentication": "kbdinteractiveauthentication",
+    "skeyauthentication": "kbdinteractiveauthentication",
+    "dsaauthentication": "pubkeyauthentication",
+    "authorizedkeysfile2": "authorizedkeysfile",
+    "hostdsakey": "hostkey",
+    "pubkeyacceptedkeytypes": "pubkeyacceptedalgorithms",
+    "hostbasedacceptedkeytypes": "hostbasedacceptedalgorithms",
+}
+# Keywords sshd_config(5) (OpenSSH 10.5p1, local) permits after a Match line. In a conditional context any keyword that is
+# neither one of these nor a known alias is REFUSED (fail closed against aliases of other OpenSSH releases).
+SSHD_MATCH_KEYWORDS = frozenset(k.lower() for k in """AcceptEnv AllowAgentForwarding AllowGroups AllowStreamLocalForwarding
+AllowTcpForwarding AllowUsers AuthenticationMethods AuthorizedKeysCommand AuthorizedKeysCommandUser AuthorizedKeysFile
+AuthorizedPrincipalsCommand AuthorizedPrincipalsCommandUser AuthorizedPrincipalsFile Banner CASignatureAlgorithms
+ChannelTimeout ChrootDirectory ClientAliveCountMax ClientAliveInterval DenyGroups DenyUsers DisableForwarding
+ExposeAuthInfo ForceCommand GatewayPorts GSSAPIAuthentication HostbasedAcceptedAlgorithms HostbasedAuthentication
+HostbasedUsesNameFromPacketOnly IgnoreRhosts Include IPQoS KbdInteractiveAuthentication KerberosAuthentication LogLevel
+MaxAuthTries MaxSessions PAMServiceName PasswordAuthentication PermitEmptyPasswords PermitListen PermitOpen
+PermitRootLogin PermitTTY PermitTunnel PermitUserRC PubkeyAcceptedAlgorithms PubkeyAuthentication PubkeyAuthOptions
+RefuseConnection RekeyLimit RevokedKeys RDomain SetEnv StreamLocalBindMask StreamLocalBindUnlink TrustedUserCAKeys
+UnusedConnectionTimeout X11DisplayOffset X11Forwarding X11UseLocalhost""".split())
+
+
+def _sshd_lines(text: str):
+    for no, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, _, rest = line.replace("=", " ", 1).partition(" ") if "=" in line.split()[0] else line.partition(" ")
+        key = key.strip().lower()
+        yield no, SSHD_KEYWORD_ALIASES.get(key, key), rest.strip()  # rev 11: canonicalise aliases first
+
+
+def _sshd_include_targets(args: str, config_files: Mapping[str, str]) -> tuple[list[str], list[str]]:
+    import fnmatch
+    import posixpath
+
+    found, missing = [], []
+    for pattern in args.split():
+        full = pattern if pattern.startswith("/") else posixpath.join("/etc/ssh", pattern)
+        if any(ch in full for ch in "*?["):
+            found += sorted(p for p in config_files if fnmatch.fnmatchcase(p, full))  # sshd: lexical order; no match is fine
+        elif full in config_files:
+            found.append(full)
+        else:
+            missing.append(full)
+    return found, missing
+
+
+def sshd_config_scan(config_files: Mapping[str, str], main_path: str = SSHD_MAIN_CONFIG) -> dict[str, Any]:
+    """Rev 10 (Sol 6 amd1 r9): walk the sshd configuration from main_path, expanding Include (which sshd_config(5) also
+    permits INSIDE a Match block). Context is conservative and sticky: from the first Match line onward (in expansion
+    order, across Include boundaries, including `Match all`) every line is conditional; a file included from a
+    conditional context is conditional throughout. Returns {'order': [paths in expansion order], 'problems': [...]}:
+    a problem for every SSHD_KEY_RELEVANT directive in a conditional context, every unresolvable literal Include, a
+    missing main file and an Include depth over 16."""
+    order: list[str] = []
+    problems: list[str] = []
+
+    def walk(path: str, conditional: bool, depth: int) -> bool:
+        if depth > 16:
+            problems.append(f"Include depth over 16 at {path}")
+            return True
+        if path not in config_files:
+            problems.append(f"configuration file {path} not available to verify")
+            return True
+        order.append(path)
+        for no, key, rest in _sshd_lines(config_files[path]):
+            if key == "match":
+                conditional = True
+            elif key == "include":
+                targets, missing = _sshd_include_targets(rest, config_files)
+                for m in missing:
+                    problems.append(f"{path}:{no}: Include target {m} not available to verify")
+                for target in targets:
+                    conditional = walk(target, conditional, depth + 1) or conditional
+            elif key in SSHD_KEY_RELEVANT and conditional:
+                problems.append(f"{path}:{no}: {key} in a Match (conditional) context selects credentials per client context")
+            elif conditional and key not in SSHD_MATCH_KEYWORDS:
+                # rev 11: an unrecognised keyword (e.g. an alias of another OpenSSH release) cannot be judged: refuse
+                problems.append(f"{path}:{no}: unrecognised keyword {key!r} in a Match (conditional) context")
+        return conditional
+
+    walk(main_path, False, 0)
+    return {"order": order, "problems": problems}
+
+
+def sshd_context_problems(config_files: Mapping[str, str], main_path: str = SSHD_MAIN_CONFIG) -> list[str]:
+    """C9 eligibility (rev 10): [] only if no authentication-key-relevant directive is context-dependent."""
+    return sshd_config_scan(config_files, main_path)["problems"]
+
+
+def sshd_config_file_set(config_files: Mapping[str, str], main_path: str = SSHD_MAIN_CONFIG) -> list[list[str]]:
+    import hashlib
+
+    return [[path, hashlib.sha256(config_files[path].encode()).hexdigest()] for path in sshd_config_scan(config_files, main_path)["order"]]
+
+
+def sshd_host_keys_sha256(host_pubkey_lines: list[str]) -> str:
+    """Amendment 1 rev 9 (Sol 6 amd1 r8): WHICH host key is bound when sshd offers several: ALL of them. The digest
+    is SHA-256 over the sorted 'type base64' pairs of every public key named by the effective `sshd -T` 'hostkey'
+    lines (comments dropped). Rotating, adding or removing ANY host key changes it."""
+    import hashlib
+
+    pairs = sorted(" ".join(line.split()[:2]) for line in host_pubkey_lines if line.strip())
+    return hashlib.sha256("\n".join(pairs).encode()).hexdigest()
+
+
+def sshd_effective_digest(global_T: str, per_user_T: Mapping[str, str], config_files: Mapping[str, str],
+                          main_path: str = SSHD_MAIN_CONFIG) -> str:
+    """Amendment 1 rev 9 (Sol 6 amd1 r8): the bound sshd configuration is the global `sshd -T` output PLUS, for every
+    relevant user (the probe account and every helper.json friend account), `sshd -T -C user=<u>,host=<h>,addr=<a>`
+    (the same commands as runbook step 3), so a later `Match User`/`Match Group` change for a friend account changes
+    the digest. Normalisation: each output's non-empty lines stripped and sorted; SHA-256 of the canonical JSON
+    {"global": [...], "users": {user: [...]}}. Adding a friend account therefore also changes it (re-run the runbook)."""
+    import hashlib
+    import json
+
+    def norm(text: str) -> list[str]:
+        return sorted(line.strip() for line in text.splitlines() if line.strip())
+
+    # rev 10 (Sol 6 amd1 r9): also the Include-expanded configuration FILE SET (path + SHA-256 of contents, in expansion
+    # order), so ANY change to any sshd configuration file invalidates the binding, whatever client context it affects
+    doc = {"global": norm(global_T), "users": {u: norm(per_user_T[u]) for u in sorted(per_user_T)},
+           "files": sshd_config_file_set(config_files, main_path)}
+    return hashlib.sha256(json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def helper_create_friend_work(cfg: Mapping[str, Any], subcommand: str, *, measure, create, undo, friend: bool = False) -> bool:
+    """Amendment 1 rev 9 (Sol 6 amd1 r8): check and creation are ONE helper operation, run under the account's flock:
+    measure the live host facts and check the gates and binding; create (write the key, set DeviceAllow, start the
+    unit); RE-MEASURE immediately before returning (the commit point); if anything differs from the first measurement
+    or no longer matches the binding, undo the creation and refuse. Residual window (stated, not closed): `sshd -T`
+    reads the configuration FILES, so a running daemon reloaded with a different configuration whose files were then
+    restored without a reload is not detected; and a change made after the commit affects only later creations."""
+    live1 = measure()
+    if not helper_subcommand_enabled(cfg, subcommand, friend=friend, live=live1):
+        return False
+    create()
+    live2 = measure()
+    if live2 != live1 or not helper_binding_ok(cfg, live2):
+        undo()
+        return False
+    return True
+
+
+def friend_sessions_disable(hosts: list[Mapping[str, Any]], helper_by_host: Mapping[str, Mapping[str, Any]],
+                            reachable: set[str], already_off: set[str] | None = None) -> dict[str, Any]:
+    """Amendment 1 rev 9 (Sol 6 amd1 r8): FAIL-CLOSED DISABLE ORDERING (chosen over an authority-signed enable token:
+    no new key material or crypto dependency in the root helper, no cross-host clock dependence). Turning the site flag
+    off is an authority operation, persisted in the authority DB:
+      1. at once: the authority refuses all friend work everywhere (state 'disabling');
+      2. for every host: write helper.json friend_sessions_global=false and friend_sessions=false, then READ BACK that
+         the helper refuses session-open (helper_subcommand_enabled is False); a host that cannot be reached, or does
+         not confirm, stays 'disable-pending', and the authority refuses ALL work to it (authority_admits_any_work), so
+         the executor never calls its helper;
+      3. only when no host is pending is the site flag reported 'off' (and C-ASM's consistency check can pass).
+    Residual (stated): a pending host's helper keeps its stale copy until it is reached; it is exploitable only by a
+    direct local helper call from the executor account on that host, which the authority no longer drives.
+    Returns {'site_state': 'disabling'|'off', 'helpers': updated helper.json map, 'pending': sorted host ids}."""
+    helpers = {h: dict(c) for h, c in helper_by_host.items()}
+    confirmed = set(already_off or ())
+    for host in hosts:
+        hid = host["host_id"]
+        cfg = helpers.get(hid)
+        if cfg is None or hid not in reachable:
+            continue
+        cfg.update(friend_sessions_global=False, friend_sessions=False)
+        if not helper_subcommand_enabled(cfg, "session-open", live={"host_id": hid}) and not helper_subcommand_enabled(cfg, "unit-start", friend=True, live={"host_id": hid}):
+            confirmed.add(hid)
+    pending = sorted(h["host_id"] for h in hosts if h["host_id"] in helpers and h["host_id"] not in confirmed)
+    return {"site_state": "off" if not pending else "disabling", "helpers": helpers, "pending": pending}
+
+
+def authority_admits_any_work(host_id: str, disable_state: Mapping[str, Any] | None) -> bool:
+    """Rev 9: while a disable is in progress, a 'disable-pending' host gets NO work of any kind (agent or friend)."""
+    return not (disable_state and host_id in disable_state.get("pending", ()))
+
+
+
+def c9_host_eligible(host: Mapping[str, Any]) -> bool:
+    """Amendment 1 (Q4): C9 friend sessions may be enabled only on hosts whose system sshd answers (it honours
+    AuthorizedKeysFile). Tailscale SSH ignores authorized_keys, so its hosts need a separate, reviewed ACL path."""
+    return host.get("ssh_server") == "openssh"
 
 
 def lease_ceiling(policy: Mapping[str, Any], lane_max_lease_s: int | None, quota_max_lease_s: int | None, cls: str) -> int:
@@ -712,7 +1156,7 @@ def helper_release(state_dir: str, account: str, lease_id: str, close_proof: Map
         return _remove_claim(state_dir, account, lease_id, _race_hook)
 
 
-def clear_authorized(invocation: Mapping[str, Any], operator_account: str, operator_uid: int) -> list[str]:
+def clear_authorized(invocation: Mapping[str, Any], operator_account: str, operator_uid: int, program: str = CLEAR_PATH) -> list[str]:
     """Round 8 (Sol 6 r7): how claim-clear verifies operator approval. It is a separate program at CLEAR_PATH, mode
     0700 root:root, so only root can execute it; the executor's helper never execs it and has no claim-clear
     subcommand. It runs only when sudo started it for the operator: real and effective UID 0, and SUDO_USER/SUDO_UID
@@ -720,8 +1164,8 @@ def clear_authorized(invocation: Mapping[str, Any], operator_account: str, opera
     sudoers rule must re-authenticate (no NOPASSWD); `operator_sudo_audit` checks it on the installed host. Input =
     {'program': argv0 realpath, 'ruid', 'euid', 'sudo_user', 'sudo_uid'}."""
     problems = []
-    if invocation.get("program") != CLEAR_PATH:
-        problems.append("claim-clear must run as its own root-only program, never through the executor's helper")
+    if invocation.get("program") != program:
+        problems.append(f"{program} must run as its own root-only program, never through the executor's helper")
     if invocation.get("ruid") != 0 or invocation.get("euid") != 0:
         problems.append("claim-clear must run as root (real and effective UID 0)")
     if invocation.get("sudo_user") != operator_account or invocation.get("sudo_uid") != operator_uid:
@@ -1252,7 +1696,7 @@ def _param_value(params: list[str], name: str):
     return value
 
 
-def clear_fresh_auth_audit(sudo_l_text: str, cmnd_aliases: Mapping[str, list[str]] | None = None) -> list[str]:
+def clear_fresh_auth_audit(sudo_l_text: str, cmnd_aliases: Mapping[str, list[str]] | None = None, program: str = CLEAR_PATH) -> list[str]:
     """Round 9 (Sol 6 r8): sudo caches credentials (timestamp_timeout, default 5 minutes), so a password rule alone does
     not re-authenticate. The EFFECTIVE timestamp_timeout for CLEAR_PATH must be 0 ('always prompt', sudoers(5)) and
     authentication must not be disabled. Precedence follows sudoers(5): matching (global/host/user) Defaults first,
@@ -1282,52 +1726,54 @@ def clear_fresh_auth_audit(sudo_l_text: str, cmnd_aliases: Mapping[str, list[str
                 unresolved = [t for t in targets if re.fullmatch(r"[A-Z][A-Z0-9_]*", t) and t != "ALL" and not (cmnd_aliases and t in cmnd_aliases)]
                 if unresolved and touches:
                     problems.append(f"cannot resolve {unresolved} in {line}; state the claim-clear path literally")
-                applies = any(_command_reaches(t, CLEAR_PATH, cmnd_aliases) for t in targets if t not in unresolved)
+                applies = any(_command_reaches(t, program, cmnd_aliases) for t in targets if t not in unresolved)
             if applies:
                 t = _param_value(params, "timestamp_timeout")
                 timeout = t if t is not None else timeout
                 a = _param_value(params, "authenticate")
                 auth = a if a is not None else auth
     if auth is False:
-        problems.append("authentication is disabled (!authenticate) for claim-clear")
+        problems.append(f"authentication is disabled (!authenticate) for {program}")
     try:
         ok = timeout is not None and float(timeout) == 0.0
     except (TypeError, ValueError):
         ok = False
     if not ok:
-        problems.append(f"effective timestamp_timeout for {CLEAR_PATH} is {timeout if timeout is not None else 'the default (5)'}; it must be 0 so every invocation prompts")
+        problems.append(f"effective timestamp_timeout for {program} is {timeout if timeout is not None else 'the default (5)'}; it must be 0 so every invocation prompts")
     return problems
 
 
-def operator_sudo_audit(sudo_l_text: str, operator: str, sudoers_text: str | None = None, groups: list[str] | tuple[str, ...] = ()) -> list[str]:
+def operator_sudo_audit(sudo_l_text: str, operator: str, sudoers_text: str | None = None, groups: list[str] | tuple[str, ...] = (),
+                        program: str = CLEAR_PATH) -> list[str]:
     """Rounds 8-9 (Sol 6 r7, r8): `sudo -l -U <operator>` on the installed host (plus, when given, the installed sudoers
     text for Cmnd_Alias expansion). The operator must reach CLEAR_PATH as root; EVERY grant that reaches it (exact,
     ALL, wildcard, directory, regex, argument-bearing or alias) must re-authenticate: no NOPASSWD, no SETENV; and the
     effective timestamp_timeout for the program must be 0 (clear_fresh_auth_audit)."""
     cmnd_aliases = parse_sudoers_rules(sudoers_text)[1] if sudoers_text else None
-    grants = [g for g in sudo_l_grants(sudo_l_text, operator) if _grant_reaches(g, CLEAR_PATH, cmnd_aliases)]
+    grants = [g for g in sudo_l_grants(sudo_l_text, operator) if _grant_reaches(g, program, cmnd_aliases)]
     if sudoers_text:
-        grants += _static_routes(sudoers_text, operator, groups, CLEAR_PATH)
+        grants += _static_routes(sudoers_text, operator, groups, program)
     problems = []
     if not grants:
-        problems.append(f"{operator} has no sudo route to {CLEAR_PATH}")
+        problems.append(f"{operator} has no sudo route to {program}")
     for g in grants:
         if g["runas"] not in ("root", "ALL", "ALL : ALL", "root : root"):
             problems.append(f"grant does not run as root: {g['raw']}")
         if "NOPASSWD" in g["tags"] or "SETENV" in g["tags"]:
             problems.append(f"route to claim-clear must re-authenticate (no NOPASSWD/SETENV): {g['raw']}")
-    problems += clear_fresh_auth_audit(sudo_l_text, cmnd_aliases)
+    problems += clear_fresh_auth_audit(sudo_l_text, cmnd_aliases, program)
     return problems
 
 
-def no_clear_route_audit(sudo_l_text: str, account: str, sudoers_text: str | None = None, groups: list[str] | tuple[str, ...] = ()) -> list[str]:
+def no_clear_route_audit(sudo_l_text: str, account: str, sudoers_text: str | None = None, groups: list[str] | tuple[str, ...] = (),
+                         program: str = CLEAR_PATH) -> list[str]:
     """Rounds 8-9: the executor and every friend account must have no sudo route to CLEAR_PATH, counting wildcard,
     directory, regex, argument-bearing, ALL and alias grants (unknown aliases fail closed)."""
     cmnd_aliases = parse_sudoers_rules(sudoers_text)[1] if sudoers_text else None
-    found = [g["raw"] for g in sudo_l_grants(sudo_l_text, account) if _grant_reaches(g, CLEAR_PATH, cmnd_aliases)]
+    found = [g["raw"] for g in sudo_l_grants(sudo_l_text, account) if _grant_reaches(g, program, cmnd_aliases)]
     if sudoers_text:
-        found += [r["raw"] for r in _static_routes(sudoers_text, account, groups, CLEAR_PATH)]
-    return [f"{account} can reach claim-clear: {raw}" for raw in found]
+        found += [r["raw"] for r in _static_routes(sudoers_text, account, groups, program)]
+    return [f"{account} can reach {program}: {raw}" for raw in found]
 
 
 def helper_config_semantics(cfg: Mapping[str, Any]) -> list[str]:
@@ -1338,6 +1784,9 @@ def helper_config_semantics(cfg: Mapping[str, Any]) -> list[str]:
         problems.append("operator_account must not be the executor (caller_account)")
     if op in cfg.get("friend_accounts", []):
         problems.append("operator_account must not be a friend account")
+    probe = cfg.get("probe_account")
+    if probe is not None and (probe in cfg.get("friend_accounts", []) or probe in (op, cfg.get("caller_account"))):
+        problems.append("probe_account must be a dedicated test account: not a friend, not the operator, not the executor (Amendment 1 rev 4)")
     return problems
 
 
@@ -1415,3 +1864,139 @@ def executor_semantics(message: Mapping[str, Any]) -> list[str]:
         if len(kinds) != len(set(kinds)):
             problems.append("duplicate deadline kind")
     return problems
+
+
+# ---------------------------------------------------------------- Amendment 1 rev 4: C9 runbook session probe
+PROBE_PATH = "/usr/local/libexec/flightctl-session-probe"
+PROBE_MAX_TTL_S = 900
+PROBE_OK = "/usr/bin/printf flightctl-probe-ok"
+
+
+def _utc_compact(t: float) -> str:
+    import datetime
+
+    # rev 5 (Sol 6 amd1 r4): sshd(8) reads expiry-time in the SYSTEM time zone unless it ends in 'Z'; always write UTC + 'Z'
+    return datetime.datetime.fromtimestamp(t, datetime.timezone.utc).strftime("%Y%m%d%H%M%SZ")
+
+
+def sshd_expiry_effective(value: str, server_tz: str) -> float:
+    """How sshd(8) interprets an authorized_keys expiry-time value (local man page, read 2 Oct 2026): format
+    YYYYMMDDHHMM[SS][Z]; 'Dates and times will be interpreted in the system time zone unless suffixed by a Z character,
+    in which case they will be interpreted in the UTC time zone'. Returns the effective expiry as a POSIX timestamp."""
+    import datetime
+    import zoneinfo
+
+    utc = value.endswith("Z")
+    digits = value[:-1] if utc else value
+    fmt = "%Y%m%d%H%M%S" if len(digits) == 14 else "%Y%m%d%H%M"
+    naive = datetime.datetime.strptime(digits, fmt)
+    tz = datetime.timezone.utc if utc else zoneinfo.ZoneInfo(server_tz)
+    return naive.replace(tzinfo=tz).timestamp()
+
+
+def session_probe(keys_dir: str, cfg: Mapping[str, Any], invocation: Mapping[str, Any], operator_uid: int, *, account: str,
+                  pubkey: str, ttl_s: int, now: float, audit: list[dict[str, Any]], mono_now: float, boot_id: str) -> bool:
+    """Amendment 1 rev 4 (Sol 6 amd1 r3): the bounded key-writing path for the C9 runbook's login proof while the flag is
+    OFF. A separate root-only program (PROBE_PATH, mode 0700 root:root), reached only through the operator's own
+    re-authenticating sudo rule (same pattern and audits as claim-clear). Writes ONE key for helper.json probe_account
+    only (a dedicated test account: no friend, not the operator, not the executor), with ttl_s <= 900, as
+    'restrict,command="<probe-ok>",expiry-time="<UTC>" <key>' so sshd itself refuses it after expiry even if no sweep
+    runs. Refused while friend_sessions is on (session-open is the path then), for any other account, for a non-operator
+    caller, and while an unexpired probe key exists. Every call is an audit event."""
+    import json
+    import os
+    import re
+
+    def event(kind: str, **extra: Any) -> None:
+        audit.append(dict({"event": kind, "account": account, "at": now}, **extra))
+
+    reasons = clear_authorized(invocation, cfg["operator_account"], operator_uid, program=PROBE_PATH)
+    probe_account = cfg.get("probe_account")
+    if probe_account is None or account != probe_account:
+        reasons.append("only the configured probe_account may be probed")
+    if cfg.get("friend_sessions") is True:
+        reasons.append("friend_sessions is on: use session-open")
+    if not (0 < ttl_s <= PROBE_MAX_TTL_S):
+        reasons.append(f"ttl_s must be in (0, {PROBE_MAX_TTL_S}]")
+    if not re.fullmatch(r"(ssh-ed25519|ecdsa-sha2-nistp256|ssh-rsa) [A-Za-z0-9+/=]{16,8192}", pubkey or ""):
+        reasons.append("one public key, no options")
+    path = os.path.join(keys_dir, account) if probe_account and account == probe_account else None
+    if path and os.path.lexists(path + ".probe.json"):
+        with open(path + ".probe.json", encoding="utf-8") as handle:
+            if json.load(handle)["expires_at"] > now:
+                reasons.append("an unexpired probe key already exists")
+    if reasons:
+        event("probe-refused", reasons=reasons, caller=invocation.get("sudo_user"))
+        return False
+    expires = now + ttl_s
+    line = f'restrict,command="{PROBE_OK}",expiry-time="{_utc_compact(expires)}" {pubkey}\n'
+    fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(line)
+    os.replace(path + ".tmp", path)
+    with open(path + ".probe.json", "w", encoding="utf-8") as handle:
+        # rev 8 (clock rollback): also the monotonic deadline and boot id; the sweep honours whichever expires first
+        json.dump({"expires_at": expires, "expires_mono": mono_now + ttl_s, "boot_id": boot_id}, handle)  # rev 9: no wall fallback
+    event("probe-granted", expires_at=expires, caller=invocation.get("sudo_user"))
+    return True
+
+
+PROBE_SWEEP_MODES = ("expired", "all")
+
+
+def probe_sweep(keys_dir: str, cfg: Mapping[str, Any], invocation: Mapping[str, Any], *, now: float, audit: list[dict[str, Any]],
+                mode: str, mono_now: float, boot_id: str, account: str | None = None) -> bool:
+    """Amendment 1 rev 5 (Sol 6 amd1 r4): `flightctl-session-probe --sweep --expired|--all [--account <a>]`, the ONLY way a
+    probe key is removed. ROOT-ONLY and REMOVE-ONLY: it needs real and effective UID 0 and NO sudo context check, so the
+    root systemd units can run it (the per-minute `flightctl-session-probe-sweep.timer` with --expired, and the runbook's
+    rollback unit and the operator's step-7 revoke with --all). It can never add or extend a key. It acts only on
+    helper.json probe_account's key file: an --account naming anything else is refused, and a file at that path whose
+    content is not a probe key line (restrict,command="<probe-ok>",expiry-time="...Z") is refused and left in place.
+    Idempotent: nothing to remove returns False with no error. EVERY outcome is an audit event (rev 6): probe-swept-<mode>
+    (removed), sweep-none-present, sweep-skipped-unexpired, sweep-refused-non-probe, sweep-refused."""
+    import json
+    import os
+
+    if invocation.get("program") != PROBE_PATH or invocation.get("ruid") != 0 or invocation.get("euid") != 0:
+        audit.append({"event": "sweep-refused", "reason": "root-only: real and effective UID 0 via the probe program", "at": now})
+        return False
+    probe_account = cfg.get("probe_account")
+    if mode not in PROBE_SWEEP_MODES or probe_account is None or (account is not None and account != probe_account):
+        audit.append({"event": "sweep-refused", "reason": "only the probe_account key, mode expired|all", "account": account, "at": now})
+        return False
+    path = os.path.join(keys_dir, probe_account)
+    meta = path + ".probe.json"
+    caller = invocation.get("sudo_user")
+    if not os.path.lexists(path) and not os.path.lexists(meta):
+        # rev 6 (Sol 6 amd1 r5): every outcome is an audit event, including the idempotent no-op
+        audit.append({"event": "sweep-none-present", "mode": mode, "account": probe_account, "at": now, "caller": caller})
+        return False
+    if os.path.lexists(path):
+        with open(path, encoding="utf-8") as handle:
+            content = handle.read()
+        if not content.startswith(f'restrict,command="{PROBE_OK}",expiry-time="') or content.count("\n") != 1:
+            audit.append({"event": "sweep-refused-non-probe", "reason": "file is not a probe key line; left in place", "mode": mode,
+                          "account": probe_account, "at": now, "caller": caller})
+            return False
+    if mode == "expired":
+        expires = None
+        expired_by_other_clock = False
+        if os.path.lexists(meta):
+            with open(meta, encoding="utf-8") as handle:
+                record = json.load(handle)
+            expires = record["expires_at"]
+            # rev 8: a wall-clock rollback must not extend the probe: expired if EITHER the wall clock or the monotonic
+            # clock says so, and always after a reboot (a different boot id: the monotonic clock restarted)
+            # rev 9 (Sol 6 amd1 r8): the monotonic value and boot id are REQUIRED arguments (CLOCK_MONOTONIC and
+            # /proc/sys/kernel/random/boot_id in the real program); a record without them is treated as expired
+            expired_by_other_clock = (record.get("boot_id") != boot_id or "expires_mono" not in record
+                                      or mono_now >= record["expires_mono"])
+        if expires is not None and now < expires and not expired_by_other_clock:
+            audit.append({"event": "sweep-skipped-unexpired", "mode": mode, "account": probe_account, "expires_at": expires,
+                          "at": now, "caller": caller})
+            return False
+    for f in (path, meta):
+        if os.path.lexists(f):
+            os.unlink(f)
+    audit.append({"event": f"probe-swept-{mode}", "mode": mode, "account": probe_account, "at": now, "caller": caller})
+    return True

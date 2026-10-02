@@ -17,7 +17,8 @@
     "roots",
     "wake_profiles",
     "secrets",
-    "evidence_dir_ref"
+    "evidence_dir_ref",
+    "tls"
   ],
   "properties": {
     "schema_version": {
@@ -403,7 +404,8 @@
         "notifications",
         "fido2_approvals",
         "release_backend",
-        "shadow_observer"
+        "shadow_observer",
+        "friend_sessions"
       ],
       "properties": {
         "holder_leases": {
@@ -435,6 +437,11 @@
         },
         "shadow_observer": {
           "type": "boolean"
+        },
+        "friend_sessions": {
+          "type": "boolean",
+          "default": false,
+          "description": "Amendment 1 (owner Q1, 2 Oct 2026: answer (c) for R1). Off by default and OFF in R1. When off, friends get exactly what agents get: API-queued jobs under a per-job DynamicUser; no friend SSH session and no job under a friend's own unix account. The infrastructure for option (a) (per-friend accounts, the C7h helper with claims and quarantine, the session contract, C9) is still specified, built and tested, and is enabled only by turning this on AND, per host, inventory hosts[].friend_sessions_enabled with a recorded c9_proof (rev 7: this global flag never enables any host by itself). 'sessions' may be on only if this is on. Rev 9: changing it from true to false is the authority's fail-closed disable operation (friend work refused at once; every helper copy written false and read back; unreachable hosts disable-pending with no work; the flag is reported off only when no host is pending)."
         }
       },
       "x-required-ports": {
@@ -476,7 +483,109 @@
         ],
         "shadow_observer": [
           "legacy_observer"
+        ],
+        "friend_sessions": [
+          "session_gateway"
         ]
+      }
+    },
+    "tls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "server_name",
+        "cert_file",
+        "key_file",
+        "chain_file",
+        "rotation",
+        "trust_anchor"
+      ],
+      "description": "Amendment 1 (owner Q2, 2 Oct 2026): the A7 listener serves a certificate issued by the site's PRIVATE CA, not `tailscale cert` (whose issued names would appear in public certificate-transparency logs). CA-agnostic: a site process (for example a step-ca renewal daemon now, a Vault PKI agent later) writes the files; the authority only reads them, verifies them at start and on change, and reloads without dropping the listener. Peer identity is unchanged: the real socket peer via tailscale whois. Revision 2: verification is against trust_anchor only. Incumbent expiry: if the certificate being served expires and no valid replacement is on disk, the listener STOPS serving TLS (fail closed) and alerts; an expired certificate is never served (tls_listener_action). Revision 3: the incumbent is re-validated under the CURRENT config (server_name, trust_anchor, pins) as well as time; a date-valid certificate that no longer passes is not kept.",
+      "properties": {
+        "mode": {
+          "const": "private-ca"
+        },
+        "server_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,62})(\\.[a-z0-9]([a-z0-9-]{0,62}))+$",
+          "description": "DNS name the certificate must cover; it resolves to the controller's tailnet address and is the WebAuthn rp_id (C11b)."
+        },
+        "cert_file": {
+          "type": "string",
+          "pattern": "^/[A-Za-z0-9._/-]{1,255}$"
+        },
+        "key_file": {
+          "type": "string",
+          "pattern": "^/[A-Za-z0-9._/-]{1,255}$",
+          "description": "Readable only by the authority's account (checked at start)."
+        },
+        "chain_file": {
+          "type": "string",
+          "pattern": "^/[A-Za-z0-9._/-]{1,255}$",
+          "description": "Intermediate chain served with the leaf; the root itself is distributed to client devices (owner action), never served as trust."
+        },
+        "rotation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "check_interval_s",
+            "renew_before_s",
+            "alert_before_s"
+          ],
+          "properties": {
+            "check_interval_s": {
+              "type": "integer",
+              "minimum": 60,
+              "maximum": 86400
+            },
+            "renew_before_s": {
+              "type": "integer",
+              "minimum": 3600,
+              "description": "Remaining validity at which the site renewer is expected to have replaced the files."
+            },
+            "alert_before_s": {
+              "type": "integer",
+              "minimum": 600,
+              "description": "Remaining validity at which the authority alerts the operator (must be below renew_before_s)."
+            }
+          }
+        },
+        "trust_anchor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "root_ca_files",
+            "pinned_root_sha256"
+          ],
+          "description": "Amendment 1 rev 2 (Sol 6 amd1): the ONLY roots the served chain may terminate at. The authority refuses any certificate set whose chain is rooted elsewhere (a public or system CA included). If pinned_root_sha256 is non-null the root must also match one pin (SHA-256 of the DER root certificate). The same root files are what the owner distributes to client devices.",
+          "properties": {
+            "root_ca_files": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^/[A-Za-z0-9._/-]{1,255}$"
+              }
+            },
+            "pinned_root_sha256": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {
+                    "$ref": "common.schema.json#/$defs/sha256"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
       }
     }
   },
@@ -589,7 +698,26 @@
           "notifications": false,
           "fido2_approvals": false,
           "release_backend": false,
-          "shadow_observer": true
+          "shadow_observer": true,
+          "friend_sessions": false
+        },
+        "tls": {
+          "mode": "private-ca",
+          "server_name": "controller-a.example.internal",
+          "cert_file": "/etc/flightctl/tls/server.crt",
+          "key_file": "/etc/flightctl/tls/server.key",
+          "chain_file": "/etc/flightctl/tls/chain.crt",
+          "rotation": {
+            "check_interval_s": 3600,
+            "renew_before_s": 1209600,
+            "alert_before_s": 259200
+          },
+          "trust_anchor": {
+            "root_ca_files": [
+              "/etc/flightctl/tls/root_ca.crt"
+            ],
+            "pinned_root_sha256": null
+          }
         }
       }
     ],
@@ -624,7 +752,26 @@
           "notifications": false,
           "fido2_approvals": false,
           "release_backend": false,
-          "shadow_observer": true
+          "shadow_observer": true,
+          "friend_sessions": false
+        },
+        "tls": {
+          "mode": "private-ca",
+          "server_name": "controller-a.example.internal",
+          "cert_file": "/etc/flightctl/tls/server.crt",
+          "key_file": "/etc/flightctl/tls/server.key",
+          "chain_file": "/etc/flightctl/tls/chain.crt",
+          "rotation": {
+            "check_interval_s": 3600,
+            "renew_before_s": 1209600,
+            "alert_before_s": 259200
+          },
+          "trust_anchor": {
+            "root_ca_files": [
+              "/etc/flightctl/tls/root_ca.crt"
+            ],
+            "pinned_root_sha256": null
+          }
         }
       }
     ]

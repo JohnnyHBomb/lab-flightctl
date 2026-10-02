@@ -196,6 +196,121 @@
         "power": {
           "$ref": "#/$defs/power_profile",
           "description": "Static power profile."
+        },
+        "ssh_server": {
+          "enum": [
+            "openssh",
+            "tailscale-ssh",
+            "none",
+            "unknown"
+          ],
+          "description": "Amendment 1 (Q4): which SSH server answers on the host. 'openssh' = the system sshd, which honours AuthorizedKeysFile; 'tailscale-ssh' = Tailscale SSH, which ignores authorized_keys and authorizes by tailnet ACL. C9 friend sessions may be enabled ONLY on 'openssh' hosts (c9_host_eligible); absent means 'unknown'."
+        },
+        "friend_sessions_enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Amendment 1 rev 7 (Sol 6 amd1 r6): the PER-HOST gate. Friend sessions run on this host only when this AND the global adapters features.friend_sessions are true (friend_session_host_allowed). May be true only on an 'openssh' host with a recorded c9_proof. Absent = false."
+        },
+        "c9_proof": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "proof_id",
+                "artefact_sha256",
+                "recorded_at",
+                "runbook_revision",
+                "sshd_verified",
+                "probe_login_ok",
+                "probe_key_removed",
+                "host_id",
+                "sshd_host_key_sha256",
+                "machine_id_sha256",
+                "sshd_effective_sha256",
+                "no_conditional_key_settings"
+              ],
+              "properties": {
+                "proof_id": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$"
+                },
+                "artefact_sha256": {
+                  "$ref": "common.schema.json#/$defs/sha256",
+                  "description": "SHA-256 of the evidence-directory artefact written by runbook step 8."
+                },
+                "recorded_at": {
+                  "$ref": "common.schema.json#/$defs/utc_time"
+                },
+                "runbook_revision": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sshd_verified": {
+                  "const": true
+                },
+                "probe_login_ok": {
+                  "const": true
+                },
+                "probe_key_removed": {
+                  "const": true
+                },
+                "host_id": {
+                  "$ref": "common.schema.json#/$defs/short_identifier"
+                },
+                "sshd_host_key_sha256": {
+                  "$ref": "common.schema.json#/$defs/sha256"
+                },
+                "machine_id_sha256": {
+                  "$ref": "common.schema.json#/$defs/sha256"
+                },
+                "sshd_effective_sha256": {
+                  "$ref": "common.schema.json#/$defs/sha256"
+                },
+                "no_conditional_key_settings": {
+                  "const": true,
+                  "description": "Rev 10 (Sol 6 amd1 r9): sshd_context_problems returned [] on the Include-expanded configuration file set: no authentication-key-relevant directive (SSHD_KEY_RELEVANT) appears in a Match/conditional context."
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Amendment 1 rev 7: the C9 pre-enable runbook proof for THIS host (step 8). Null until the runbook has passed here. Rev 8: BOUND to the host (host_id, host key, machine-id and effective sshd -T hashes measured at runbook step 8) and to the stored evidence artefact; a copied, stale or re-imaged-host proof is refused (authority_admits_friend_work). Rev 9: a changed bound setting (global or per-user), a rotated or added host key, a re-image or a new friend account invalidates the proof; the FULL per-host C9 runbook must be re-run (new artefact, proof, inventory observation and helper binding)."
+        },
+        "sshd_host_key_sha256": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Amendment 1 rev 8: SHA-256 of the host's sshd host public key, as last OBSERVED by the inventory probe (null = not observed). Admission requires it to equal the c9_proof binding. Rev 9: SHA-256 over the sorted 'type base64' pairs of ALL host public keys named by the effective `sshd -T` hostkey lines (sshd_host_keys_sha256); rotating, adding or removing any host key changes it."
+        },
+        "machine_id_sha256": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Amendment 1 rev 8: SHA-256 of /etc/machine-id, as last OBSERVED by the inventory probe (null = not observed). Admission requires it to equal the c9_proof binding."
+        },
+        "sshd_effective_sha256": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Amendment 1 rev 8: SHA-256 of the normalised global `sshd -T` output, as last OBSERVED by the inventory probe (null = not observed). Admission requires it to equal the c9_proof binding. Rev 9: sshd_effective_digest over the global `sshd -T` AND `sshd -T -C user=<u>,host=<h>,addr=<a>` for every relevant user (the probe account and every friend account), so a Match User/Group change for a friend account changes it. Rev 10: also covers the Include-expanded configuration FILE SET (path and SHA-256 of contents, in expansion order), so any sshd configuration file change invalidates it."
         }
       },
       "allOf": [
@@ -249,6 +364,44 @@
                     "const": true
                   }
                 }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "friend_sessions_enabled": {
+                "const": true
+              }
+            },
+            "required": [
+              "friend_sessions_enabled"
+            ]
+          },
+          "then": {
+            "required": [
+              "c9_proof",
+              "machine_id_sha256",
+              "ssh_server",
+              "sshd_effective_sha256",
+              "sshd_host_key_sha256"
+            ],
+            "properties": {
+              "ssh_server": {
+                "const": "openssh"
+              },
+              "c9_proof": {
+                "type": "object"
+              },
+              "sshd_host_key_sha256": {
+                "$ref": "common.schema.json#/$defs/sha256"
+              },
+              "machine_id_sha256": {
+                "$ref": "common.schema.json#/$defs/sha256"
+              },
+              "sshd_effective_sha256": {
+                "$ref": "common.schema.json#/$defs/sha256"
               }
             }
           }

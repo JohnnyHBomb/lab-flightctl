@@ -61,6 +61,7 @@ port, and turned shadow into a write prohibition across every mutating port.
    `adapters.schema.json` lists the ports each feature needs (`x-required-ports`). In `live`, a port required
    by an enabled feature must be `real`, and `allow_fake` may not list it. A disabled feature's ports may stay
    fake, and its RPC ops refuse with `unavailable`, naming the feature.
+   Amendment 1: `friend_sessions` (default and R1 value: false) gates friend SSH sessions and friend-account jobs globally; a host also needs `inventory.hosts[].friend_sessions_enabled` with a recorded `c9_proof` (rev 7); `sessions` may be on only with it. The site file also carries the `tls` block (private-CA certificate files and rotation thresholds) for the A7 listener.
 3. `allow_fake` may never list a lane-critical port: `command_runner`, `executor_transport`,
    `workload_runner`, `occupancy_probe`, `inhibitor`, `waker`.
 4. A lane in mode `live` needs the site profile `live`. Its **effective** ports must all be `real`, meaning the

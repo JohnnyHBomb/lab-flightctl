@@ -77,7 +77,7 @@ Normative documents in this directory:
 
     A process whose memory reads unknown is a tenant. The executor's stop success requires `occupancy.empty: true`. Golden captures of real cards fix the rule.
 12. **Features decide which ports are required; shadow writes nothing** (B3). `command_runner` is selected like every other port. Every mutating port is lane-scoped and is forced non-writing on a shadow lane.
-13. **HTTPS at the peer-aware listener** (B4). The authority terminates TLS itself, using the certificate `tailscale cert` issues for its `*.ts.net` name, so the socket peer stays available to `tailscale whois`. The browser gets a secure origin for WebAuthn.
+13. **HTTPS at the peer-aware listener** (B4). The authority terminates TLS itself, with a certificate from the site's private CA (Amendment 1; the original plan's tailnet certificate would publish names in certificate-transparency logs), so the socket peer stays available to `tailscale whois`. The browser gets a secure origin for WebAuthn.
 14. **Friends' sessions and units run under a minimal root helper** (B5).
     - Isolation comes from the device cgroup (`DeviceAllow`), not from an environment variable.
     - A session ends with `terminate-user` plus a slice stop, and the close is proven (`close_proof`).
@@ -161,6 +161,12 @@ Normative documents in this directory:
     - A negation never cancels a route.
 64. **Idempotency and replay rows are keyed by (principal, request_id).** Another principal reusing a request id gets a fresh decision, never this principal's lease or token.
 65. **Statuses (N5).** The round-7 B5 and request-fingerprint rows are superseded by round-8 rows.
+
+### Amendment 1 (owner decisions of 2 Oct 2026; second commit after the freeze; see `docs/v2/AMENDMENT-1.md`)
+
+66. **Friend sessions are flag-gated and off in R1** (Q1). `features.friend_sessions` is false, and so is every host's `friend_sessions_enabled` (rev 7/8: a host needs the global flag AND its own per-host flag with a recorded runbook proof bound to that host's identity, sshd configuration and evidence artefact; the helper sees both flags and re-checks the binding itself): friends get API-queued jobs under a per-job DynamicUser, like agents. The infrastructure for per-friend accounts, the helper's claims and quarantine, the session contract and C9 stays specified, built and tested.
+67. **A7 uses a private-CA certificate** (Q2). The new `adapters.tls` block holds the cert, key and chain files and the rotation thresholds. It is CA-agnostic. The `tailscale cert` dependency is removed. Peer identity is unchanged. Revision 2: `tls.trust_anchor` lists the only roots a chain may terminate at. When the served certificate expires with no valid replacement, the listener stops serving TLS (fail closed).
+68. **The sshd change is deferred to C9 enablement** (Q4). It happens through a lockout-safe runbook and only on `ssh_server: openssh` hosts. C9 tests against a dedicated test sshd. Revision 2: the runbook discovers the effective key settings with `sshd -T` and preserves them. Flag off refuses only the paths that create friend work; cleanup stays available.
 
 ## Lifecycle tables
 

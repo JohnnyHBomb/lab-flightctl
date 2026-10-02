@@ -16,7 +16,12 @@
     "argv_roots",
     "max_argv",
     "claims_dir",
-    "operator_account"
+    "operator_account",
+    "friend_sessions",
+    "probe_account",
+    "friend_sessions_global",
+    "friend_sessions_host",
+    "c9_binding"
   ],
   "properties": {
     "schema_version": {
@@ -97,6 +102,67 @@
       "type": "string",
       "pattern": "^[a-z_][a-z0-9_-]{0,31}$",
       "description": "Round 8 (Sol 6 r7): the only account whose sudo-started invocation of /usr/local/libexec/flightctl-claim-clear may lift a quarantine. Must differ from caller_account and from every friend account (helper_config_semantics). Its sudoers rule must re-authenticate (no NOPASSWD): operator_sudo_audit. Round 9: that rule must also set timestamp_timeout=0 for the program (clear_fresh_auth_audit)."
+    },
+    "friend_sessions": {
+      "type": "boolean",
+      "description": "Amendment 1 (rev 2/7/8, Sol 6 amd1 r7): the conjunction friend_sessions_global AND friend_sessions_host for THIS host. The helper refuses the paths that CREATE friend work (session-open, unit-start --account) unless friend_sessions, friend_sessions_global and friend_sessions_host are ALL true and the live host facts match c9_binding (either flag false = off; helper_subcommand_enabled, helper_binding_ok). Cleanup and safety paths stay available: session-close, unit-stop, output-collect, claim-release, claim-reconcile and the read-only account-check. friend_sessions_consistent (per host) must pass before activation."
+    },
+    "probe_account": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^fc-probe(-[a-z0-9]{1,16})?$"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Amendment 1 rev 4 (Sol 6 amd1 r3): the ONE dedicated test account the C9 runbook's session probe may write a key for (null = probing disabled). Not a friend, not the operator, not the executor (helper_config_semantics)."
+    },
+    "friend_sessions_global": {
+      "type": "boolean",
+      "description": "Rev 8: copy of the site's adapters features.friend_sessions, so the helper sees the global gate itself. Rev 9: turning the site flag off is the authority's disable operation: this copy is written false and read back on every host BEFORE the site flag is reported off; an unreachable host stays disable-pending and gets no work (friend_sessions_disable)."
+    },
+    "friend_sessions_host": {
+      "type": "boolean",
+      "description": "Rev 8: copy of this host's inventory friend_sessions_enabled."
+    },
+    "c9_binding": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "proof_id",
+            "host_id",
+            "sshd_host_key_sha256",
+            "machine_id_sha256",
+            "sshd_effective_sha256"
+          ],
+          "properties": {
+            "proof_id": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$"
+            },
+            "host_id": {
+              "$ref": "common.schema.json#/$defs/short_identifier"
+            },
+            "sshd_host_key_sha256": {
+              "$ref": "common.schema.json#/$defs/sha256"
+            },
+            "machine_id_sha256": {
+              "$ref": "common.schema.json#/$defs/sha256"
+            },
+            "sshd_effective_sha256": {
+              "$ref": "common.schema.json#/$defs/sha256"
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Rev 8: the C9 proof binding for this host. Before any friend creation the helper measures the live host id, sshd host public key SHA-256, /etc/machine-id SHA-256 and normalised `sshd -T` SHA-256 and refuses on any mismatch: an sshd config change, a re-image or a copied binding invalidates the proof until the runbook is re-run. Rev 9: sshd_host_key_sha256 covers ALL host keys; sshd_effective_sha256 covers the global and per-relevant-user sshd -T. Check and creation are ONE helper operation under the account flock: measure, check, create, RE-MEASURE at the commit point, undo and refuse on any difference (helper_create_friend_work). Residual: `sshd -T` reads the files, so a running daemon whose configuration differs from its files is not detected. Rev 10: sshd_effective_sha256 also covers the Include-expanded sshd configuration file set, so any configuration file change refuses creation until the runbook is re-run."
     }
   },
   "x-subcommands": {
@@ -133,7 +199,12 @@
         "max_argv": 64,
         "agent_isolation": "dynamic-user",
         "claims_dir": "/etc/flightctl/claims",
-        "operator_account": "opr"
+        "operator_account": "opr",
+        "friend_sessions": false,
+        "probe_account": "fc-probe",
+        "friend_sessions_global": false,
+        "friend_sessions_host": false,
+        "c9_binding": null
       }
     ],
     "invalid": [
@@ -152,7 +223,12 @@
         "max_argv": 64,
         "agent_isolation": "dynamic-user",
         "claims_dir": "/etc/flightctl/claims",
-        "operator_account": "opr"
+        "operator_account": "opr",
+        "friend_sessions": false,
+        "probe_account": "fc-probe",
+        "friend_sessions_global": false,
+        "friend_sessions_host": false,
+        "c9_binding": null
       },
       {
         "schema_version": 2,
@@ -167,7 +243,12 @@
         "max_argv": 64,
         "agent_isolation": "dynamic-user",
         "claims_dir": "/etc/flightctl/claims",
-        "operator_account": "opr"
+        "operator_account": "opr",
+        "friend_sessions": false,
+        "probe_account": "fc-probe",
+        "friend_sessions_global": false,
+        "friend_sessions_host": false,
+        "c9_binding": null
       },
       {
         "schema_version": 2,
@@ -190,9 +271,15 @@
         ],
         "max_argv": 64,
         "agent_isolation": "dynamic-user",
-        "claims_dir": "/etc/flightctl/claims"
+        "claims_dir": "/etc/flightctl/claims",
+        "friend_sessions": false,
+        "probe_account": "fc-probe",
+        "friend_sessions_global": false,
+        "friend_sessions_host": false,
+        "c9_binding": null
       }
     ]
   },
-  "x-operator-clear": "Round 8 (Sol 6 r7): claim-clear is NOT a subcommand of the executor's helper (which refuses the name). It is the separate program /usr/local/libexec/flightctl-claim-clear --account <friend_accounts> --parent-lease <lease_id> + close proof, mode 0700 root:root, so only root can execute it, reachable only through the operator's own sudoers rule '<operator_account> ALL=(root) /usr/local/libexec/flightctl-claim-clear' WITHOUT NOPASSWD and with FRESH authentication on every invocation: 'Defaults!/usr/local/libexec/flightctl-claim-clear timestamp_timeout=0' (round 9, Sol 6 r8: sudo otherwise accepts a cached credential for 5 minutes; sudoers(5) 1.9.17p2: 0 = always prompt, command-specific Defaults are applied once the command's path is known; `!authenticate` is forbidden; config/flightctl-claim-clear-sudoers.example). It refuses unless its real and effective UID are 0 and SUDO_USER/SUDO_UID (set by sudo after env_reset) equal operator_account and its UID (clear_authorized). It takes the account's flock, removes the claim (inode-checked tombstone) and then the marker; a crash in between leaves the account blocked. The C7h install audit runs operator_sudo_audit on `sudo -l -U <operator>` (every route to the program, including ALL, wildcard, directory, regex, argument-bearing and Cmnd_Alias grants, must be password-protected, and the EFFECTIVE timestamp_timeout for the program must be 0) and no_clear_route_audit (the same route matching) for the executor and every friend account; both also read the installed sudoers files to expand Cmnd_Alias, and an unresolvable alias counts as a route (fail closed)."
+  "x-operator-clear": "Round 8 (Sol 6 r7): claim-clear is NOT a subcommand of the executor's helper (which refuses the name). It is the separate program /usr/local/libexec/flightctl-claim-clear --account <friend_accounts> --parent-lease <lease_id> + close proof, mode 0700 root:root, so only root can execute it, reachable only through the operator's own sudoers rule '<operator_account> ALL=(root) /usr/local/libexec/flightctl-claim-clear' WITHOUT NOPASSWD and with FRESH authentication on every invocation: 'Defaults!/usr/local/libexec/flightctl-claim-clear timestamp_timeout=0' (round 9, Sol 6 r8: sudo otherwise accepts a cached credential for 5 minutes; sudoers(5) 1.9.17p2: 0 = always prompt, command-specific Defaults are applied once the command's path is known; `!authenticate` is forbidden; config/flightctl-claim-clear-sudoers.example). It refuses unless its real and effective UID are 0 and SUDO_USER/SUDO_UID (set by sudo after env_reset) equal operator_account and its UID (clear_authorized). It takes the account's flock, removes the claim (inode-checked tombstone) and then the marker; a crash in between leaves the account blocked. The C7h install audit runs operator_sudo_audit on `sudo -l -U <operator>` (every route to the program, including ALL, wildcard, directory, regex, argument-bearing and Cmnd_Alias grants, must be password-protected, and the EFFECTIVE timestamp_timeout for the program must be 0) and no_clear_route_audit (the same route matching) for the executor and every friend account; both also read the installed sudoers files to expand Cmnd_Alias, and an unresolvable alias counts as a route (fail closed).",
+  "x-operator-session-probe": "Amendment 1 rev 4: the C9 runbook's login proof needs a managed key while friend_sessions is still OFF, when session-open is refused. The bounded path is the separate program /usr/local/libexec/flightctl-session-probe --account <probe_account> --pubkey-file <f> --ttl <s> (removal: --sweep, below), mode 0700 root:root, reached only through the operator's own sudoers rule WITHOUT NOPASSWD and with 'Defaults!/usr/local/libexec/flightctl-session-probe timestamp_timeout=0' (config/flightctl-session-probe-sudoers.example); it checks SUDO_USER/SUDO_UID like claim-clear (clear_authorized with program=/usr/local/libexec/flightctl-session-probe). It writes ONE key, for probe_account only, with ttl <= 900 s, as 'restrict,command=\"<probe-ok>\",expiry-time=\"YYYYMMDDHHMMSSZ\" <key>': the value is Z-suffixed UTC (rev 5: sshd(8) reads an unsuffixed value in the SYSTEM time zone), so sshd refuses the key after issue + ttl on any server zone. Refused while friend_sessions is on, for any other account, for any caller other than the operator, and while an unexpired probe key exists. Every call (granted, refused, removed) is an audit event. The executor and friend accounts must have no sudo route to it (no_clear_route_audit with program=/usr/local/libexec/flightctl-session-probe). REMOVAL (rev 5, Sol 6 amd1 r4): `/usr/local/libexec/flightctl-session-probe --sweep --expired|--all [--account <probe_account>]` is ROOT-ONLY and REMOVE-ONLY: it needs real and effective UID 0 and has NO sudo context check, so root systemd units can run it; it can never add or extend a key; it acts only on probe_account's key file (another --account is refused; a file there that is not a probe key line is refused and left in place); it is idempotent (nothing to remove = success, no error) and audited. Units installed with the program: flightctl-session-probe-sweep.service (Type=oneshot, root, ExecStart=/usr/local/libexec/flightctl-session-probe --sweep --expired) and flightctl-session-probe-sweep.timer (OnBootSec=1min, OnUnitActiveSec=1min). The runbook's rollback unit runs --sweep --all; the operator's step-7 revoke is `sudo /usr/local/libexec/flightctl-session-probe --sweep --all`. The ADD path keeps the operator-only SUDO_USER/SUDO_UID check and is refused from a root unit without a sudo context (oracles session_probe, probe_sweep). Rev 8 (clock rollback): the probe record also stores the monotonic deadline and the boot id; --sweep --expired removes the key when EITHER the wall clock or the monotonic clock says it expired, and always after a reboot, so a wall-clock rollback cannot extend a probe key (sshd's own expiry-time check is wall-clock). Rev 9 (Sol 6 amd1 r8): the monotonic value (CLOCK_MONOTONIC) and the boot id (/proc/sys/kernel/random/boot_id) are REQUIRED inputs of both the add and the sweep paths; there is no wall-clock fallback, and a record without them is swept as expired."
 }
