@@ -20,7 +20,7 @@ def _probe(kind, factory):
 @OCC
 def test_observation_validates_and_is_filtered_to_lane_uuids(kind, factory) -> None:
     probe = _probe(kind, factory)
-    obs = probe.occupancy(probe.test_host, probe.test_lane, probe.test_uuids, process_noise_mib=512, lane_noise_mib=1024, timeout_s=10)
+    obs = probe.occupancy(probe.test_host, probe.test_lane, probe.test_uuids, noise_allowlist=probe.test_noise_allowlist, noise_cap_mib=64, lane_noise_mib=1024, timeout_s=10)
     assert_valid(obs, "gpu-probe", "occupancy_observation")
     if obs["status"] == "ok":
         assert {g["uuid"] for g in obs["gpus"]} == set(probe.test_uuids)
@@ -28,13 +28,14 @@ def test_observation_validates_and_is_filtered_to_lane_uuids(kind, factory) -> N
 
 
 @OCC
-def test_small_processes_are_noise_never_tenants(kind, factory) -> None:
+def test_noise_is_only_allowlisted_identities(kind, factory) -> None:
+    """Amendment 2 (Sol 6.1 P1-1): noise by identity, never by size; the oracle re-derives every verdict."""
+    from tests.contracts_v2.validation import noise_identity_ok, occupancy_semantics
     probe = _probe(kind, factory)
-    obs = probe.occupancy(probe.test_host, probe.test_lane, probe.test_uuids, process_noise_mib=512, lane_noise_mib=1024, timeout_s=10)
-    for proc in obs["tenants"]:
-        assert proc["used_memory_mib"] is None or proc["used_memory_mib"] >= 512
+    obs = probe.occupancy(probe.test_host, probe.test_lane, probe.test_uuids, noise_allowlist=probe.test_noise_allowlist, noise_cap_mib=64, lane_noise_mib=1024, timeout_s=10)
+    assert occupancy_semantics(obs) == []
     for proc in obs["noise"]:
-        assert proc["used_memory_mib"] is not None and proc["used_memory_mib"] < 512
+        assert noise_identity_ok(proc, probe.test_noise_allowlist)
 
 
 @OCC
@@ -43,7 +44,7 @@ def test_tool_failure_and_timeout_are_unknown_not_empty(kind, factory) -> None:
     probe = _probe(kind, factory)
     for fault in ("timeout", "exit-9", "unparsable", "na-only"):
         probe.script_next(fault)
-        obs = probe.occupancy(probe.test_host, probe.test_lane, probe.test_uuids, process_noise_mib=512, lane_noise_mib=1024, timeout_s=1)
+        obs = probe.occupancy(probe.test_host, probe.test_lane, probe.test_uuids, noise_allowlist=probe.test_noise_allowlist, noise_cap_mib=64, lane_noise_mib=1024, timeout_s=1)
         assert obs["status"] == "unknown" and obs["tenants"] == [] and obs["reason"], fault
 
 

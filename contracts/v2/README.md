@@ -92,7 +92,7 @@ Normative documents in this directory:
 ### Revision 3 (Sol 6 round 2; each counterexample is a regression test in `tests/contracts_v2/test_v2_round3.py`)
 
 20. **The inhibitor is proven in shadow through one validated exception**, `shadow_real: ["inhibitor"]`, under the legacy fence. That is the controlled proof path (B1).
-21. **Occupancy processes are partitioned** (B2): every process is lease, noise or tenant. `tenants` and `noise` are exactly those partitions. Unknown memory is never noise and never empty.
+21. **Occupancy processes are partitioned** (B2): every process is lease, noise or tenant (Amendment 2: noise only by allow-listed identity). `tenants` and `noise` are exactly those partitions. Unknown memory is never noise and never empty.
 22. **Live lanes are checked on their effective ports** (B3): required ports are evaluated with lane overrides applied.
 23. **At most one active work item per friend per host** (B5): `409 account_busy`, enforced by the authority and again by the helper.
 24. **One identity rule for everyone** (B6): the peer authenticates, and a token only selects or narrows from an allowed peer. Friends use their own tailnet identity and need no host account.
@@ -109,7 +109,7 @@ Normative documents in this directory:
 32. **The principal always comes from the peer and is never supplied; token expiry and revocation are enforced** (B6). C2 names the boundary tests.
 33. **The migration gate counts only replacement tests that pytest actually collects** (B7). It is tested end to end on a real git repo with the comment counterexample.
 34. **No grant until the host acknowledges a ceiling within the approval** (N1). Replies carry `max_end_remaining_s`. If the correction is lost, the response is `202 ceiling-unconfirmed` and no grant is issued.
-35. **Outputs go through trusted staging** (new). Executor-made copies are taken only of files with a single link that the job account owns, so hard links are never copied. Absolute paths are refused.
+35. **Outputs go through trusted staging** (new). Executor-made copies are taken only of files with a single link that the job account owns (Amendment 2: the namespace-aware expected owner of the job's own StateDirectory), so hard links are never copied. Absolute paths are refused.
 36. **The effective sudo audit runs on real `sudo -l` output**, so group and alias grants are visible (new).
 37. **Raw replay tokens live only in a separate store that is never backed up** (D-token-4). A backup taken during the replay window holds no token.
 
@@ -167,6 +167,15 @@ Normative documents in this directory:
 66. **Friend sessions are flag-gated and off in R1** (Q1). `features.friend_sessions` is false, and so is every host's `friend_sessions_enabled` (rev 7/8: a host needs the global flag AND its own per-host flag with a recorded runbook proof bound to that host's identity, sshd configuration and evidence artefact; the helper sees both flags and re-checks the binding itself): friends get API-queued jobs under a per-job DynamicUser, like agents. The infrastructure for per-friend accounts, the helper's claims and quarantine, the session contract and C9 stays specified, built and tested.
 67. **A7 uses a private-CA certificate** (Q2). The new `adapters.tls` block holds the cert, key and chain files and the rotation thresholds. It is CA-agnostic. The `tailscale cert` dependency is removed. Peer identity is unchanged. Revision 2: `tls.trust_anchor` lists the only roots a chain may terminate at. When the served certificate expires with no valid replacement, the listener stops serving TLS (fail closed).
 68. **The sshd change is deferred to C9 enablement** (Q4). It happens through a lockout-safe runbook and only on `ssh_server: openssh` hosts. C9 tests against a dedicated test sshd. Revision 2: the runbook discovers the effective key settings with `sshd -T` and preserves them. Flag off refuses only the paths that create friend work; cleanup stays available.
+
+### Amendment 2 (Sol 6.1 cold review; see `docs/v2/AMENDMENT-2.md`)
+
+69. **GPU noise is by identity, not by size** (P1-1). A process is noise only if its owner uid, argv[0] and nvidia-smi context type (G or C+G) match the lane's `noise_allowlist`, and the noise total stays within `noise_cap_mib`. Every other process is a tenant whatever its memory.
+70. **DynamicUser outputs are checked against the namespace-aware owner** (P1-2). That owner is the host-visible owner of the job's StateDirectory: the recorded uid, or the overflow uid when id-mapped. Foreign files and hard links stay rejected.
+71. **Execution identity is explicit** (P1-3). Work id, lease id, lane id and parent lease travel through `WorkloadRunner.start`, `SessionGateway.open/close`, the executor workload (`work_id`) and the helper arguments. No adapter keeps a mapping it was not given. Every port method, `Waker.wake` and `ReleaseBackend` included, takes `timeout_s`; only Clock is exempt.
+72. **The frozen carried cases assert against the production audit** (P1-4). Migration-map rows let C7h, and the packets that fix A0c's repros, remove their strict-xfail marks.
+73. **T04 is split** (P1-5). The holder variant runs at A-ASM; the managed-unit variant runs at C7b1 and C-ASM.
+74. **GPU job-path proofs per lane** (P2): a CUDA job through the production path; cancel or preempt with GPU memory allocated; controller loss; no successor before teardown.
 
 ## Lifecycle tables
 

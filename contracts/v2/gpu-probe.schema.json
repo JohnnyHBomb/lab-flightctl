@@ -18,7 +18,9 @@
     "occupancy_processes": "nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv,noheader,nounits",
     "device_minor": "grep 'Device Minor' /proc/driver/nvidia/gpus/<pci_bus_id normalised>/information   (maps the card to /dev/nvidia<minor> for device-cgroup isolation; measured on driver 610.57.04, 2 Oct)",
     "notes": "Values may be '[N/A]' or '[Not Supported]' (ECC on Titan RTX reads '[N/A]', measured): map to null for that field, never to zero. clocks_event_reasons.* print 'Active'/'Not Active' (measured). pci.bus_id prints an 8-digit uppercase domain; normalise to 4-digit lowercase. process_name is the FULL command line on driver 610 (measured: a browser GPU process line of ~900 characters) and may contain ', ': parse a process row as uuid, pid = first two fields and used_memory = LAST field; everything between is the name. Compute-apps lists compute contexts only: graphics/display memory shows in memory.used with no process row (measured: 529 MiB used, zero process rows on a display-driving card). Every command runs with a bounded timeout (default 10 s).",
-    "emptiness_rule": "B2 (Sol 6). A lane is EMPTY only if: status ok; tenants empty; NO process attributed to the lease; and unexplained_mib < lane_noise_mib, where unexplained_mib = sum(memory.used over the lane's cards) - sum(used_memory of processes attributed to the lease or classed as noise). A held lane is in COLLISION when tenants is non-empty or unexplained_mib >= lane_noise_mib (watcher rule; legacy thresholds 512/1024 MiB). A process row whose used_memory is null ('[N/A]', e.g. no permission / other namespace) is a TENANT unless attributed to the lease: unknown memory never counts as noise. The executor computes 'empty'; tests/contracts_v2/validation.py occupancy_semantics() is the oracle and golden captures from real cards are the evidence. Round 3 (Sol 6 B2 counterexample): processes is PARTITIONED: every process is exactly one of lease (attribution lease), noise (attribution noise, used_memory known and < process_noise_mib) or tenant (attribution external); tenants == the external processes and noise == the noise processes, in order; a process with unknown memory can never be noise and can never leave empty true. occupancy_semantics() enforces the partition."
+    "emptiness_rule": "Amendment 2 (Sol 6.1 cold review P1-1) replaces the size threshold. A lane is EMPTY only if: status ok; tenants empty; NO process attributed to the lease; the memory of noise processes sums to <= noise_cap_mib; and unexplained_mib < lane_noise_mib (graphics-only memory with no compute row). A process is NOISE only if its identity (owner uid, argv[0], context type G or C+G) matches the lane's noise_allowlist (noise_identity_ok); every other process is a TENANT whatever its size; unknown memory or identity is never noise. processes is PARTITIONED into lease / noise / external, and tenants == the external processes. occupancy_semantics() is the oracle; golden captures fix it. Rev 2: the context type is per (gpu_uuid, pid), never per pid.",
+    "occupancy_process_types": "nvidia-smi -q -d PIDS  (per process: 'Type' C, G or C+G and 'Used GPU Memory'; measured 2 Oct on driver 610.57.04: a desktop browser GPU process holds a 5 MiB C+G context on a compute card, compositor/terminal contexts are G and do not appear in --query-compute-apps)",
+    "process_identity": "stat /proc/<pid> (owner uid) and /proc/<pid>/cmdline (argv[0]); unreadable = null = never noise"
   },
   "$defs": {
     "status": {
@@ -283,7 +285,10 @@
         "pid",
         "process_name",
         "used_memory_mib",
-        "attribution"
+        "attribution",
+        "uid",
+        "argv0",
+        "context_type"
       ],
       "properties": {
         "gpu_uuid": {
@@ -309,13 +314,52 @@
           ]
         },
         "attribution": {
-          "description": "Set by the executor, not the probe: lease (inside the lease's unit cgroup or a registered holder pid), noise (below process_noise_mib), external (anything else).",
+          "description": "Set by the executor, not the probe: lease (inside the lease's unit cgroup or a registered holder pid), noise (an allow-listed desktop identity: noise_identity_ok, Amendment 2), external (anything else, WHATEVER its size).",
           "enum": [
             "unattributed",
             "lease",
             "noise",
             "external"
           ]
+        },
+        "uid": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Owner uid of /proc/<pid> (null = not readable: then never noise)."
+        },
+        "argv0": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 4096
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "argv[0] from /proc/<pid>/cmdline (null = not readable)."
+        },
+        "context_type": {
+          "anyOf": [
+            {
+              "enum": [
+                "C",
+                "G",
+                "C+G"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "nvidia-smi -q -d PIDS 'Type' (measured 2 Oct, driver 610.57.04: C, G, C+G). A pure compute 'C' context is never noise. Rev 2 (Sol 6.1 amd2): taken per DEVICE ENTRY (gpu_uuid, pid); the same pid can be C+G on one card and C on another."
         }
       },
       "allOf": [
@@ -331,6 +375,18 @@
             "properties": {
               "used_memory_mib": {
                 "type": "integer"
+              },
+              "uid": {
+                "type": "integer"
+              },
+              "argv0": {
+                "type": "string"
+              },
+              "context_type": {
+                "enum": [
+                  "G",
+                  "C+G"
+                ]
               }
             }
           }
@@ -390,7 +446,7 @@
           }
         },
         "tenants": {
-          "description": "Unattributed processes on the lane's cards with used_memory >= process_noise_mib OR used_memory unknown (null). Unknown memory is never noise.",
+          "description": "Amendment 2: every process that is neither attributed to the lease nor an allow-listed desktop identity, WHATEVER its memory (a ~300 MiB stray CUDA context is a tenant: T10). Unknown memory or identity is never noise.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/gpu_process"
@@ -417,17 +473,43 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "process_noise_mib",
-            "lane_noise_mib"
+            "lane_noise_mib",
+            "noise_cap_mib",
+            "noise_allowlist"
           ],
           "properties": {
-            "process_noise_mib": {
-              "type": "integer",
-              "minimum": 0
-            },
             "lane_noise_mib": {
               "type": "integer",
               "minimum": 0
+            },
+            "noise_cap_mib": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Amendment 2: aggregate cap on the memory of allow-listed noise processes on the lane; above it the lane is not empty."
+            },
+            "noise_allowlist": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "argv0",
+                  "uid"
+                ],
+                "properties": {
+                  "argv0": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "uid": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              },
+              "description": "Amendment 2: approved desktop/display identities for this lane: argv[0] of /proc/<pid>/cmdline AND the owner uid of /proc/<pid>. An entry trusts that uid (argv[0] is forgeable only by its own processes); root and DynamicUser uids are never noise. Empty = nothing is noise."
             }
           }
         },
@@ -586,7 +668,10 @@
             "pid": 4242,
             "process_name": "browser-gpu",
             "used_memory_mib": 5,
-            "attribution": "noise"
+            "attribution": "noise",
+            "uid": 1000,
+            "argv0": "browser",
+            "context_type": "C+G"
           }
         ],
         "tenants": [],
@@ -596,13 +681,22 @@
             "pid": 4242,
             "process_name": "browser-gpu",
             "used_memory_mib": 5,
-            "attribution": "noise"
+            "attribution": "noise",
+            "uid": 1000,
+            "argv0": "browser",
+            "context_type": "C+G"
           }
         ],
         "lane_memory_used_mib": 6,
         "thresholds": {
-          "process_noise_mib": 512,
-          "lane_noise_mib": 1024
+          "lane_noise_mib": 1024,
+          "noise_cap_mib": 64,
+          "noise_allowlist": [
+            {
+              "argv0": "browser",
+              "uid": 1000
+            }
+          ]
         },
         "unexplained_mib": 1,
         "empty": true,
@@ -625,8 +719,14 @@
         "noise": [],
         "lane_memory_used_mib": null,
         "thresholds": {
-          "process_noise_mib": 512,
-          "lane_noise_mib": 1024
+          "lane_noise_mib": 1024,
+          "noise_cap_mib": 64,
+          "noise_allowlist": [
+            {
+              "argv0": "browser",
+              "uid": 1000
+            }
+          ]
         },
         "unexplained_mib": null,
         "empty": false,
@@ -647,8 +747,14 @@
         "noise": [],
         "lane_memory_used_mib": 0,
         "thresholds": {
-          "process_noise_mib": 512,
-          "lane_noise_mib": 1024
+          "lane_noise_mib": 1024,
+          "noise_cap_mib": 64,
+          "noise_allowlist": [
+            {
+              "argv0": "browser",
+              "uid": 1000
+            }
+          ]
         },
         "unexplained_mib": 0,
         "empty": true,
@@ -682,7 +788,10 @@
             "pid": 4242,
             "process_name": "browser-gpu",
             "used_memory_mib": 5,
-            "attribution": "noise"
+            "attribution": "noise",
+            "uid": 1000,
+            "argv0": "browser",
+            "context_type": "C+G"
           }
         ],
         "tenants": [
@@ -691,7 +800,10 @@
             "pid": 77,
             "process_name": "python",
             "used_memory_mib": null,
-            "attribution": "external"
+            "attribution": "external",
+            "uid": null,
+            "argv0": null,
+            "context_type": null
           }
         ],
         "noise": [
@@ -700,13 +812,22 @@
             "pid": 4242,
             "process_name": "browser-gpu",
             "used_memory_mib": 5,
-            "attribution": "noise"
+            "attribution": "noise",
+            "uid": 1000,
+            "argv0": "browser",
+            "context_type": "C+G"
           }
         ],
         "lane_memory_used_mib": 6,
         "thresholds": {
-          "process_noise_mib": 512,
-          "lane_noise_mib": 1024
+          "lane_noise_mib": 1024,
+          "noise_cap_mib": 64,
+          "noise_allowlist": [
+            {
+              "argv0": "browser",
+              "uid": 1000
+            }
+          ]
         },
         "unexplained_mib": 1,
         "empty": true,

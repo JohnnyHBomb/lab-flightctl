@@ -145,8 +145,14 @@
         "vram_cap_bytes": null,
         "external_tenant": {
           "policy": "collision",
-          "process_noise_mib": 512,
-          "lane_noise_mib": 1024
+          "lane_noise_mib": 1024,
+          "noise_cap_mib": 64,
+          "noise_allowlist": [
+            {
+              "argv0": "browser",
+              "uid": 1000
+            }
+          ]
         }
       }
     }

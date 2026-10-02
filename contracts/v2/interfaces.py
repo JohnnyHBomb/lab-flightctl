@@ -17,7 +17,11 @@ Failure semantics shared by every port (ADAPTERS.md section 4):
     with ok=False / status 'unknown' and a typed error (common.schema.json#/$defs/typed_error) that
     keeps the lowest-level reason (Grok finding 7);
   * every call is bounded by an explicit timeout_s; a timeout is a typed 'timeout' error, never a
-    hang and never an empty/free result;
+    hang and never an empty/free result (Amendment 2: this now holds for EVERY port method, Waker.wake and the
+    ReleaseBackend methods included; the only exemption is Clock, whose reads are in-process with no I/O);
+  * no hidden adapter state (Amendment 2, Sol 6.1 cold review P1-3): every identity a real twin needs to act
+    on the right object (work id, lease id, lane id, parent lease) is an EXPLICIT argument and travels on the
+    wire; an adapter never derives one identity from another through state it keeps itself;
   * unknown or unparsable output maps to unknown, never to empty, absent-and-safe or free.
 
 Result shapes are JSON objects defined by the named schema definitions; Mapping[str, object] is used
@@ -98,7 +102,11 @@ class WorkloadRunner(Protocol):
     DeviceAllow for the lane's cards). The user-manager twin remains for holder-mode bookkeeping and tests.
     Conformance: tests/conformance/workload_runner."""
 
-    def start(self, unit: str, run_id: str, argv: Sequence[str], *, env: Mapping[str, str], run_as: str, workdir: str, cards: Sequence[str], grace_s: int, timeout_s: float) -> Result: ...
+    def start(self, unit: str, run_id: str, argv: Sequence[str], *, work_id: str, lease_id: str, lane_id: str,
+              parent_lease_id: str | None, env: Mapping[str, str], run_as: str, workdir: str, cards: Sequence[str],
+              grace_s: int, timeout_s: float) -> Result: ...
+    # Amendment 2: work_id = the authority's public job id (helper unit-start --job), lease_id/lane_id = the lease the
+    # work runs under, parent_lease_id = the friend's claimed parent lease (helper --parent-lease; None for agents).
 
     def stop(self, unit: str, invocation_id: str | None, *, timeout_s: float) -> Result: ...
 
@@ -120,12 +128,13 @@ class InventoryProbe(Protocol):
 
 class OccupancyProbe(Protocol):
     """Who is on a lane's cards now (gpu-probe.schema.json#/$defs/occupancy_observation), filtered to
-    the lane's UUIDs, with the noise thresholds applied (processes below process_noise_mib go to
-    'noise', never to 'tenants'). Attribution to the lease is the executor's job. Real: the two
+    the lane's UUIDs, with the lane's noise rule applied (Amendment 2: only allow-listed desktop identities
+    with a G or C+G context go to 'noise', within noise_cap_mib; every other process is a tenant whatever its size). Attribution to the lease is the executor's job. Real: the two
     nvidia-smi queries in gpu-probe.schema.json x-real-commands. Read-only: no dryrun twin.
     Conformance: tests/conformance/occupancy_probe."""
 
-    def occupancy(self, host_id: str, lane_id: str, uuids: Sequence[str], *, process_noise_mib: int, lane_noise_mib: int, timeout_s: float) -> Result: ...
+    def occupancy(self, host_id: str, lane_id: str, uuids: Sequence[str], *, noise_allowlist: Sequence[Mapping[str, object]],
+                  noise_cap_mib: int, lane_noise_mib: int, timeout_s: float) -> Result: ...
 
 
 class HealthProbe(Protocol):
@@ -145,7 +154,7 @@ class Waker(Protocol):
     wake() records 'would send' and returns dry_run=True. Fake: SimHost sleep model with scripted
     wake latency / never-wakes. Conformance: tests/conformance/waker."""
 
-    def wake(self, host_id: str, profile_ref: str, *, reason: str) -> Result: ...
+    def wake(self, host_id: str, profile_ref: str, *, reason: str, timeout_s: float) -> Result: ...
 
     def answered(self, host_id: str, *, timeout_s: float) -> bool | None: ...
 
@@ -216,9 +225,11 @@ class SessionGateway(Protocol):
     key removed); the executor adds occupancy emptiness before the lane is freed. Gated on the owner's
     Q1 answer (OPEN-QUESTIONS). Conformance: tests/conformance/test_work_support.py session cases."""
 
-    def open(self, host_id: str, unix_user: str, public_key: str, *, expires_at: datetime, device_minors: Sequence[int], cards: Sequence[str], timeout_s: float) -> Result: ...
+    def open(self, host_id: str, unix_user: str, public_key: str, *, parent_lease_id: str, lane_id: str, expires_at: datetime,
+             device_minors: Sequence[int], cards: Sequence[str], timeout_s: float) -> Result: ...
+    # Amendment 2: parent_lease_id is the helper's --parent-lease; two opens that differ only in it are different calls.
 
-    def close(self, host_id: str, unix_user: str, key_fingerprint: str, *, timeout_s: float) -> Result: ...
+    def close(self, host_id: str, unix_user: str, key_fingerprint: str, *, parent_lease_id: str, timeout_s: float) -> Result: ...
 
 
 class Notifier(Protocol):
@@ -247,12 +258,12 @@ class ReleaseBackend(Protocol):
     configured backup target, restore rehearsal into a scratch root. Fake: the existing file backend.
     Conformance: tests/conformance/release_backend."""
 
-    def stage(self, manifest: Result) -> Result: ...
+    def stage(self, manifest: Result, *, timeout_s: float) -> Result: ...
 
-    def activate(self, release_id: str, host_id: str) -> Result: ...
+    def activate(self, release_id: str, host_id: str, *, timeout_s: float) -> Result: ...
 
-    def rollback(self, release_id: str, host_id: str) -> Result: ...
+    def rollback(self, release_id: str, host_id: str, *, timeout_s: float) -> Result: ...
 
-    def backup(self, release_id: str) -> Result: ...
+    def backup(self, release_id: str, *, timeout_s: float) -> Result: ...
 
-    def restore_rehearsal(self, release_id: str, scratch_root: str) -> Result: ...
+    def restore_rehearsal(self, release_id: str, scratch_root: str, *, timeout_s: float) -> Result: ...

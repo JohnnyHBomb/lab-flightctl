@@ -158,7 +158,8 @@
         "workdir_ref",
         "cards",
         "log_capture",
-        "health"
+        "health",
+        "work_id"
       ],
       "properties": {
         "kind": {
@@ -279,6 +280,10 @@
               "type": "null"
             }
           ]
+        },
+        "work_id": {
+          "$ref": "common.schema.json#/$defs/public_id",
+          "description": "Amendment 2 (Sol 6.1 P1-3): the authority's public job/work id, passed to the helper as unit-start --job and recorded in the helper's job registry. Lease and lane identity travel in the start request's identity."
         }
       }
     },
@@ -1230,7 +1235,7 @@
         }
       ],
       "unevaluatedProperties": false,
-      "description": "Round 3 containment (Sol 6 new finding): the executor opens the file by walking from a directory fd of the job's output root, one component at a time with O_NOFOLLOW|O_DIRECTORY (final component O_NOFOLLOW, then fstat S_ISREG), so no symlink or '..' can leave the root; it reads only from that fd and refuses with conflict 'output changed' if the opened file's size/sha256 differ from expect_sha256 (the value job-output-list returned): a path swapped between list and get is refused. Reference: tests/contracts_v2/validation.py contained_open(). Round 4 (Sol 6 r3) trusted staging: the job unit writes only into a fresh per-job staging directory owned by the job account. After the unit is stopped and its cgroup is empty, the executor (via flightctl-helper output-collect) walks staging with O_NOFOLLOW, accepts only regular files with st_nlink == 1 and st_uid == the job account (checked with fstat on the opened fd), and COPIES their bytes into the job's directory in an executor-owned output store, recording each copy's sha256. Everything else (symlink, hard link, device, fifo, foreign owner) is skipped and listed as rejected. job-output-list/get serve only those copies, so smuggled hard links never reach a reader. Absolute or '..' paths are refused before the walk. Reference: stage_outputs(), contained_open()."
+      "description": "Round 3 containment (Sol 6 new finding): the executor opens the file by walking from a directory fd of the job's output root, one component at a time with O_NOFOLLOW|O_DIRECTORY (final component O_NOFOLLOW, then fstat S_ISREG), so no symlink or '..' can leave the root; it reads only from that fd and refuses with conflict 'output changed' if the opened file's size/sha256 differ from expect_sha256 (the value job-output-list returned): a path swapped between list and get is refused. Reference: tests/contracts_v2/validation.py contained_open(). Round 4 (Sol 6 r3) trusted staging: the job unit writes only into a fresh per-job staging directory owned by the job account (as the host sees it: Amendment 2, the recorded uid or the overflow uid when id-mapped). After the unit is stopped and its cgroup is empty, the executor (via flightctl-helper output-collect) walks staging with O_NOFOLLOW, accepts only regular files with st_nlink == 1 and st_uid == the namespace-aware expected owner of the job's own StateDirectory (Amendment 2: output_owner_expected; checked with fstat on the opened fd), and COPIES their bytes into the job's directory in an executor-owned output store, recording each copy's sha256. Everything else (symlink, hard link, device, fifo, foreign owner) is skipped and listed as rejected. job-output-list/get serve only those copies, so smuggled hard links never reach a reader. Absolute or '..' paths are refused before the walk. Reference: stage_outputs(), contained_open()."
     },
     "ceiling_request": {
       "allOf": [
@@ -1300,8 +1305,14 @@
           "holder_binding": "client-heartbeat",
           "external_tenant": {
             "policy": "collision",
-            "process_noise_mib": 512,
-            "lane_noise_mib": 1024
+            "lane_noise_mib": 1024,
+            "noise_cap_mib": 64,
+            "noise_allowlist": [
+              {
+                "argv0": "browser",
+                "uid": 1000
+              }
+            ]
           }
         },
         "deadlines": [
@@ -1416,8 +1427,14 @@
           "holder_binding": "ttl-only",
           "external_tenant": {
             "policy": "collision",
-            "process_noise_mib": 512,
-            "lane_noise_mib": 1024
+            "lane_noise_mib": 1024,
+            "noise_cap_mib": 64,
+            "noise_allowlist": [
+              {
+                "argv0": "browser",
+                "uid": 1000
+              }
+            ]
           }
         },
         "deadlines": [

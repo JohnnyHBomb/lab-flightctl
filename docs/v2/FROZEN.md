@@ -1,6 +1,6 @@
 # Contracts v2: frozen
 
-> **Amended:** `AMENDMENT-1.md` (the owner's decisions of 2 Oct 2026, in the next commit) changes Q1, the A7 certificate source and the sshd timing. It is subject to a Sol 6 mini-review. The owner-action list below is the one at freeze time; the current list is in `OPEN-QUESTIONS.txt`.
+> **Amended:** `AMENDMENT-2.md` (Sol 6.1 cold review, a further commit; subject to review) and `AMENDMENT-1.md` (the owner's decisions of 2 Oct 2026, in the next commit) changes Q1, the A7 certificate source and the sshd timing. It is subject to a Sol 6 mini-review. The owner-action list below is the one at freeze time; the current list is in `OPEN-QUESTIONS.txt`.
 
 The v2 contract set is **frozen at this commit**: the single commit on top of `59bdd7f` on branch `contracts-v2` that adds this file. The freeze follows 9 Sol 6 review rounds.
 

@@ -37,7 +37,7 @@ def test_stop_of_absent_unit_is_idempotent_success(kind, factory) -> None:
 def test_start_inspect_stop_roundtrip_with_invocation_identity(kind, factory) -> None:
     runner = _runner(kind, factory)
     unit = UNIT.format(n=903)
-    started = runner.start(unit, "run-conform903", ["sleep", "300"], env={}, run_as="", workdir="", cards=[], grace_s=5, timeout_s=30)
+    started = runner.start(unit, "run-conform903", ["sleep", "300"], work_id="job-conform01", lease_id="lse-conform01", lane_id=runner.test_lane, parent_lease_id=None, env={}, run_as="", workdir="", cards=[], grace_s=5, timeout_s=30)
     assert_valid(started, "unit", "start_result")
     if kind == "dryrun":
         assert started["dry_run"] is True and runner.inspect(unit, None, timeout_s=10)["state"] == "absent"
@@ -54,7 +54,7 @@ def test_start_inspect_stop_roundtrip_with_invocation_identity(kind, factory) ->
 def test_stop_with_wrong_invocation_is_refused_and_unit_keeps_running(kind, factory) -> None:
     runner = _runner(kind, factory)
     unit = UNIT.format(n=904)
-    started = runner.start(unit, "run-conform904", ["sleep", "300"], env={}, run_as="", workdir="", cards=[], grace_s=5, timeout_s=30)
+    started = runner.start(unit, "run-conform904", ["sleep", "300"], work_id="job-conform01", lease_id="lse-conform01", lane_id=runner.test_lane, parent_lease_id=None, env={}, run_as="", workdir="", cards=[], grace_s=5, timeout_s=30)
     try:
         refused = runner.stop(unit, "0" * 32, timeout_s=30)
         assert refused["ok"] is False and refused["error"]["code"] == "identity_mismatch"
@@ -68,8 +68,8 @@ def test_stop_with_wrong_invocation_is_refused_and_unit_keeps_running(kind, fact
 def test_units_are_isolated_and_crash_is_observed(kind, factory) -> None:
     runner = _runner(kind, factory)
     a, b = UNIT.format(n=905), UNIT.format(n=906)
-    sa = runner.start(a, "run-conform905", ["sleep", "300"], env={}, run_as="", workdir="", cards=[], grace_s=5, timeout_s=30)
-    sb = runner.start(b, "run-conform906", ["sh", "-c", "exit 3"], env={}, run_as="", workdir="", cards=[], grace_s=5, timeout_s=30)
+    sa = runner.start(a, "run-conform905", ["sleep", "300"], work_id="job-conform01", lease_id="lse-conform01", lane_id=runner.test_lane, parent_lease_id=None, env={}, run_as="", workdir="", cards=[], grace_s=5, timeout_s=30)
+    sb = runner.start(b, "run-conform906", ["sh", "-c", "exit 3"], work_id="job-conform01", lease_id="lse-conform01", lane_id=runner.test_lane, parent_lease_id=None, env={}, run_as="", workdir="", cards=[], grace_s=5, timeout_s=30)
     try:
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline and runner.inspect(b, "run-conform906", timeout_s=10)["state"] in {"active", "starting"}:

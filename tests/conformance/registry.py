@@ -9,6 +9,10 @@ Each slice that delivers an implementation of a port registers a factory here, e
 names a host (pytest marker 'onlab'); hosted CI and lab-ci containers skip them with a visible reason,
 and the gauge runs them on the named host (GATES.txt G3). A port with no registered implementation is
 skipped with the slice that owes it, never silently passed.
+
+Amendment 2 (Sol 6.1 cold review): implementations also expose the explicit identities the ports now take:
+test_lane (workload_runner, session_gateway), test_parent_lease (session_gateway) and test_noise_allowlist
+(occupancy_probe: the lane's approved desktop identities, [] when the target lane has none).
 """
 
 from __future__ import annotations

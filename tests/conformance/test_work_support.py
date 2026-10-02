@@ -44,9 +44,9 @@ def test_size_mismatch_is_failed_not_present(kind, factory) -> None:
 @pytest.mark.parametrize("kind,factory", port_params("session_gateway"))
 def test_session_window_opens_and_closes(kind, factory) -> None:
     gw = _impl(kind, factory)
-    opened = gw.open(gw.test_host, gw.test_user, gw.test_public_key, expires_at=gw.in_minutes(5), device_minors=gw.test_minors, cards=gw.test_cards, timeout_s=20)
+    opened = gw.open(gw.test_host, gw.test_user, gw.test_public_key, parent_lease_id=gw.test_parent_lease, lane_id=gw.test_lane, expires_at=gw.in_minutes(5), device_minors=gw.test_minors, cards=gw.test_cards, timeout_s=20)
     assert opened["ok"] is True
-    closed = gw.close(gw.test_host, gw.test_user, gw.test_fingerprint, timeout_s=20)
+    closed = gw.close(gw.test_host, gw.test_user, gw.test_fingerprint, parent_lease_id=gw.test_parent_lease, timeout_s=20)
     assert closed["ok"] is True and gw.key_present() is False
     assert closed["close_proof"]["user_slice_empty"] is True and closed["close_proof"]["key_removed"] is True
 
@@ -80,9 +80,9 @@ def test_unreadable_legacy_state_is_never_free(kind, factory) -> None:
 @pytest.mark.parametrize("kind,factory", port_params("release_backend"))
 def test_release_stage_activate_rollback_restore(kind, factory) -> None:
     backend = _impl(kind, factory)
-    staged = backend.stage(backend.test_manifest)
+    staged = backend.stage(backend.test_manifest, timeout_s=60)
     assert staged["ok"] is True
-    assert backend.activate(staged["release_id"], backend.test_host)["ok"] is True
-    assert backend.rollback(staged["release_id"], backend.test_host)["ok"] is True
-    assert backend.backup(staged["release_id"])["ok"] is True
-    assert backend.restore_rehearsal(staged["release_id"], backend.scratch_root())["hashes_match"] is True
+    assert backend.activate(staged["release_id"], backend.test_host, timeout_s=60)["ok"] is True
+    assert backend.rollback(staged["release_id"], backend.test_host, timeout_s=60)["ok"] is True
+    assert backend.backup(staged["release_id"], timeout_s=60)["ok"] is True
+    assert backend.restore_rehearsal(staged["release_id"], backend.scratch_root(), timeout_s=60)["hashes_match"] is True

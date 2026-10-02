@@ -47,7 +47,7 @@ def test_refused_inhibitor_is_a_typed_error(kind, factory) -> None:
 def test_awake_host_answers_and_wake_is_already_awake(kind, factory) -> None:
     waker = _impl(kind, factory)
     assert waker.answered(waker.test_host, timeout_s=10) is True
-    attempt = waker.wake(waker.test_host, waker.test_profile, reason="conformance")
+    attempt = waker.wake(waker.test_host, waker.test_profile, reason="conformance", timeout_s=10)
     assert_valid(attempt, "power", "wake_attempt")
     assert attempt["result"] == "already-awake"
 
@@ -57,7 +57,7 @@ def test_awake_host_answers_and_wake_is_already_awake(kind, factory) -> None:
 def test_sim_host_that_never_wakes_times_out_never_free(kind, factory) -> None:
     waker = _impl(kind, factory)
     waker.sim_sleep(waker.test_host, wakes=False)
-    attempt = waker.wake(waker.test_host, waker.test_profile, reason="conformance")
+    attempt = waker.wake(waker.test_host, waker.test_profile, reason="conformance", timeout_s=10)
     waker.sim_advance(181)
     assert waker.answered(waker.test_host, timeout_s=1) is False
     assert attempt["result"] in {"pending", "timed-out"}

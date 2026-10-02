@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import contextlib
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import jsonschema
 from jsonschema import FormatChecker
@@ -698,14 +698,42 @@ def _num(text: str) -> int | float | None:
             return None
 
 
+DYNAMIC_USER_UIDS = range(61184, 65520)  # systemd DynamicUser range (systemd.exec(5)); never a noise identity
+
+
+def noise_identity_ok(identity: Mapping[str, Any] | None, allowlist: Sequence[Mapping[str, Any]]) -> bool:
+    """Amendment 2 (Sol 6.1 cold review P1-1): a process is desktop NOISE only by IDENTITY, never by size. Identity =
+    the owner uid of /proc/<pid> (kernel-set, readable by any user), argv[0] from /proc/<pid>/cmdline (forgeable only by
+    processes of that same uid, so an entry trusts that uid) and the nvidia-smi context type from `nvidia-smi -q -d PIDS`
+    (measured 2 Oct on driver 610.57.04: C, G or C+G; a desktop browser holds a C+G context on a compute card). Noise
+    requires an allow-list entry {argv0, uid} for this lane, a graphics-capable context (G or C+G: a pure compute 'C'
+    context is never noise), and a uid that is not root and not in the DynamicUser range. Unknown identity = tenant."""
+    if not identity or identity.get("context_type") not in ("G", "C+G"):
+        return False
+    uid = identity.get("uid")
+    if not isinstance(uid, int) or uid == 0 or uid in DYNAMIC_USER_UIDS:
+        return False
+    return any(e.get("argv0") == identity.get("argv0") and e.get("uid") == uid for e in allowlist)
+
+
 def occupancy_from_capture(gpus_csv: str, procs_csv: str, *, returncode: int, lane_id: str, host_id: str, observed_at: str,
-                           lane_uuids: list[str], process_noise_mib: int = 512, lane_noise_mib: int = 1024,
+                           lane_uuids: list[str], noise_allowlist: Sequence[Mapping[str, Any]] = (), noise_cap_mib: int = 0,
+                           lane_noise_mib: int = 1024, identities: Mapping[int, Mapping[str, Any]] | None = None,
+                           context_types: Mapping[tuple[str, int], str] | None = None,
                            attributed_pids: frozenset[int] = frozenset()) -> dict[str, Any]:
     """Contract ORACLE for the occupancy observation (gpu-probe.schema.json emptiness_rule).
 
     Parses the two real nvidia-smi query outputs (x-real-commands) exactly as the real twin must. It exists so
-    that golden captures from real cards fix the rule; slice A3's production parser must agree with it."""
-    thresholds = {"process_noise_mib": process_noise_mib, "lane_noise_mib": lane_noise_mib}
+    that golden captures from real cards fix the rule; slice A3's production parser must agree with it.
+    Amendment 2: noise is an explicit per-lane allow-list of desktop identities (noise_identity_ok) with an aggregate
+    cap (noise_cap_mib); every other process is a tenant WHATEVER its size. Defaults are fail-closed (no allow-list,
+    cap 0): nothing is noise.
+    Amendment 2 rev 2 (Sol 6.1 amd2 P1): uid and argv0 are per PROCESS (identities[pid]); the context type is per
+    (gpu_uuid, pid) (context_types), because one process can hold a C+G context on one card and a pure C context on
+    another (nvidia-smi reports Type per device entry); a missing per-card type is null and never noise."""
+    identities = identities or {}
+    context_types = context_types or {}
+    thresholds = {"lane_noise_mib": lane_noise_mib, "noise_cap_mib": noise_cap_mib, "noise_allowlist": [dict(e) for e in noise_allowlist]}
     unknown = {"kind": "gpu-occupancy", "host_id": host_id, "lane_id": lane_id, "observed_at": observed_at, "status": "unknown", "expected_uuids": list(lane_uuids),
                "gpus": [], "processes": [], "tenants": [], "noise": [], "lane_memory_used_mib": None, "thresholds": thresholds,
                "unexplained_mib": None, "empty": False}
@@ -742,13 +770,15 @@ def occupancy_from_capture(gpus_csv: str, procs_csv: str, *, returncode: int, la
         mem = _num(mem_text)
         mem = mem if isinstance(mem, int) else None
         pid = int(pid_text)
+        ident = dict(identities.get(pid) or {}, context_type=context_types.get((uuid, pid)))  # rev 2: per card
         if pid in attributed_pids:
             kind = "lease"
-        elif mem is not None and mem < process_noise_mib:
+        elif mem is not None and noise_identity_ok(ident, noise_allowlist):
             kind = "noise"
         else:
-            kind = "external"
-        row = {"gpu_uuid": uuid, "pid": pid, "process_name": name[:4096], "used_memory_mib": mem, "attribution": kind}
+            kind = "external"  # Amendment 2: ANY process not lease and not an allow-listed identity is a tenant
+        row = {"gpu_uuid": uuid, "pid": pid, "process_name": name[:4096], "used_memory_mib": mem, "attribution": kind,
+               "uid": ident.get("uid"), "argv0": ident.get("argv0"), "context_type": ident.get("context_type")}
         processes.append(row)
         (tenants if kind == "external" else noise if kind == "noise" else []).append(row)
     lane_used = sum(g["memory_used_mib"] for g in gpus)
@@ -759,7 +789,9 @@ def occupancy_from_capture(gpus_csv: str, procs_csv: str, *, returncode: int, la
     unexplained = lane_used - explained
     return {"kind": "gpu-occupancy", "host_id": host_id, "lane_id": lane_id, "observed_at": observed_at, "status": "ok", "reason": None, "expected_uuids": list(lane_uuids),
             "gpus": gpus, "processes": processes, "tenants": tenants, "noise": noise, "lane_memory_used_mib": lane_used,
-            "thresholds": thresholds, "unexplained_mib": unexplained, "empty": not tenants and not any(p["attribution"] == "lease" for p in processes) and unexplained < lane_noise_mib}
+            "thresholds": thresholds, "unexplained_mib": unexplained,
+            "empty": (not tenants and not any(p["attribution"] == "lease" for p in processes) and unexplained < lane_noise_mib
+                      and sum(p["used_memory_mib"] for p in noise) <= noise_cap_mib)}
 
 
 def occupancy_semantics(obs: Mapping[str, Any]) -> list[str]:
@@ -788,15 +820,14 @@ def occupancy_semantics(obs: Mapping[str, Any]) -> list[str]:
     explained = sum((p["used_memory_mib"] or 0) for p in obs["processes"] if p["attribution"] in {"lease", "noise"})
     if obs["unexplained_mib"] != lane_used - explained:
         problems.append("unexplained_mib does not equal lane memory minus attributed and noise memory")
-    noise_floor = obs["thresholds"]["process_noise_mib"]
+    allow = obs["thresholds"]["noise_allowlist"]
     for p in obs["processes"]:
         mem, kind = p["used_memory_mib"], p["attribution"]
         if kind == "unattributed":
             problems.append(f"pid {p['pid']} is unattributed: every process must be lease, noise or external")
-        if kind == "noise" and (mem is None or mem >= noise_floor):
-            problems.append(f"pid {p['pid']} is classed as noise but its memory is {mem} (unknown or >= {noise_floor} MiB)")
-        if kind == "external" and mem is not None and mem < noise_floor:
-            problems.append(f"pid {p['pid']} is external but below the noise floor: classify it as noise")
+        if kind == "noise" and (mem is None or not noise_identity_ok(p, allow)):
+            problems.append(f"pid {p['pid']} is classed as noise but is not an allow-listed desktop identity with known memory")
+    noise_total = sum(p["used_memory_mib"] or 0 for p in obs["processes"] if p["attribution"] == "noise")
     # round 3 (Sol 6 B2 counterexample): tenants and noise are exactly the external / noise processes
     if [p for p in obs["processes"] if p["attribution"] == "external"] != list(obs["tenants"]):
         problems.append("tenants must equal the external processes (partition broken)")
@@ -804,7 +835,8 @@ def occupancy_semantics(obs: Mapping[str, Any]) -> list[str]:
         problems.append("noise must equal the noise processes (partition broken)")
     if obs["empty"] and any(p["used_memory_mib"] is None for p in obs["processes"]):
         problems.append("a process with unknown memory can never leave the lane empty")
-    expected = not obs["tenants"] and not any(p["attribution"] == "lease" for p in obs["processes"]) and obs["unexplained_mib"] < obs["thresholds"]["lane_noise_mib"]
+    expected = (not obs["tenants"] and not any(p["attribution"] == "lease" for p in obs["processes"])
+                and obs["unexplained_mib"] < obs["thresholds"]["lane_noise_mib"] and noise_total <= obs["thresholds"]["noise_cap_mib"])
     if obs["empty"] != expected:
         problems.append(f"empty={obs['empty']} contradicts tenants/unexplained memory (expected {expected})")
     return problems
@@ -1357,9 +1389,36 @@ def contained_open(root_fd: int, relpath: str, expect_sha256: str | None = None)
     return data
 
 
+def output_owner_expected(dir_owner_uid: int, recorded_uid: int, overflow_uid: int) -> int | None:
+    """Amendment 2 (Sol 6.1 cold review P1-2): namespace-aware ownership for DynamicUser outputs. systemd documents
+    (systemd.exec(5), v261) that with DynamicUser and an id-mapped StateDirectory the HOST sees the files owned by the
+    overflow uid ('nobody', /proc/sys/kernel/overflowuid, measured 65534 on the controller 2 Oct) while the service sees
+    its own uid; without id-mapping the host sees the recorded dynamic uid. The expected owner is therefore the
+    host-visible owner of the job's own StateDirectory root, accepted only if it is the recorded uid (no id-mapping) or the
+    overflow uid (id-mapped); any other owner means the directory is not the job's and NOTHING is collected (None)."""
+    if dir_owner_uid == recorded_uid:
+        return recorded_uid
+    if dir_owner_uid == overflow_uid:
+        return overflow_uid
+    return None
+
+
+def collect_job_outputs(staging_fd: int, store_fd: int, recorded_uid: int, overflow_uid: int) -> dict[str, Any]:
+    """Amendment 2: output-collect = stat the job's StateDirectory root (the staging fd), derive the expected owner with
+    output_owner_expected, then stage_outputs against THAT owner (regular files only, st_nlink == 1, owner == expected,
+    O_NOFOLLOW throughout). A foreign-owned staging root collects nothing."""
+    import os
+
+    expected = output_owner_expected(os.fstat(staging_fd).st_uid, recorded_uid, overflow_uid)
+    if expected is None:
+        return {"accepted": {}, "rejected": {".": "staging directory is not owned by the job (neither recorded nor overflow uid)"}, "owner": None}
+    return dict(stage_outputs(staging_fd, store_fd, expected), owner=expected)
+
+
 def stage_outputs(staging_fd: int, store_fd: int, job_uid: int) -> dict[str, Any]:
     """Round 4 reference for trusted output staging (run after the job unit stopped and its cgroup is empty).
-    Accepts only regular files with st_nlink == 1 and st_uid == job_uid (checked with fstat on the O_NOFOLLOW fd) and
+    Amendment 2: job_uid is the EXPECTED host-visible owner from output_owner_expected (collect_job_outputs), not
+    necessarily the recorded runtime uid. Accepts only regular files with st_nlink == 1 and st_uid == job_uid (checked with fstat on the O_NOFOLLOW fd) and
     COPIES their bytes into the executor-owned store; everything else is rejected with a reason."""
     import hashlib
     import os

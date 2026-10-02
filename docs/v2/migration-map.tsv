@@ -27,3 +27,10 @@ tests/roster/test_review3_regressions.py	B3	delete	-	BLAST-RADIUS R1
 tests/roster/shims.py	B3	delete	-	BLAST-RADIUS R1
 tests/roster/{conftest,fake_bridge,fake_cleanup,fake_client,fake_workload,__init__}.py	B3	delete	-	BLAST-RADIUS R1 test support files
 roster/{run_arm,run_local_arm,run_queue}.sh	B3	delete	-	BLAST-RADIUS R1 (not tests; listed so the gauge sees the scripted deletion)
+tests/contracts_v2/test_v2_freeze.py::test_carried_exempt_group_defeats_fresh_auth	C7h	rewrite	test_carried_exempt_group_defeats_fresh_auth	Amendment 2 (Sol 6.1 P1-4): remove the strict-xfail mark once the production audit flightctl.install_audit passes; the assertion is unchanged
+tests/contracts_v2/test_v2_freeze.py::test_carried_per_command_tags_after_a_comma	C7h	rewrite	test_carried_per_command_tags_after_a_comma	Amendment 2 (Sol 6.1 P1-4): remove the strict-xfail mark once the production audit passes; the assertion is unchanged
+tests/sim/test_repro_cross_host_reserve.py::test_repro_cross_host_reserve	A5a	rewrite	test_repro_cross_host_reserve	Amendment 2 (Sol 6.1 P1-4): A0c's strict-xfail repro; the fixing packet removes the mark, the repro assertions stay
+tests/sim/test_repro_beat_and_renew.py::test_repro_beat_and_renew	A5b2	rewrite	test_repro_beat_and_renew	Amendment 2: A0c repro (heartbeat death and renew-never-succeeds); A5b2 removes the mark
+tests/sim/test_repro_release_identity_and_reason.py::test_repro_release_identity_and_reason	A5b1	rewrite	test_repro_release_identity_and_reason	Amendment 2: A0c repro; A5b1 removes the mark
+tests/sim/test_repro_restart_freeze.py::test_repro_restart_freeze	A8	rewrite	test_repro_restart_freeze	Amendment 2: A0c repro; A8 removes the mark
+tests/contracts_v2/test_v2_freeze.py::test_carried_obligations_are_recorded	C7h	rewrite	test_carried_obligations_are_recorded	Amendment 2 rev 2 (Sol 6.1 amd2): C7h flips the three ledger rows to contract-fixed; the test accepts that reviewed completion state only with the production audit passing; listed so any C7h edit of this file stays authorised

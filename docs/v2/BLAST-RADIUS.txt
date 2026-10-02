@@ -34,3 +34,36 @@ Not scrapped (amended or reduced, listed for completeness; no package removed):
     Grok 4). Re-add with real captures if an AMD compute card ever becomes a lane.
   - executor-v1 image_digest workloads: DEFERRED to the containers work after R1; R1 runs argv workloads only.
   - ROADMAP S00-S33: all kept and mapped by the crosswalk in SLICES.md; nothing dropped.
+
+C9 DEFERRAL OPTION (Amendment 2 note for the owner; NOT decided; Sol 6.1 cold review "over-engineering" point)
+Option: keep the C9 design dormant and move its construction and proof out of R1 to a session-enablement milestone.
+What would move (counted from the tree at Amendment 2):
+  Packets:
+    - C9 entirely (20 named acceptance tests, incl. the runbook, per-host gate, disable ordering and binding tests).
+    - From C7h ONLY the friend-session parts: session-open/close, claim-release/reconcile, the claim-clear program
+      and its operator sudoers rule, the session-probe program, friend_accounts and the friend unit-start branch.
+      C7h's agent parts stay in R1: unit-start for DynamicUser jobs, unit-stop, output-collect, the install audit,
+      DeviceAllow (C7b1/C7c/C8 depend on them). Friend-only C7h tests that would move: test_parent_claim_lifecycle,
+      test_claim_rollback_unlinks_only_its_own_inode, test_quarantine_and_start_are_serialised,
+      test_claim_clear_requires_operator_sudo_path, test_claim_clear_prompts_every_time, test_session_probe_bounds,
+      test_probe_sweep_requires_real_monotonic_clock, test_friend_flag_off_refuses_creation_allows_cleanup,
+      test_session_close_order_key_then_terminate_then_slice_stop (9 of C7h's 17 named tests).
+    - C-ASM: drop session_gateway from its assembly prerequisites (its strict G3 conformance moves too).
+  Contract text kept dormant (unchanged): session.schema.json, helper-config friend/claim/probe fields, inventory
+    friend_sessions_enabled/c9_proof, the Amendment 1 runbook and oracles. Their contract tests stay green.
+  Migration-map rows: none are owned by C9; the two C7h rows (Amendment 2, test_v2_freeze.py) stay with C7h because
+    the install audit stays in R1.
+  CONFORMANCE rows that name C9 (14, counted at Amendment 2): the target row "SSH sessions bound to a lease",
+    sol6-B5, amd1-Q1, amd1-Q4, sol6amd1r2-Q4, sol6amd1r4-Q4, sol6amd1r8-Q1, amd1r9-review, amd1r10-obl-1/-2/-3,
+    sol6amd1r10-Q4, and the C9 parts of sol61-P1-3 (session adapter conformance) and sol61-P2 (credential obligation).
+    Rows homed at C7h: 15, of which 12 concern friend paths (claims, quarantine, claim-clear, probe) and would move;
+    sol6r4-new (agent staging isolation), sol6r6-new (helper sudo secure_path) and the install-audit parts stay.
+  Gates: G3 strict conformance for session_gateway leaves C-ASM; G6 at C-ASM loses nothing (the friend SSH scenario
+    is already removed from R1 by Amendment 1); the C9 pre-enablement security review is unchanged (it was always
+    before enablement).
+  Plan checks that would need edits: tests/contracts_v2/test_v2_plan.py (assembly-port order: session_gateway would
+    have no R1 deliverer), test_v2_amendment1.py::test_r1_plan_has_no_friend_sessions (expects the C9 row in
+    milestone C), conformance registry OWED_BY['session_gateway'] = 'C9'.
+  Cost avoided in R1 (estimate, inferred): the three privileged programs' friend paths, the persistent claims store,
+    the sshd runbook tooling and their onlab proofs; risk retained: none for R1 users (all friend flags are off).
+

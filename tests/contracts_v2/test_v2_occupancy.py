@@ -18,7 +18,10 @@ def test_capture_verdicts(name: str) -> None:
     case = CASES[name]
     obs = occupancy_from_capture(case["gpus"], case["procs"], returncode=case["returncode"], lane_id="lane-x", host_id="host-x",
                                  observed_at="2026-10-02T00:00:00Z", lane_uuids=CAPTURES["lane_cards"][case["lane"]],
-                                 attributed_pids=frozenset(case.get("attributed_pids", [])))
+                                 attributed_pids=frozenset(case.get("attributed_pids", [])),
+                                 noise_allowlist=CAPTURES["noise_allowlist"], noise_cap_mib=CAPTURES["noise_cap_mib"],
+                                 identities={int(k): v for k, v in case.get("identities", {}).items()},  # Amendment 2
+                                 context_types={(k.split("|")[0], int(k.split("|")[1])): v for k, v in case.get("context_types", {}).items()})
     assert_valid(obs, "gpu-probe", "occupancy_observation")
     assert occupancy_semantics(obs) == []
     want = case["expect"]

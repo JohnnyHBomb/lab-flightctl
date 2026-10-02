@@ -806,13 +806,14 @@
           ]
         },
         "external_tenant": {
-          "description": "How GPU processes NOT started under a lease are treated (desktop, ComfyUI, Chrome). Legacy flightctl v2 thresholds are the defaults.",
+          "description": "How GPU processes NOT started under a lease are treated. Amendment 2: desktop noise is an explicit allow-list of identities with an aggregate cap; there is no size threshold (any unlisted process is a tenant).",
           "type": "object",
           "additionalProperties": false,
           "required": [
             "policy",
-            "process_noise_mib",
-            "lane_noise_mib"
+            "lane_noise_mib",
+            "noise_cap_mib",
+            "noise_allowlist"
           ],
           "properties": {
             "policy": {
@@ -820,17 +821,41 @@
                 "collision",
                 "yield"
               ],
-              "description": "collision = an unexplained tenant above the noise floor blocks release/grant and raises an event; yield = desktop-shared lane: the tenant has priority, new admissions are refused while it is present and preemptible holders are asked to stop."
-            },
-            "process_noise_mib": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 512
+              "description": "collision = a tenant (Amendment 2: any process that is neither the lease's nor an allow-listed desktop identity, whatever its size) blocks release/grant and raises an event; yield = desktop-shared lane: the tenant has priority, new admissions are refused while it is present and preemptible holders are asked to stop."
             },
             "lane_noise_mib": {
               "type": "integer",
               "minimum": 0,
               "default": 1024
+            },
+            "noise_cap_mib": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            },
+            "noise_allowlist": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "argv0",
+                  "uid"
+                ],
+                "properties": {
+                  "argv0": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "uid": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              },
+              "description": "Amendment 2: approved desktop/display identities for this lane: argv[0] of /proc/<pid>/cmdline AND the owner uid of /proc/<pid>. An entry trusts that uid (argv[0] is forgeable only by its own processes); root and DynamicUser uids are never noise. Empty = nothing is noise."
             }
           }
         }
@@ -986,8 +1011,14 @@
               "vram_cap_bytes": null,
               "external_tenant": {
                 "policy": "collision",
-                "process_noise_mib": 512,
-                "lane_noise_mib": 1024
+                "lane_noise_mib": 1024,
+                "noise_cap_mib": 64,
+                "noise_allowlist": [
+                  {
+                    "argv0": "browser",
+                    "uid": 1000
+                  }
+                ]
               }
             }
           }
