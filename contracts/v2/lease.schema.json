@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/lease.schema.json",
+  "title": "Flightctl lease v2",
+  "description": "AMENDS lease-v1. lease_id is the public address for every operator/UI action (G25); the authority stores token_sha256, never the raw token. Expiry is rolling and renewable inside approved_max_end (G03/Grok finding 2). holder_binding + holder_heartbeat_at give crashed-holder detection (G28). work links the lease to a job/session/endpoint (G20). Deadlines are authority-side UTC; the executor keeps its own monotonic copies (executor.schema.json).",
+  "oneOf": [{ "$ref": "#/$defs/lease" }, { "$ref": "#/$defs/read_form" }],
+  "$defs": {
+    "state": { "enum": ["waking", "starting", "running", "stopping", "quarantined", "closed"] },
+    "wake_record": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "object", "additionalProperties": false, "required": ["woken_by_this_lease", "wake_started_at", "host_answered_at"],
+          "properties": { "woken_by_this_lease": { "type": "boolean" }, "wake_started_at": { "$ref": "common.schema.json#/$defs/utc_time" }, "host_answered_at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/utc_time" }, { "type": "null" }] } } }
+      ]
+    },
+    "lease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "lease_id", "lane", "generation", "token_sha256", "token_format", "token_hint", "run_id", "unit", "principal_id", "principal", "class", "purpose", "client_label", "work", "booking_id", "queue_id", "estimated_s", "started_at", "expires_at", "approved_max_end", "holder_binding", "holder_heartbeat_at", "executor_beat_at", "wake", "state", "close_reason"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "lease_id": { "$ref": "common.schema.json#/$defs/public_id" },
+        "lane": { "$ref": "common.schema.json#/$defs/lane_ref" },
+        "generation": { "type": "integer", "minimum": 1 },
+        "token_sha256": { "$ref": "common.schema.json#/$defs/sha256" },
+        "token_format": { "$ref": "common.schema.json#/$defs/token_format" },
+        "token_hint": { "$ref": "common.schema.json#/$defs/token_hint" },
+        "run_id": { "$ref": "common.schema.json#/$defs/public_id" },
+        "unit": { "$ref": "unit.schema.json#/$defs/unit_name" },
+        "principal_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "principal": { "$ref": "common.schema.json#/$defs/principal" },
+        "class": { "$ref": "common.schema.json#/$defs/class" },
+        "purpose": { "$ref": "common.schema.json#/$defs/text" },
+        "client_label": { "$ref": "common.schema.json#/$defs/client_label" },
+        "work": { "$ref": "common.schema.json#/$defs/work_ref" },
+        "booking_id": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] },
+        "queue_id": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] },
+        "estimated_s": { "$ref": "common.schema.json#/$defs/positive_duration_s" },
+        "started_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "expires_at": { "$ref": "common.schema.json#/$defs/utc_time", "description": "Rolling; renew sets min(now + ttl, approved_max_end)." },
+        "approved_max_end": { "$ref": "common.schema.json#/$defs/utc_time", "description": "Hard ceiling; only an approved extension (op-extend) moves it." },
+        "holder_binding": { "enum": ["client-heartbeat", "unit", "ttl-only"] },
+        "holder_heartbeat_at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/utc_time" }, { "type": "null" }] },
+        "executor_beat_at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/utc_time" }, { "type": "null" }] },
+        "wake": { "$ref": "#/$defs/wake_record" },
+        "state": { "$ref": "#/$defs/state" },
+        "close_reason": { "anyOf": [{ "enum": ["released", "expired", "preempted", "operator-stopped", "holder-lost", "work-ended", "reserve-refused", "host-did-not-wake", "quarantine-cleared"] }, { "type": "null" }] }
+      },
+      "allOf": [
+        { "if": { "properties": { "token_format": { "const": "urlsafe" } } }, "then": { "properties": { "token_hint": { "type": "null" } } } },
+        { "if": { "properties": { "state": { "const": "closed" } } }, "then": { "properties": { "close_reason": { "type": "string" } } }, "else": { "properties": { "close_reason": { "type": "null" } } } }
+      ]
+    },
+    "read_form": {
+      "description": "Redacted public form (snapshot, events, UI). token_hint is present only when the reader is the lease's principal or an operator; otherwise null.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lease_id", "lane_id", "generation", "principal_id", "display_name", "class", "purpose", "client_label", "work", "started_at", "expires_at", "approved_max_end", "holder_binding", "holder_seen_at", "state", "token_hint", "token_redacted"],
+      "properties": {
+        "lease_id": { "$ref": "common.schema.json#/$defs/public_id" },
+        "lane_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "generation": { "type": "integer", "minimum": 1 },
+        "principal_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "display_name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "class": { "$ref": "common.schema.json#/$defs/class" },
+        "purpose": { "$ref": "common.schema.json#/$defs/text" },
+        "client_label": { "$ref": "common.schema.json#/$defs/client_label" },
+        "work": { "$ref": "common.schema.json#/$defs/work_ref" },
+        "started_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "expires_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "approved_max_end": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "holder_binding": { "enum": ["client-heartbeat", "unit", "ttl-only"] },
+        "holder_seen_at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/utc_time" }, { "type": "null" }] },
+        "state": { "$ref": "#/$defs/state" },
+        "token_hint": { "$ref": "common.schema.json#/$defs/token_hint" },
+        "token_redacted": { "const": true }
+      }
+    }
+  },
+  "x-examples": {
+    "valid": [
+      { "schema_version": 2, "lease_id": "lse-0000100", "lane": { "site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu1" }, "generation": 7, "token_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "token_format": "hex16", "token_hint": "5f815964", "run_id": "run-0000007a", "unit": "flightctl-lane-gpu1-g7.service", "principal_id": "review-agent", "principal": { "site_id": "site-a", "tenant_id": "site-a", "issuer": "tailnet-a", "subject": "review-agent" }, "class": "batch", "purpose": "roster arm", "client_label": "roster", "work": { "kind": "holder", "id": null }, "booking_id": null, "queue_id": "q-0001", "estimated_s": 1800, "started_at": "2026-10-02T10:00:00Z", "expires_at": "2026-10-02T10:30:00Z", "approved_max_end": "2026-10-02T14:00:00Z", "holder_binding": "ttl-only", "holder_heartbeat_at": null, "executor_beat_at": "2026-10-02T10:01:00Z", "wake": { "woken_by_this_lease": true, "wake_started_at": "2026-10-02T09:59:20Z", "host_answered_at": "2026-10-02T09:59:50Z" }, "state": "running", "close_reason": null },
+      { "lease_id": "lse-0000100", "lane_id": "lane-gpu1", "generation": 7, "principal_id": "review-agent", "display_name": "Review agent", "class": "batch", "purpose": "roster arm", "client_label": "roster", "work": { "kind": "holder", "id": null }, "started_at": "2026-10-02T10:00:00Z", "expires_at": "2026-10-02T10:30:00Z", "approved_max_end": "2026-10-02T14:00:00Z", "holder_binding": "ttl-only", "holder_seen_at": null, "state": "running", "token_hint": null, "token_redacted": true }
+    ],
+    "invalid": [
+      { "lease_id": "lse-0000100", "lane_id": "lane-gpu1", "generation": 7, "principal_id": "review-agent", "display_name": "Review agent", "class": "batch", "purpose": "roster arm", "client_label": null, "work": { "kind": "holder", "id": null }, "started_at": "2026-10-02T10:00:00Z", "expires_at": "2026-10-02T10:30:00Z", "approved_max_end": "2026-10-02T14:00:00Z", "holder_binding": "ttl-only", "holder_seen_at": null, "state": "running", "token_hint": null, "token_redacted": true, "token": "5f815964f2cbc5d6" }
+    ]
+  }
+}

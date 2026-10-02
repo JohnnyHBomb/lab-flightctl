@@ -1,0 +1,22 @@
+{
+  "schema_version": 2,
+  "endpoint_ref": "controller",
+  "legacy_script_ref": "legacy-lanes",
+  "lanes": {
+    "lane-gpu1": {
+      "mode": "v2",
+      "v2_lane": "lane-gpu1"
+    },
+    "lane-gpu0": {
+      "mode": "tee",
+      "v2_lane": "lane-gpu0"
+    }
+  },
+  "defaults": {
+    "ttl_min": 240,
+    "wait_max_min": 120,
+    "token_format": "hex16",
+    "class": "batch"
+  },
+  "mirror_timeout_s": 5
+}

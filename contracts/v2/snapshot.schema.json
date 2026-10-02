@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/snapshot.schema.json",
+  "title": "Flightctl snapshot v2 (one-call multi-lane read for status --all, dashboard and MCP)",
+  "description": "NEW (G26). Everything a dashboard or 'status --all' needs in one read, as the viewer's own identity, redacted: per lane the state, host power, current lease (read form), queue, next bookings, active windows, last occupancy observation and the adapter mode banner. Reads never wake hosts: an asleep host is reported 'asleep', with the last observation and its age.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "as_of", "event_seq", "adapter", "lanes", "hosts"],
+  "properties": {
+    "kind": { "const": "snapshot" },
+    "as_of": { "$ref": "common.schema.json#/$defs/utc_time" },
+    "event_seq": { "type": "integer", "minimum": 0, "description": "Highest committed event seq included; continue with events since_seq = event_seq + 1." },
+    "adapter": {
+      "type": "object", "additionalProperties": false, "required": ["profile", "adapter_sha256", "banner"],
+      "properties": { "profile": { "enum": ["sim", "shadow", "live"] }, "adapter_sha256": { "$ref": "common.schema.json#/$defs/sha256" }, "banner": { "type": "string", "maxLength": 2048 } }
+    },
+    "lanes": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["lane_id", "host_id", "mode", "enabled", "state", "state_reason", "lease", "queue", "next_bookings", "windows", "occupancy", "occupancy_age_s"],
+        "properties": {
+          "lane_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+          "host_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+          "mode": { "enum": ["off", "sim", "shadow", "live"] },
+          "enabled": { "type": "boolean" },
+          "state": { "enum": ["free", "waking", "starting", "running", "stopping", "quarantined", "draining", "maintenance", "asleep", "unreachable", "unknown", "disabled"] },
+          "state_reason": { "$ref": "common.schema.json#/$defs/nullable_text" },
+          "lease": { "anyOf": [{ "$ref": "lease.schema.json#/$defs/read_form" }, { "type": "null" }] },
+          "queue": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["queue_id", "position", "principal_id", "class", "purpose", "eligible", "wait_deadline_utc"], "properties": { "queue_id": { "$ref": "common.schema.json#/$defs/identifier" }, "position": { "type": "integer", "minimum": 1 }, "principal_id": { "$ref": "common.schema.json#/$defs/short_identifier" }, "class": { "$ref": "common.schema.json#/$defs/class" }, "purpose": { "$ref": "common.schema.json#/$defs/text" }, "eligible": { "type": "boolean" }, "wait_deadline_utc": { "$ref": "common.schema.json#/$defs/utc_time" } } } },
+          "next_bookings": { "type": "array", "maxItems": 10, "items": { "type": "object", "additionalProperties": false, "required": ["booking_id", "principal_id", "start", "end", "state"], "properties": { "booking_id": { "$ref": "common.schema.json#/$defs/identifier" }, "principal_id": { "$ref": "common.schema.json#/$defs/short_identifier" }, "start": { "$ref": "common.schema.json#/$defs/utc_time" }, "end": { "$ref": "common.schema.json#/$defs/utc_time" }, "state": { "type": "string" } } } },
+          "windows": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/public_id" } },
+          "occupancy": { "anyOf": [{ "$ref": "gpu-probe.schema.json#/$defs/occupancy_observation" }, { "type": "null" }] },
+          "occupancy_age_s": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] }
+        }
+      }
+    },
+    "hosts": { "type": "array", "items": { "$ref": "power.schema.json#/$defs/host_power" } }
+  },
+  "x-examples": {
+    "valid": [
+      { "kind": "snapshot", "as_of": "2026-10-02T10:02:00Z", "event_seq": 43, "adapter": { "profile": "live", "adapter_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "banner": "lane-gpu1 LIVE; lane-gpu0 SHADOW (dry-run executor writes)" },
+        "lanes": [{ "lane_id": "lane-gpu1", "host_id": "host-1", "mode": "live", "enabled": true, "state": "asleep", "state_reason": "host asleep (wakeable, typical 30 s)", "lease": null, "queue": [], "next_bookings": [], "windows": [], "occupancy": null, "occupancy_age_s": 5400 }],
+        "hosts": [{ "kind": "host-power", "host_id": "host-1", "state": "asleep", "observed_at": "2026-10-02T08:32:00Z", "source": "reachability-probe", "last_wake": null, "inhibitors": [], "boot": null }] }
+    ],
+    "invalid": [
+      { "kind": "snapshot", "as_of": "2026-10-02T10:02:00Z", "event_seq": 43, "adapter": { "profile": "live", "adapter_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "banner": "x" },
+        "lanes": [{ "lane_id": "lane-gpu1", "host_id": "host-1", "mode": "live", "enabled": true, "state": "free", "state_reason": null, "lease": { "token": "5f815964f2cbc5d6" }, "queue": [], "next_bookings": [], "windows": [], "occupancy": null, "occupancy_age_s": null }], "hosts": [] }
+    ]
+  }
+}

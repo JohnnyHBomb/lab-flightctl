@@ -1,0 +1,226 @@
+# Traceability: every v1 obligation (plan r4 decisions, P0-P7 named acceptance tests and obligations), every Grok 4.7 finding, every cutover GAP, John's binding additions and every Sol 6 finding -> its v2 home. status (round 3, Sol 6 N5: claims now match what is checkable today): kept (unchanged, v1 test stays) | amended (v2 contract changes it; packet rewrites test) | contract-fixed (the defect is removed from the CONTRACT and an executable test in tests/contracts_v2 proves that today; the implementation is still owed by the named packet) | specified (the remedy exists only as contract text and packet acceptance; nothing proves it until that packet passes its gates) | superseded (round-4 re-audit: an earlier contract-fixed claim that a later Sol 6 counterexample showed incomplete; the superseding row is named) | moved | dropped (with reason) | deferred (after R1) | probes (round 8: a record of adversarial tests that were run; it claims no fix) | carried (freeze: a known counterexample handed to the named packet as an acceptance obligation, with a strict-xfail reference test). No row claims a running fix: nothing is implemented on this branch.
+source	item	v1 location	status	v2 home	note
+plan-r4	one authority, SQLite single writer, atomic admission/dequeue, durable idempotency	authority.py, store.py	kept	rpc-envelope idempotency_record; A5b1, A5b2, A7b	idempotency scope now (principal, request_id); token scrubbed after replay window
+plan-r4	unknown state refuses grants/extensions; expiry never means empty	README P0	kept	README invariants; executor reply definite/uncertain; A5a, A5b1, A5b2	-
+plan-r4	lifecycle free->starting->running->stopping->free, quarantine on uncertainty	lease-v1	amended	lease.state (+waking, closed); A5b1, A5b2	waking added for wake-on-acquire
+plan-r4	class order operator>booked>batch>service>resident>standby, FIFO, eviction matrix, grace 120/120/300	authority.py	kept	common class; policy.timing; A5b1, A5b2	-
+plan-r4	beat 60 s, stale 600/180 s, skew >30 s freezes calendar	policy-v1 const	kept	policy.timing; executor beat; A5a, A5b1, A5b2	authority now actually sends beat (G03)
+plan-r4	bookings: horizon 14 d, min 15 min, early claim, check-in, no-show, warning, completion	booking-v1, authority	kept	booking-v1 (unchanged), policy.timing; quotas for 4/12 h and 2-future	per-principal limits moved to quota
+plan-r4	agents 4 h / the owner 12 h booking limits, two future bookings per agent	policy const	moved	quota.limits max_booking_s, max_future_bookings; C5b	expressible per principal/group
+plan-r4	chat: manual load, service occupant, T4 preference external, 600 s idle on completed requests	occupant-v1, chat.py	amended	endpoint (rename), inventory.endpoint_lane_order; C8	request accounting unchanged
+plan-r4	tailnet whois on real socket peer; ignore forwarding headers; tailnet identity alone never grants the owner privileges	auth.py	amended	accounts, rpc-ops admission (no caller identity), x-ops roles; A7, C1	operator role from accounts doc; FIDO2 per approval_matrix (decision D-appr-1)
+plan-r4	ssh-sk approvals first, WebAuthn later, same semantics	approval-v1, auth.py	kept	approval-v1 + approval (v2 overrides); C3, C11b	-
+plan-r4	pipeline available/unavailable/approval_required, acceptable-use purpose	pipeline-v1	kept	pipeline-v1 unchanged; template.pipeline_ref	-
+plan-r4	federation hooks frozen	common-v1	kept	../common.schema.json (dormant); v2 requests reject them	fail closed
+plan-r4	executor JSON over restricted SSH stdin	executor-v1	specified	executor; A4	G04
+plan-r4	host enforces deadlines independently of controller	executor.py	amended	executor relative_deadline/local_deadline; A5a, A4u timer	G02
+plan-r4	restart/reboot reconciles before reopening	authority.py stub	specified	README semantics 7; A8	G27
+plan-r4	positional lanes.sh syntax; exits 0/1/2/3/4/5	cli vectors	kept	rpc-envelope exits; LEGACY-COMPAT; A10	-
+plan-r4	renew never extends approved max	authority.py	amended	policy.lease renew_mode rolling-within-ceiling; A5b1, A5b2	renew now succeeds inside ceiling (Grok 2)
+plan-r4	deployment gate: probe, confirm inventory, stage release; pilot lane first; no mixed authorities	docs/release.md	amended	GATES G6; A-ASM, B-ASM; shim modes legacy/tee/v2	shadow = tee; legacy authoritative until flip
+plan-r4 #1	security CI: gitleaks, pip-audit, semgrep, shellcheck, weekly fuzz, SHA-pinned actions, dependabot	.github/workflows/ci.yml	kept	A0a (full job adds suites; security steps kept)	CodeQL only on opt-in (unchanged)
+plan-r4 #2	deployable release backed up to the backup host + restore rehearsal	deploy/flightctl_release.py	amended	B5 (backup to store host until the backup host exists)	the owner 2 Oct: storage nodes; backup host target when ready
+P0	test_schema_examples	tests/contracts	kept	+ tests/contracts_v2/test_v2_schema_examples	-
+P0	test_inventory_semantics	tests/contracts	kept	+ inventory_semantics v2 (G07 uuid rule)	-
+P0	test_roundtrip_records	tests/contracts	kept	-	-
+P0	test_rpc_operation_vectors	tests/contracts	kept	v2 examples in rpc-ops; A7b	v1 vectors serve the /v1 adapter
+P0	test_cli_golden_vectors	tests/contracts	amended	renew vector rewritten; A5b1, A5b2, A10	expects approved maximum reached today
+P0	test_executor_vectors	tests/contracts	kept	executor v2 examples; A5a	v1 vectors retire with v1 executor
+P0	test_discovery_vectors	tests/contracts	kept	discovery v2; A3b	-
+P0	test_approval_bindings	tests/contracts	kept	approval v2 signing vectors in C3	-
+P0	test_pipeline_policy_vectors	tests/contracts	kept	-	-
+P0	test_security_hook_contracts	tests/contracts	kept	v2 rejects hooks in requests (closed admission)	-
+P0	test_fake_interfaces	tests/contracts/test_fakes.py	amended	tests/conformance/*; A3, A6	systemd part pins Grok 5 semantics
+P0	test_portability_boundaries	tests/contracts	kept	+ site configs live outside repo	-
+P0.1	pending release 202, owner-release stop authority, content_labels, local-action hash	README P0.1	kept	rpc-envelope pending (release-confirming); executor stop_authority owner-release; admission.content_labels	local-action hash unchanged for v1 actions
+P1	test_atomic_admission	tests/authority	kept	-	-
+P1	test_durable_replay	tests/authority	amended	idempotency_record token_scrubbed; A7b	replay inside window returns token
+P1	test_approval_proof_binding	tests/authority	kept	+ approval v2 in C3	-
+P1	test_identity_and_policy	tests/authority	amended	accounts + x-ops; C1	renew clause rewritten (A5b1, A5b2)
+P1	test_peer_lookup_and_priority	tests/authority	amended	PeerIdentity port; A7	shared-device quota now quota doc (C5b)
+P1	test_queue_graph	tests/authority	kept	queue-v1 unchanged	-
+P1	test_booking_boundaries	tests/authority	kept	-	-
+P1	test_partition_recovery	tests/authority/test_revision2.py	specified	A8 (per-lane reconcile)	the freeze assertion is the defect
+P1	test_audit_redaction	tests/authority	kept	event v2 token_redacted; lease read_form	-
+P1	test_mutations	tests/authority	kept	-	-
+P1 obligation	shared-device quota	authority.py:867	specified	quota; C5b	Grok 6
+P2	test_fake_isolation_guard	tests/executor	dropped	conformance workload_runner (A6)	replaced: fake is per-unit fail-closed by contract
+P2	test_reserve_start_fence	tests/executor	amended	executor v2 identity fixed at reserve; A5a	Grok 1
+P2	test_idempotent_start_recovery	tests/executor	kept	-	-
+P2	test_pid_reuse_and_invocation	tests/executor	kept	unit invocation_id observed at start	-
+P2	test_stop_without_lock_deadlock	tests/executor	kept	-	-
+P2	test_cleanup_unknown	tests/executor	kept	gpu-probe unknown; unit unknown	-
+P2	test_deadlines_controller_loss	tests/executor	amended	relative deadlines; A5a	-
+P2	test_protected_stop_authority	tests/executor	amended	stop_authority adds operator-stop, holder-lost; A5a	-
+P2	test_clock_reboot	tests/executor	amended	own boot change = reconcile; A5a	-
+P2	test_executor_mutations	tests/executor	kept	-	-
+P3	test_positional_compatibility	tests/client	kept	new CLI; shim separately (A10)	-
+P3	test_shell_quoting	tests/client	kept	-	-
+P3	test_all_cli_vectors	tests/client	amended	renew vector; A5b1, A5b2	-
+P3	test_status_exit_json	tests/client	kept	exits unchanged	-
+P3	test_fresh_and_adopt	tests/client	kept	claim unchanged	-
+P3	test_bounded_wait	tests/client	amended	wait retries 202 waking; A12	-
+P3	test_transport_failure_replay	tests/client	kept	-	-
+P3	test_discover_dispatch	tests/client	kept	-	-
+P3	test_rpc_stdin_bridge	tests/client	kept	-	-
+P3	test_client_mutations	tests/client	kept	-	-
+P3 gap	legacy 16-hex stdout not frozen	CLI-DIFF	contract-fixed	LEGACY-COMPAT, token_format hex16; A10	-
+P4	test_arm_fresh_lifecycle .. test_roster_mutations (9 tests)	tests/roster	dropped	BLAST-RADIUS R1; replaced by shim (B3) + flightctl run/jobs (C7b1, C7b2)	repo roster/*.sh exec a client the repo never shipped (Grok)
+P4 obligation	token-bound cleanup, failed-acquire traps, visible successors	roster/*.sh	moved	lab roster via shim (B3); admission.batch kept in queue; job lifecycle (C7b1, C7b2)	lesson 50a stays a lab-side rule
+P5	test_atomic_load_vs_grant	tests/chat	kept	endpoint; C8	-
+P5	test_external_lane_order	tests/chat	amended	endpoint_lane_order; C8	-
+P5	test_load_failure	tests/chat	kept	-	-
+P5	test_request_accounting	tests/chat	kept	endpoint.request_accounting refs occupant-v1	-
+P5	test_streaming_inactivity	tests/chat	kept	-	-
+P5	test_eviction_drain	tests/chat	kept	-	-
+P5	test_failed_unload_exclusion	tests/chat	kept	-	-
+P5	test_manual_reload_only	tests/chat	kept	-	-
+P5	test_redacted_occupancy	tests/chat	kept	-	-
+P5	test_chat_mutations	tests/chat	kept	-	-
+P5 gap	units/chat never created; real unload deferred	ondemand/	specified	C8 (proxy unit + real runner)	-
+P6	test_stage_confirmation	tests/integration	kept	-	-
+P6	test_release_smoke	tests/integration	kept	-	-
+P6	test_activate_order	tests/integration	kept	-	-
+P6	test_matched_rollback_restore	tests/integration	amended	real backend subset; B5	-
+P6	test_external_denylist	tests/integration	kept	GATES G2	-
+P6	test_ci_security_configuration	tests/integration	amended	A0a full job	-
+P6	test_assembled_scenarios	tests/integration/test_p6_scaffold.py	moved	A-ASM/B-ASM/C-ASM (G6) + sim scenarios A0c	assembled gate required a file nobody owned (Grok 8)
+P6	test_integration_mutations	tests/integration	kept	-	-
+P6 obligation	15-method real release backend	flightctl_release.py	amended	ReleaseBackend 5 methods; B5	CONTRACT-RECOMMENDATION s5
+P7	test_raw_discovery_parsing	tests/discovery	amended	real nvidia-smi query captures; A3b	Grok 4
+P7	test_partial_unknown	tests/discovery	kept	-	-
+P7	test_retained_configuration	tests/discovery	kept	-	-
+P7	test_real_projection	tests/discovery	amended	projection = take .inventory; A3b	-
+P7	test_unknown_admission_boundary	tests/discovery	kept	-	-
+P7	test_deterministic_diff	tests/discovery	kept	-	-
+P7	test_bounded_probes	tests/discovery	kept	-	-
+P7	test_no_side_effects	tests/discovery	kept	-	-
+P7	test_discovery_mutations	tests/discovery	kept	-	-
+P7 obligation	AMD/sysfs fallback	discovery.py	dropped	-	no AMD compute card in the lab; AMD display cards are not lanes (INVENTORY-NOTES); re-add with real captures if one appears
+grok-verified	boot-id coupling: authority stamps its pid boot id; executor rejects	authority.py:70-76, executor.py:484	contract-fixed	common relative_deadline/local_deadline, executor; A1, A5a	repro in A0c
+grok-verified	no beat: protected lease quarantines at 600 s	authority.py:1096	specified	executor beat; A5b1, A5b2	repro in A0c
+grok-verified	restart freeze; reconcile stub	authority.py:276-299, 1979	specified	A8	repro in A0c
+grok-verified	status skips health check	authority.py:1831	specified	A8 (status uses per-lane health)	-
+grok-new-1	release quarantines a good lease: unit/invocation assigned after reserve	authority.py:1126, executor.py:1579	contract-fixed	executor identity fixed before reserve; unit invocation_id observed; A5a, A5b1, A5b2	-
+grok-new-2	renew can never succeed (extend added to max_end)	authority.py:1313	contract-fixed	policy.lease rolling-within-ceiling; rpc-ops renew_args ttl_s; A5b1, A5b2	-
+grok-new-3	one GPUProbe protocol, two result shapes; no 512 MiB rule in executor	tests/fakes/gpu.py, executor.py:1719	contract-fixed	gpu-probe split inventory/occupancy with thresholds; A3	-
+grok-new-4	discovery asks nvidia-smi then parses private CSV; AMD imagined	discovery.py:1002, :258	contract-fixed	gpu-probe x-real-commands; discovery v2; A3, A3b	-
+grok-new-5	systemd fake: unscripted = success; stop clears all occupants	tests/fakes/systemd.py	contract-fixed	unit.schema.json per-unit fail-closed; FakeRunner; A6	-
+grok-new-6	quotas cannot be stored in a confirmed policy	common.schema.json:362	contract-fixed	policy.quotas config_ref + quota.schema.json; C5b	-
+grok-new-7	authority throws away executor reason	authority.py:737-752	contract-fixed	typed_error cause chain (common), executor reply error, rpc-envelope error.cause; A5b1, A5b2	-
+grok-new-8	assembled gate names ondemand/qwen-od-proxy.sh	test_p6_scaffold.py:567	specified	A0c rewrites gate; ASM packets own assembly	-
+grok-new-9	CI runs only contracts+integration	.github/workflows/ci.yml:52	specified	A0a full job; GATES G2 (lab-ci + hosted)	-
+grok-plan-gap	no package owns listener, ssh forced command, timer, reconcile loop, watcher, wake, shim, workload handoff	plan r4	specified	A4, A4u, A7, A8, B4, A12, A10, C7b1, C7b2 + A-ASM/B-ASM/C-ASM owners	lesson 63
+grok-plan-gap	lane PCI/UUID/NUMA absent	inventory-v1	contract-fixed	inventory device uuid/pci_bus_id/numa_node; A3b	G07
+grok-review	approvals accepted fake-only evidence	Astra reviews	specified	GATES G3/G4 (real twin + realtime per seam)	-
+G01	authority server + whois	-	specified	A7	-
+G02	cross-host clock coupling	executor-v1	contract-fixed	A1, A5a	-
+G03	beat + renew	authority	specified	A5b1, A5b2	-
+G04	executor entry point + transport + timer	-	specified	A4, A4u	-
+G05	real GPUProbe + Systemd adapters	-	specified	A3, A6	-
+G06	legacy CLI compatibility	-	specified	A10, B3	-
+G07	lane-to-card binding	inventory-v1	contract-fixed	A3b	-
+G08	real release backend	file backend	amended	B5 (5 methods)	-
+G09	watcher	-	specified	B4	-
+G10	assembled acceptance	scaffold skip	moved	ASM packets G6	-
+G11	adapters for existing callers	-	specified	B3 (+C8 on-demand)	-
+G12	workload handoff for flightctl run / roster	client.py:1923	specified	C7b1, C7b2 jobs; B3 shim for roster	-
+G13	wake-on-acquire	-	specified	A11, A12	-
+G14	sleep guards lose lane signal at cutover	-	specified	A11 inhibitor	guards honour idle inhibitor (measured)
+G15	backup host	-	amended	B5 to store host now	-
+G16	FIDO2 path	fixture signer	specified	C3	-
+G17	CI coverage	-	specified	A0a	-
+G18	policy cannot carry quotas	common-v1	contract-fixed	policy v2 + quota; C5b	-
+G19	desktop lane rules	-	specified	inventory lane_rules, window quiet-hours; C4b	-
+G20	executor model vs lab workloads	executor-v1 image_digest	specified	executor work_mode holder|unit, argv-unit workload; A5a, C7b1, C7b2	image_digest workloads deferred (containers later)
+G21	legacy on-demand armed for a missing GPU	lab side	moved	CUTOVER-RUNBOOK A7 (lab side); C8 retires the front	-
+G22	sleeping hosts vs reachability	inventory-v1	contract-fixed	inventory reachability asleep; power; A12	-
+G23	store-host WoL unverified	-	moved	the owner's test; A12 gauge	-
+G24	site deploy directory	-	specified	A4u layout on store host (the owner 2 Oct)	-
+G25	operator ops by public id	-	contract-fixed	rpc-ops op-*; C4a	-
+G26	read API for status --all and dashboard	-	contract-fixed	snapshot, events; A7b	-
+G27	restart/reconcile	-	specified	A1 (boot id), A8	-
+G28	holder liveness	-	specified	lease.holder_binding, heartbeat op; B2	-
+john-2oct	every fake has a real twin, flip by config	-	contract-fixed	adapters.schema.json, ADAPTERS.md, interfaces.py, tests/conformance; A0b	-
+john-2oct	assembly owned by a plan	-	specified	A-ASM, B-ASM, C-ASM (lead)	-
+john-2oct	Slurm/TensorHive donors by licence	-	specified	DONOR-NOTES.txt	-
+john-2oct	notifications email + Slack	-	specified	notification.schema.json; C10	-
+john-2oct	FIDO2 only for equal-priority pre-emption/reorder of others' work	-	specified	policy.approval_matrix default; approval v2 target/beneficiary; C3, C4a	-
+john-2oct	linger only if needed	-	specified	inventory power.linger; A6 conformance logout case decides	-
+john-2oct	deploy dir + central model store/cache on storage node	-	specified	storage.schema.json, executor stage, A4u, C6a, C6b	-
+john-2oct	shadow per lane then live flip (3 days)	-	contract-fixed	adapters lane mode, LEGACY-COMPAT tee, policy.shadow, A9, A-ASM	-
+john-2oct	pstack/poteto flow with gauge proof per packet	-	specified	GATES.txt flow + G0-G6	-
+john-2oct	lab-ci runs the full suite as a gate for every packet	-	specified	A0a; GATES G2	-
+john-2oct	Linux only	-	specified	GATES G2; A0a (no Windows/macOS jobs)	-
+john-2oct	CLI first, then web frontend	-	specified	A10/A7b before C11a/C11b	-
+target	accounts/groups/sponsors/agents as principals	-	specified	accounts; C1	-
+target	API tokens scoped/expiring/revocable	-	specified	accounts token_metadata; C2	-
+target	quotas incl. GPU-hours per week	-	specified	quota; C5b	-
+target	usage records + weekly report	-	specified	usage; C5a	-
+target	batch jobs via templates	-	specified	job, template; C7a, C7b1, C7b2, C7c	-
+target	SSH sessions bound to a lease	-	specified	session; C9	-
+target	maintenance windows and drain	-	specified	window; C4b	-
+target	thermal-aware admission (refuse-new, never kill)	-	specified	policy.thermal; B4	-
+target	MCP for agents	-	specified	rpc-ops x-ops mcp column; C12	-
+target	fair share, credits, tariff/battery, reliability score, containers, Jupyter, OIDC, federation	-	deferred	quota.credits reserved null; ROADMAP S29-S33	need usage history and per-lane power first (TARGET-MODEL)
+sol6-B1	A-ASM depends on inhibitor/waker delivered after it (cycle)	SLICES r1	specified	A11 inhibitor, A12 waker before A-ASM; A-ASM step 4 proves the inhibitor under the legacy fence; tests/contracts_v2/test_v2_plan.py checks assembly ports are delivered earlier	-
+sol6-B2	GPU empty certified with 19 GiB used	gpu-probe r1	superseded	gpu-probe emptiness_rule (aggregate memory, unknown memory = tenant, no lease processes); executor stop requires occupancy.empty; oracle + real captures (tests/contracts_v2/test_v2_occupancy.py); A3	superseded by sol6r3-B2
+sol6-B3	live may contain fake feature ports; CommandRunner unselected; shadow leaves write paths	adapters r1	contract-fixed	adapters features + x-required-ports, command_runner port, lane-scoped mutating ports forced non-writing in shadow; adapters_semantics; A0b	-
+sol6-B4	plain-HTTP origin breaks WebAuthn	A7 r1	specified	A7 HTTPS with tailscale cert terminated in-process (socket peer kept for whois); C11b rp_id = ts.net name	owner action: enable tailnet HTTPS (CertDomains null, observed)
+sol6-B5	friend sessions lack enforced GPU isolation and lease-bound stop	session r1, C9	specified	session schema (device_allow, close_proof); C7h flightctl-helper (device cgroup, terminate-user + slice stop); C9 real-SSH acceptance; gated on owner Q1	-
+sol6-B6	no authenticated job-output retrieval	rpc-ops r1	specified	job-output-list/get ops, executor output kind, output_list/output_chunk results; C7c friend-client test	-
+sol6-B7	evidence misattributed; lax skips; G1 vs MIGRATION; assembly T-list	conformance conftest r1, GATES r1	specified	per-case port marker, fake_only/not_dryrun declarations, strict mode; G1b + docs/v2/migration-map.tsv; per-assembly T table in SLICES; tests/contracts_v2/test_v2_harness.py, test_v2_plan.py	-
+sol6-B8	quotas before their usage source	SLICES r1	contract-fixed	C5a usage (query) before C5b quotas	-
+sol6-N1	deadline ceiling can drift later under delay	executor r1	superseded	relative_deadline invariant (margin, age refusal, max-end set once); beat cannot carry max-end; extend kind with approval; A5a, A5b2	superseded by sol6r3-N1
+sol6-N2	model verified by size only	storage r1	contract-fixed	sha256 required at publication; present requires size+sha256; C6a, C6b	-
+sol6-N3	12 h DA lease capped by batch class ceiling	policy r1	contract-fixed	quota max_lease_s replaces the class default (bounded by lane cap and absolute 12 h); lease_ceiling oracle; C5b	-
+sol6-N4	clean shadow days without coverage	LEGACY-COMPAT r1	contract-fixed	policy.shadow.min_path_counts + mirror_errors_block; A9; A-ASM step 3	-
+sol6-N6	keep P4 cleanup/handoff obligations before deletion	BLAST-RADIUS R1	specified	B3 acceptance test_shim_cleanup_releases_only_own_token, test_batch_manifest_successors_visible_via_queue before deletion	-
+sol6r2-B1	inhibitor must be real in shadow for A-ASM step 4 but shadow forces dryrun	adapters r2	contract-fixed	adapters lane shadow_real [inhibitor] exception (shadow lane + legacy_lane only); A-ASM step 4; test_v2_round3.py::test_b1_*	real proof owed by A-ASM; round-4 crosswalk regression fixed by sol6r4-B1
+sol6r2-B2	unknown-memory external process omitted from tenants with empty=true	gpu-probe r2	superseded	process partition in occupancy_semantics; noise requires known memory (schema); test_v2_round3.py::test_b2_*	superseded by sol6r3-B2
+sol6r2-B3	live lane overrides required ports to fake	adapters r2	contract-fixed	effective-port check per live lane; test_v2_round3.py::test_b3_*	registry owed by A0b
+sol6r2-B5	two leases of one friend on one host interfere via the user slice	session r2	superseded	policy.work max_active_per_human_per_host=1, account_busy, helper refusal; human_work_admission oracle; test_b5_*	superseded by sol6r3-B5
+sol6r2-B6	friend identity vs agent-only tokens inconsistent	accounts r2, SLICES C7c	superseded	one rule (peer authenticates, token selects/narrows from allowed peer); auth_decision oracle; test_b6_*	superseded by sol6r3-B6
+sol6r2-B7	strict missing twin was XFAIL; migration test checked names only	conformance conftest r2	superseded	strict_missing setup failure; tools/migration_gate.py on the real diff; test_b7_* (subprocess strict run fails; gate failure modes)	superseded by sol6r3-B7
+sol6r2-N1	30 s skew + 60 s transport leaves host max-end late	common r2	superseded	authority RTT bound + shorten-only ceiling kind; host_ceiling_bound oracle; test_n1_*	superseded by sol6r3-N1
+sol6r2-N5	CONFORMANCE fixed claims exceeded checks	CONFORMANCE r2	contract-fixed	statuses split into contract-fixed / specified; no row claims a running fix	-
+sol6r2-new	job-output symlink/TOCTOU containment	rpc-ops r2	superseded	executor output containment rule + expect_sha256; contained_open reference; test_output_containment_refuses_symlink_escape_and_swap (real files)	superseded by sol6r3-new (output staging)
+sol6r2-new	helper privilege boundary not inspectable	SLICES C7h r2	superseded	helper-config.schema.json allowlist; sudoers example; sudoers_audit/helper_install_audit; test_helper_*	superseded by sol6r3-new (effective sudo audit)
+sol6r2-new	token scrub only logical	policy r2	superseded	secure_delete + wal_checkpoint(TRUNCATE) + VACUUM INTO; real SQLite test with restored backup and negative control (measured)	superseded by sol6r3-new (replay store)
+sol6r3-B2	zero-GPU observation with empty=true passed the oracle	gpu-probe r3	contract-fixed	expected_uuids required (minItems 1); observed cards == expected, processes on lane cards; test_v2_round4.py::test_b2_*	production parser owed by A3
+sol6r3-B5	session under the friend's own lease refused as a second item	policy r3	superseded	parent/child work: one active parent lease per friend per host, children share it; atomic UNIQUE index + helper O_EXCL claim on the same lease_id; real-process race test; test_v2_round4.py::test_b5_*	superseded by sol6r4-B5
+sol6r3-B6	supplied principal with mismatched peer allowed; expired token allowed	accounts r3	superseded	principal derived from peer only (oracle takes no principal); expiry/revocation enforced; C2 boundary tests named; test_v2_round4.py::test_b6_*	superseded by sol6r4-B6
+sol6r3-B7	migration gate accepted a comment naming the replacement	tools/migration_gate.py r3	superseded	replacement must be a collected pytest node; end-to-end test on a real git repo; test_v2_round4.py::test_b7_gate_rejects_replacement_named_only_in_a_comment	superseded by sol6r4-B7
+sol6r3-N1	lost shorten message left the host ceiling late	executor r3	superseded	grant withheld until a reply proves receive_t + max_end_remaining_s <= approved; 202 ceiling-unconfirmed; test_v2_round4.py::test_n1_*	superseded by sol6r4-N1
+sol6r3-new	absolute path accepted by the walk-down helper; hard-link smuggling	executor r3	superseded	absolute/empty components refused; trusted staging (nlink==1, job-owned, copied into executor store); test_v2_round4.py::test_output_*	superseded by sol6r4-new (agent isolation)
+sol6r3-new	sudoers audit blind to group/alias grants and real sudo -l format	validation r3	superseded	effective audit on sudo -l output (format measured, sudo 1.9.17p2) + file audit with %group/User_Alias; test_v2_round4.py::test_c7h_*	superseded by sol6r4-new (required Defaults)
+sol6r3-new	backup taken during the replay window keeps the token	policy r3	superseded	raw tokens only in a separate never-backed-up replay store; test with a backup taken while live, examined after the deadline, plus negative control; test_v2_round4.py::test_token_*	superseded by sol6r4-new (restore + crash order)
+sol6r4-B1	milestone crosswalk scheduled A-ASM (S08) before A11/A12 (S09)	SLICES r4	contract-fixed	crosswalk is a scope map in packet-index order; plan tests check crosswalk order, milestone column monotonicity and dependency milestones	-
+sol6r4-B5	helper session-open/unit-start had no parent lease; no claim release or stale rule	helper-config r4	superseded	--parent-lease on both; claim-release with close proof; claim-reconcile from authority active parents; persistent claims dir; atomic link() claim; test_v2_round5.py::test_parent_claim_lifecycle, test_stale_claims_*	superseded by sol6r5-B5
+sol6r4-B6	string comparison of timestamps accepted an expired token	validation r4	contract-fixed	parse_utc to aware datetimes; test_v2_round5.py::test_token_expiry_compares_parsed_instants (Sol's .9Z case)	implementation owed by C2
+sol6r4-B7	gate reduced node ids to bare names	tools/migration_gate.py r4	contract-fixed	replacement must be collected in a test file this packet changed, or match an explicit path::name node; test_v2_round5.py::test_gate_*	-
+sol6r4-N1	ack without lease/request identity granted	validation r4	superseded	acks bound to lease_id, generation, host_id and a controller_request_id of this reserve; test_v2_round5.py::test_unbound_acknowledgement_never_grants	superseded by sol6r5-N1
+sol6r4-new	shared fc-svc UID lets agent A read agent B's staging	helper-config r4	specified	per-job DynamicUser + 0700 StateDirectory under systemd's private parent; contract + config test now; the isolation itself is proven only by C7h's onlab test_agent_jobs_cannot_read_each_others_staging (needs root, owner-installed helper)	C7h; round 6: output-collect now resolves the job id to its recorded UID (sol6r5-new)
+sol6r4-new	main DB restored without the replay store; crash between the two stores	policy r4	superseded	replay row first, main DB second; startup deletes orphans; 409 replay_unavailable + holder-lost, never a second grant; SplitStore reference on real SQLite files; test_v2_round5.py::test_split_store_*, test_restore_*	superseded by sol6r5-new (replay deadline in main record)
+sol6r4-new	sudo audit passed without env_reset	validation r4	superseded	env_reset, !setenv and secure_path must be present in the effective Defaults; test_v2_round5.py::test_sudo_audit_requires_named_defaults	superseded by sol6r5-new (secure_path content)
+sol6r5-B5	reconcile freed a claim the authority omitted; release raced a concurrent replacement; C7h wording refused children	helper-config r5	superseded	reconcile never removes (orphaned-quarantined / conflict, operator alert); removal only by claim-release with close proof via inode-checked tombstone rename; C7h text allows children; test_v2_round6.py::test_reconcile_*, test_release_does_not_delete_a_claim_replaced_concurrently	superseded by sol6r6-B5 (quarantine admission effect)
+sol6r5-N1	failed (ok=False) bound reply granted; oracle used flat fields, not the wire shape	validation r5	superseded	grant only from a reply that validates as the executor reply wire shape, ok=True and definite=True, with nested echoed_identity/host_boot bound to the reserve; test_v2_round6.py::test_failed_reply_never_grants, test_flat_identity_fields_are_not_a_reply	superseded by sol6r6-N1 (real reserve first)
+sol6r5-new	routine scrub after the window answered replay_unavailable	policy r5	superseded	token-free replay_deadline in the main idempotency record (schema-required); after the window a missing row gives the null-token grant replay; test_v2_round6.py::test_missing_replay_row_*	superseded by sol6r6-new (grant passes the retry time)
+sol6r5-new	output-collect still named the withdrawn service_account	helper-config r5	superseded	output-collect --job only, resolved to the UID recorded at unit-start; C7b1 acceptance renamed; test_v2_round6.py::test_output_collect_takes_job_id_only	superseded by sol6r6-new (doc wording grep)
+sol6r5-new	empty or non-standard secure_path passed	validation r5	superseded	secure_path must be a non-empty list drawn from the standard root-owned system dirs; test_v2_round6.py::test_secure_path_must_be_standard_system_dirs	superseded by sol6r6-new (empty components)
+sol6r6-B5	an orphaned-quarantined claim still admitted children of the old parent	helper-config r6	superseded	reconcile writes a quarantine marker; every claim (parent or child) is refused while it exists; only operator claim-clear with the close proof lifts it (claim removed first, marker last); test_v2_round7.py::test_sol_r6_quarantine_blocks_children_of_the_old_parent, test_v2_round6.py::test_reconcile_never_removes_an_omitted_claim	superseded by sol6r7-B5 (C7h text contradiction; no operator authorization)
+sol6r6-N1	a ceiling ack confirmed from a dry-run, a non-reserve kind or a free observed_state	validation r6	superseded	a reserve reply with observed_state reserved must come first; a ceiling reply counts only after it and in a fenced state (reserved/starting/running); dry_run must be false; test_v2_round7.py::test_sol_r6_ceiling_only_after_a_real_reserve	superseded by sol6r7-N1 (reserved reply with no persisted fence granted)
+sol6r6-new	grant() duplicate path replayed with now=0.0, leaking the raw token after the deadline	validation r6	contract-fixed	grant takes a required keyword now and passes it to the replay; after the deadline the retry gets the null-token replay even when the row still exists; test_v2_round7.py::test_sol_r6_duplicate_grant_after_deadline_with_row_present_returns_null_token	authority store owed by A5b1
+sol6r6-new	'service account' wording left in SLICES C7b1 and README	docs r6	contract-fixed	wording now names the per-job DynamicUser; a docs grep test refuses service-account/fc-svc outside a withdrawal context; test_v2_round7.py::test_sol_r6_no_service_account_in_agent_execution_docs	-
+sol6r6-new	secure_path with empty components (escaped colons) passed	validation r6	contract-fixed	secure_path splits on ':' and '\:'; any empty component (leading, trailing, doubled) fails; test_v2_round7.py::test_sol_r6_secure_path_empty_components	install audit in C7h
+sol7-self	self-adversarial probes over rounds 4-7 rules (occupancy, claims, auth expiry, migration gate, ceiling grant, staging, sudo, split store, isolation wording, plan order)	tests r7	probes	test_v2_round7.py::test_self_* (26 tests, 32 cases); Sol 6 r7 showed three of them were vacuous (race, ceiling, docs grep); strengthened in round 8	listed in RESPONSE-TO-SOL6.tsv
+sol6r7-B5	C7h stated two admission rules; claim-clear had no operator authorization; claim rollback could unlink a replaced claim	helper-config r7	superseded	one admission rule, verbatim in SLICES C7h, session-open and unit-start; claim-clear is a separate 0700 root program reached only by the operator's own sudoers rule without NOPASSWD and checked against SUDO_USER/SUDO_UID (clear_authorized, operator_sudo_audit, no_clear_route_audit); admission+start, release/clear and the reconcile marker share one per-account flock; rollback is inode-checked; test_v2_round8.py::test_c7h_admission_rule_is_stated_once_everywhere, test_claim_clear_requires_operator_sudo_path, test_operator_route_must_reauthenticate, test_claim_rollback_unlinks_only_its_own_inode, test_v2_round7.py::test_self_quarantine_racing_a_claim_never_leaves_an_admitted_child	superseded by sol6r8-B5 (fresh authentication; wildcard/alias routes)
+sol6r7-N1	a reserve reply with observed_state reserved but fences [] and inhibitor null granted	executor r7	contract-fixed	schema: an ok non-dry-run reserve reply must report a fence; oracle fence_evidence_ok: exactly one fence on the lane with the echoed identity, state equal to observed_state, not rebooted, and a held lane/generation inhibitor where the lane requires one; test_v2_round8.py::test_sol_r7_reserved_reply_with_no_fence_and_no_inhibitor_never_grants, test_ceiling_needs_persisted_fence	implementation owed by A5b1
+sol6r7-new	replay ignored request_fingerprint: a changed payload under the same request id got the stored response	rpc-envelope r7	superseded	fingerprint checked first: mismatch is 409 conflict at any time, with no lease id, token or holder-lost side effect; test_v2_round8.py::test_replay_checks_request_fingerprint	superseded by sol6r8-new (principal scope)
+sol6r7-new	self-adversarial probes were partly vacuous (race checked only a later call; ceiling probes had no fence; docs grep had a same-line exemption)	tests r7	contract-fixed	race test now records every start and fails when the account lock is removed (5/5 runs); ceiling probes carry full fence evidence; docs grep matches each occurrence inside a withdrawal phrase; test_v2_round7.py::test_self_quarantine_racing_*, test_self_ceiling_*, test_sol_r7_affirmative_instruction_next_to_withdrawn_is_still_an_offender	-
+sol8-self	round-8 adversarial probes over the new rules	tests r8	probes	test_v2_round8.py::test_ceiling_needs_persisted_fence (9 mutations), test_inhibitor_only_where_the_lane_requires_it, test_ceiling_reply_also_needs_its_fence, test_claim_cleared_and_replaced_before_the_recheck_is_not_ours, test_clear_needs_quarantine_proof_and_the_claimed_lease, test_executor_and_friends_have_no_route_to_clear	listed in RESPONSE-TO-SOL6.tsv
+sol6r8-B5	claim-clear 're-authenticates' was false under sudo's cached timestamp; wildcard/directory/regex/argument/alias grants escaped both route audits	helper-config r8	specified	contract and example require Defaults!<program> timestamp_timeout=0; clear_fresh_auth_audit computes the effective value (sudoers(5) precedence) and forbids !authenticate; route matching per sudoers(5) with Cmnd_Alias expansion and fail-closed unknown aliases; test_v2_round9.py::test_operator_audit_fails_without_fresh_auth, test_sol_r8_friend_wildcard_grant_reaches_clear, test_sol_r8_operator_extra_nopasswd_wildcard_fails	freeze (Sol 6 r9): the install audit still passes the two carried counterexamples (sol6r9-new rows), so no executable check proves the fix today; C7h acceptance (test_install_audit, test_claim_clear_prompts_every_time) and C7h's review decide when this becomes contract-fixed. Fresh-prompt evidence: documented (sudoers(5) 1.9.17p2), not measured
+sol6r8-new	SplitStore keyed idempotency and replay by request_id only: a second principal with the same id and payload got the first principal's lease and raw token	validation r8	contract-fixed	idem and replay rows keyed by (principal_id, request_id); rpc-envelope idempotency_record description; test_v2_round9.py::test_second_principal_same_id_same_payload_never_gets_the_first_token	authority store owed by A5b1
+sol9-self	round-9 adversarial probes and mutation checks over fresh auth, route matching and principal scope	tests r9	probes	test_v2_round9.py::test_self_* ; mutation checks recorded in RESPONSE-TO-SOL6.tsv	-
+sol6r9-new	effective exempt_group containing the operator defeats the claim-clear prompt while operator_sudo_audit passes	validation r9	carried	C7h test_install_audit; reference test_v2_freeze.py::test_carried_exempt_group_defeats_fresh_auth (strict xfail)	owed by C7h
+sol6r9-new	a later NOPASSWD: tag after a comma ('/usr/bin/true, NOPASSWD: <claim-clear>') is read as command text, so both operator audits pass	validation r9	carried	C7h test_install_audit; reference test_v2_freeze.py::test_carried_per_command_tags_after_a_comma (strict xfail)	owed by C7h

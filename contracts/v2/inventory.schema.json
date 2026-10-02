@@ -1,0 +1,906 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/inventory.schema.json",
+  "title": "Flightctl inventory v2 (site hardware, static power profile, lane rules)",
+  "description": "AMENDS inventory-v1. Adds card binding (uuid, pci_bus_id, numa_node: G07), host roles and a static power profile (G13/G22), an 'asleep' reachability (G22), and per-lane rules (G19). identity_mapping MOVES OUT to accounts (v2). Dynamic power state lives in power.schema.json, never here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "site_id",
+    "revision",
+    "stage",
+    "controller",
+    "timezone",
+    "endpoint_lane_order",
+    "hosts",
+    "lanes"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "common.schema.json#/$defs/schema_version"
+    },
+    "site_id": {
+      "$ref": "common.schema.json#/$defs/short_identifier"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "stage": {
+      "enum": [
+        "draft",
+        "confirmed"
+      ]
+    },
+    "controller": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "controller_id",
+        "host_id",
+        "endpoint",
+        "auth_state"
+      ],
+      "properties": {
+        "controller_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "host_id": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/short_identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "endpoint": {
+          "$ref": "common.schema.json#/$defs/nullable_text"
+        },
+        "auth_state": {
+          "enum": [
+            "unresolved",
+            "configured"
+          ]
+        }
+      }
+    },
+    "timezone": {
+      "type": "string",
+      "pattern": "^(?:UTC|[A-Za-z0-9._+-]+(?:/[A-Za-z0-9._+-]+)+)$"
+    },
+    "endpoint_lane_order": {
+      "description": "Renamed from chat_lane_order: preference order for served endpoints (lowest compute first).",
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/short_identifier"
+      },
+      "uniqueItems": true
+    },
+    "hosts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/host"
+      }
+    },
+    "lanes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/lane"
+      }
+    }
+  },
+  "$defs": {
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "host_id",
+        "roles",
+        "ssh_endpoint",
+        "ssh_user",
+        "reachability",
+        "observed_at",
+        "observation_error",
+        "gpu_count",
+        "gpu_count_reason",
+        "devices",
+        "power"
+      ],
+      "properties": {
+        "host_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "roles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "gpu",
+              "storage",
+              "controller",
+              "approver",
+              "client"
+            ]
+          }
+        },
+        "ssh_endpoint": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "ssh_user": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "reachability": {
+          "description": "Reachability at observation time. 'asleep' = known to be in a sleep state and wakeable; it is never 'free' and never 'unreachable-forever'.",
+          "enum": [
+            "confirmed",
+            "asleep",
+            "unreachable",
+            "unknown"
+          ]
+        },
+        "observed_at": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/utc_time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_error": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gpu_count": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gpu_count_reason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "devices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/device"
+          }
+        },
+        "power": {
+          "$ref": "#/$defs/power_profile",
+          "description": "Static power profile."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "gpu_count": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "gpu_count_reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "observed_at": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "observation_error": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reachability": {
+                "const": "asleep"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "power": {
+                "properties": {
+                  "wakeable": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "power_profile": {
+      "description": "Static, reviewed power facts. The wake mechanism details (MAC, broadcast) live in the site adapters file under wake_profile_ref, never in the repo or the inventory.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "wakeable",
+        "wake_method",
+        "wake_profile_ref",
+        "typical_wake_s",
+        "wake_timeout_s",
+        "sleep_guard",
+        "inhibitor_what",
+        "linger"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "always-on",
+            "sleeps"
+          ]
+        },
+        "wakeable": {
+          "type": "boolean"
+        },
+        "wake_method": {
+          "enum": [
+            "none",
+            "wol"
+          ]
+        },
+        "wake_profile_ref": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/short_identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "typical_wake_s": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wake_timeout_s": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 3600,
+          "default": 180
+        },
+        "sleep_guard": {
+          "type": "boolean"
+        },
+        "inhibitor_what": {
+          "description": "Measured 2 Oct: over non-interactive ssh only an 'idle' block inhibitor is permitted by polkit; the lab sleep guards honour it.",
+          "const": "idle"
+        },
+        "linger": {
+          "description": "Whether the executor's user manager survives without a login session. 'required' only if conformance shows the inhibitor or transient units die without it (the owner: enable linger only if needed).",
+          "enum": [
+            "enabled",
+            "not-required",
+            "required-missing",
+            "unknown"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "always-on"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "wakeable": {
+                "const": false
+              },
+              "wake_method": {
+                "const": "none"
+              },
+              "wake_profile_ref": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "wake_method": {
+                "const": "wol"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "wakeable": {
+                "const": true
+              },
+              "wake_profile_ref": {
+                "$ref": "common.schema.json#/$defs/short_identifier"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "wakeable": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "wake_method": {
+                "const": "wol"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "device_id",
+        "vendor",
+        "model",
+        "vram_bytes",
+        "driver",
+        "uuid",
+        "pci_bus_id",
+        "numa_node",
+        "device_minor",
+        "drives_display",
+        "unknown_reasons"
+      ],
+      "properties": {
+        "device_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "vendor": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vram_bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "driver": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "uuid": {
+          "description": "NVIDIA GPU UUID as printed by nvidia-smi --query-gpu=uuid (e.g. GPU-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx). The occupancy probe filters by this.",
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^GPU-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pci_bus_id": {
+          "description": "Normalised sysfs form: 4-hex-digit domain, lowercase (0000:8d:00.0). nvidia-smi prints an 8-digit uppercase domain (00000000:8D:00.0); the probe normalises.",
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "numa_node": {
+          "description": "From /sys/bus/pci/devices/<pci_bus_id>/numa_node. A sysfs value of -1 maps to null with reason 'no numa affinity reported'.",
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 63
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "drives_display": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unknown_reasons": {
+          "type": "object",
+          "propertyNames": {
+            "enum": [
+              "vendor",
+              "model",
+              "vram_bytes",
+              "driver",
+              "uuid",
+              "pci_bus_id",
+              "numa_node",
+              "drives_display",
+              "device_minor"
+            ]
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "device_minor": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "NVIDIA device minor (/dev/nvidia<minor>), from /proc/driver/nvidia/gpus/<bus>/information. Needed for device-cgroup isolation of friend sessions and units (B5)."
+        }
+      }
+    },
+    "lane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lane_id",
+        "host_id",
+        "device_ids",
+        "class",
+        "enabled",
+        "policy",
+        "rules"
+      ],
+      "properties": {
+        "lane_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "host_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "device_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/short_identifier"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "class": {
+          "enum": [
+            "gpu",
+            "cpu"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "policy": {
+          "$ref": "../common.schema.json#/$defs/capability_offer"
+        },
+        "rules": {
+          "$ref": "#/$defs/lane_rules"
+        }
+      }
+    },
+    "lane_rules": {
+      "description": "G19. Enforced lane rules (not capability tags). Quotas per principal live in quota.schema.json; time rules live in window.schema.json.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tier",
+        "class_ceiling",
+        "max_lease_s",
+        "access_modes",
+        "vram_cap_bytes",
+        "external_tenant"
+      ],
+      "properties": {
+        "tier": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "class_ceiling": {
+          "description": "Highest class each principal kind may hold on this lane (e.g. agents standby-only on a desktop-shared card). Missing kind = no ceiling beyond policy.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "operator": {
+              "$ref": "common.schema.json#/$defs/class"
+            },
+            "human": {
+              "$ref": "common.schema.json#/$defs/class"
+            },
+            "agent": {
+              "$ref": "common.schema.json#/$defs/class"
+            },
+            "service": {
+              "$ref": "common.schema.json#/$defs/class"
+            }
+          }
+        },
+        "max_lease_s": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/positive_duration_s"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "access_modes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "lease",
+              "queue",
+              "booking",
+              "job",
+              "session",
+              "endpoint"
+            ]
+          }
+        },
+        "vram_cap_bytes": {
+          "description": "Advisory cap checked by the occupancy probe (exceed -> event + refuse-new); NVIDIA consumer/Turing cards cannot enforce it in hardware.",
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "external_tenant": {
+          "description": "How GPU processes NOT started under a lease are treated (desktop, ComfyUI, Chrome). Legacy flightctl v2 thresholds are the defaults.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "policy",
+            "process_noise_mib",
+            "lane_noise_mib"
+          ],
+          "properties": {
+            "policy": {
+              "enum": [
+                "collision",
+                "yield"
+              ],
+              "description": "collision = an unexplained tenant above the noise floor blocks release/grant and raises an event; yield = desktop-shared lane: the tenant has priority, new admissions are refused while it is present and preemptible holders are asked to stop."
+            },
+            "process_noise_mib": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 512
+            },
+            "lane_noise_mib": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 1024
+            }
+          }
+        }
+      }
+    }
+  },
+  "x-examples": {
+    "valid": [
+      {
+        "schema_version": 2,
+        "site_id": "site-a",
+        "revision": 3,
+        "stage": "confirmed",
+        "controller": {
+          "controller_id": "controller-a",
+          "host_id": "host-0",
+          "endpoint": "https://controller-a.example:8790/v2/rpc",
+          "auth_state": "configured"
+        },
+        "timezone": "Europe/London",
+        "endpoint_lane_order": [
+          "lane-gpu1"
+        ],
+        "hosts": [
+          {
+            "host_id": "host-0",
+            "roles": [
+              "controller",
+              "gpu"
+            ],
+            "ssh_endpoint": "host-0.example",
+            "ssh_user": "runner",
+            "reachability": "confirmed",
+            "observed_at": "2026-10-02T00:00:00Z",
+            "observation_error": null,
+            "gpu_count": 1,
+            "gpu_count_reason": null,
+            "devices": [
+              {
+                "device_id": "gpu-a",
+                "vendor": "nvidia",
+                "model": "Example GPU",
+                "vram_bytes": 25769803776,
+                "driver": "600.1",
+                "uuid": "GPU-00000000-0000-0000-0000-000000000001",
+                "pci_bus_id": "0000:8d:00.0",
+                "numa_node": 1,
+                "drives_display": false,
+                "unknown_reasons": {},
+                "device_minor": 0
+              }
+            ],
+            "power": {
+              "mode": "always-on",
+              "wakeable": false,
+              "wake_method": "none",
+              "wake_profile_ref": null,
+              "typical_wake_s": null,
+              "wake_timeout_s": 180,
+              "sleep_guard": false,
+              "inhibitor_what": "idle",
+              "linger": "enabled"
+            }
+          },
+          {
+            "host_id": "host-1",
+            "roles": [
+              "gpu",
+              "storage"
+            ],
+            "ssh_endpoint": "host-1.example",
+            "ssh_user": "runner",
+            "reachability": "asleep",
+            "observed_at": "2026-10-02T00:00:00Z",
+            "observation_error": null,
+            "gpu_count": 1,
+            "gpu_count_reason": null,
+            "devices": [
+              {
+                "device_id": "gpu-b",
+                "vendor": "nvidia",
+                "model": "Example GPU",
+                "vram_bytes": 16106127360,
+                "driver": "600.1",
+                "uuid": "GPU-00000000-0000-0000-0000-000000000002",
+                "pci_bus_id": "0000:03:00.0",
+                "numa_node": null,
+                "drives_display": false,
+                "unknown_reasons": {
+                  "numa_node": "no numa affinity reported"
+                },
+                "device_minor": 0
+              }
+            ],
+            "power": {
+              "mode": "sleeps",
+              "wakeable": true,
+              "wake_method": "wol",
+              "wake_profile_ref": "wake-host-1",
+              "typical_wake_s": 30,
+              "wake_timeout_s": 180,
+              "sleep_guard": true,
+              "inhibitor_what": "idle",
+              "linger": "unknown"
+            }
+          }
+        ],
+        "lanes": [
+          {
+            "lane_id": "lane-gpu1",
+            "host_id": "host-1",
+            "device_ids": [
+              "gpu-b"
+            ],
+            "class": "gpu",
+            "enabled": true,
+            "policy": {
+              "site_id": "site-a",
+              "capability_class": "small-16g",
+              "capabilities": [
+                "compute"
+              ],
+              "isolation": [
+                "cgroup"
+              ],
+              "sanitisation": [
+                "gpu-empty-check"
+              ],
+              "assurance": {
+                "required": [],
+                "offered": [
+                  "observed"
+                ],
+                "verified": [],
+                "evidence_refs": [],
+                "unknown": false
+              },
+              "observed_at": "2026-10-02T00:00:00Z"
+            },
+            "rules": {
+              "tier": "small",
+              "class_ceiling": {
+                "agent": "batch"
+              },
+              "max_lease_s": 43200,
+              "access_modes": [
+                "lease",
+                "queue",
+                "booking",
+                "job",
+                "endpoint"
+              ],
+              "vram_cap_bytes": null,
+              "external_tenant": {
+                "policy": "collision",
+                "process_noise_mib": 512,
+                "lane_noise_mib": 1024
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "invalid": [
+      {
+        "schema_version": 2,
+        "site_id": "site-a",
+        "revision": 1,
+        "stage": "draft",
+        "controller": {
+          "controller_id": "controller-a",
+          "host_id": null,
+          "endpoint": null,
+          "auth_state": "unresolved"
+        },
+        "timezone": "UTC",
+        "endpoint_lane_order": [],
+        "hosts": [
+          {
+            "host_id": "host-1",
+            "roles": [
+              "gpu"
+            ],
+            "ssh_endpoint": "host-1.example",
+            "ssh_user": "runner",
+            "reachability": "asleep",
+            "observed_at": "2026-10-02T00:00:00Z",
+            "observation_error": null,
+            "gpu_count": 0,
+            "gpu_count_reason": "confirmed no GPU",
+            "devices": [],
+            "power": {
+              "mode": "always-on",
+              "wakeable": false,
+              "wake_method": "none",
+              "wake_profile_ref": null,
+              "typical_wake_s": null,
+              "wake_timeout_s": 180,
+              "sleep_guard": false,
+              "inhibitor_what": "idle",
+              "linger": "unknown"
+            }
+          }
+        ],
+        "lanes": []
+      },
+      {
+        "schema_version": 2,
+        "site_id": "site-a",
+        "revision": 1,
+        "stage": "draft",
+        "controller": {
+          "controller_id": "controller-a",
+          "host_id": null,
+          "endpoint": null,
+          "auth_state": "unresolved"
+        },
+        "timezone": "UTC",
+        "endpoint_lane_order": [],
+        "identity_mapping": [],
+        "hosts": [],
+        "lanes": []
+      }
+    ]
+  }
+}

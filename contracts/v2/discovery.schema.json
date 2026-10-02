@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/discovery.schema.json",
+  "title": "Flightctl discovery proposal v2",
+  "description": "AMENDS discovery-v1. The proposal now EMBEDS a complete draft inventory v2 (so the projection is simply 'take .inventory and keep stage=draft'), and its GPU observations are the real InventoryProbe shape (gpu-probe.schema.json) parsed from the real nvidia-smi query, not a private CSV (Grok finding 4). AMD/sysfs parsing is dropped until a lab host needs it (no AMD compute card in the lab; the AMD display cards are not lanes). Discovery stays review-only: it never confirms, stages, grants or wakes beyond a read probe.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generated_at", "current_revision", "inventory", "observations", "host_review", "lane_review", "diff", "status"],
+  "properties": {
+    "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+    "generated_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+    "current_revision": { "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+    "inventory": {
+      "allOf": [{ "$ref": "inventory.schema.json" }, { "properties": { "stage": { "const": "draft" } } }]
+    },
+    "observations": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          { "$ref": "gpu-probe.schema.json#/$defs/inventory_observation" },
+          { "type": "object", "additionalProperties": false, "required": ["kind", "host_id", "observed_at", "status", "source", "value", "reason"],
+            "properties": { "kind": { "enum": ["peer", "ssh", "host-missing", "power"] }, "host_id": { "$ref": "common.schema.json#/$defs/short_identifier" }, "observed_at": { "$ref": "common.schema.json#/$defs/utc_time" }, "status": { "enum": ["confirmed", "unknown"] }, "source": { "enum": ["operator", "tailnet-status", "ssh", "inhibitor-list"] }, "value": {}, "reason": { "$ref": "common.schema.json#/$defs/nullable_text" } } }
+        ]
+      }
+    },
+    "host_review": { "type": "object", "propertyNames": { "$ref": "common.schema.json#/$defs/short_identifier" }, "additionalProperties": { "enum": ["admissible", "review", "unknown", "missing"] } },
+    "lane_review": { "type": "object", "propertyNames": { "$ref": "common.schema.json#/$defs/short_identifier" }, "additionalProperties": { "enum": ["add", "retain", "review", "remove"] } },
+    "diff": { "type": "array", "items": { "$ref": "../discovery-v1.schema.json#/$defs/diff_entry" } },
+    "status": { "enum": ["proposed", "needs_review"] }
+  },
+  "x-inventory-projection": { "take": "inventory", "promotion_sets": ["stage"], "dropped": ["generated_at", "current_revision", "observations", "host_review", "lane_review", "diff", "status"] },
+  "x-examples": {
+    "valid": [
+      { "schema_version": 2, "generated_at": "2026-10-02T00:00:00Z", "current_revision": null,
+        "inventory": { "schema_version": 2, "site_id": "site-a", "revision": 1, "stage": "draft", "controller": { "controller_id": "controller-a", "host_id": null, "endpoint": null, "auth_state": "unresolved" }, "timezone": "UTC", "endpoint_lane_order": [], "hosts": [], "lanes": [] },
+        "observations": [{ "kind": "gpu-inventory", "host_id": "host-9", "observed_at": "2026-10-02T00:00:00Z", "status": "unknown", "reason": "ssh: connection timed out", "vendor": "unknown", "devices": [] }],
+        "host_review": { "host-9": "unknown" }, "lane_review": {}, "diff": [], "status": "needs_review" }
+    ],
+    "invalid": [
+      { "schema_version": 2, "generated_at": "2026-10-02T00:00:00Z", "current_revision": null,
+        "inventory": { "schema_version": 2, "site_id": "site-a", "revision": 1, "stage": "confirmed", "controller": { "controller_id": "controller-a", "host_id": null, "endpoint": null, "auth_state": "unresolved" }, "timezone": "UTC", "endpoint_lane_order": [], "hosts": [], "lanes": [] },
+        "observations": [], "host_review": {}, "lane_review": {}, "diff": [], "status": "confirmed" }
+    ]
+  }
+}

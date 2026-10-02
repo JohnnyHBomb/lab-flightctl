@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/power.schema.json",
+  "title": "Flightctl power v2: host power state, wake attempts",
+  "description": "NEW (G13, G14, G22, WAKE-BRIEF D1-D4). Dynamic power state per host, owned by the authority (the only side that can send a wake packet). Rules: reads never wake; a wake is single-flight per host and rate-limited; an acquire for a sleeping host returns 202 pending reason 'waking' with retry_after (the client wait loop retries 202-waking); after wake_timeout_s without an answer the host is 'unreachable' with reason 'host did not wake' and the lane is never free; the executor holds an 'idle' block inhibitor from reserve to verified release (quarantine keeps it). Tariff/battery fields are deferred and deliberately absent (TARGET-MODEL COULD).",
+  "oneOf": [{ "$ref": "#/$defs/host_power" }, { "$ref": "#/$defs/wake_attempt" }],
+  "$defs": {
+    "host_power": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "host_id", "state", "observed_at", "source", "last_wake", "inhibitors", "boot"],
+      "properties": {
+        "kind": { "const": "host-power" },
+        "host_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "state": { "enum": ["awake", "asleep", "waking", "unreachable", "unknown"] },
+        "observed_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "source": { "enum": ["executor-reply", "reachability-probe", "wake-attempt", "inventory", "shadow-observer"] },
+        "last_wake": { "anyOf": [{ "$ref": "#/$defs/wake_attempt" }, { "type": "null" }] },
+        "inhibitors": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": false, "required": ["lane_id", "generation", "unit"], "properties": { "lane_id": { "$ref": "common.schema.json#/$defs/short_identifier" }, "generation": { "type": "integer", "minimum": 1 }, "unit": { "type": "string", "pattern": "^flightctl-awake-[a-z0-9._-]+-g[0-9]+\\.service$" } } }
+        },
+        "boot": { "anyOf": [{ "$ref": "common.schema.json#/$defs/host_boot" }, { "type": "null" }] }
+      }
+    },
+    "wake_attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "attempt_id", "host_id", "requested_by", "reason", "started_at", "answered_at", "timeout_s", "result", "dry_run"],
+      "properties": {
+        "kind": { "const": "wake-attempt" },
+        "attempt_id": { "$ref": "common.schema.json#/$defs/public_id" },
+        "host_id": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "requested_by": { "enum": ["acquire", "queue-head", "booking-start", "stage", "operator", "reconcile"] },
+        "reason": { "$ref": "common.schema.json#/$defs/text" },
+        "started_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "answered_at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/utc_time" }, { "type": "null" }] },
+        "timeout_s": { "type": "integer", "minimum": 10, "maximum": 3600 },
+        "result": { "enum": ["pending", "answered", "already-awake", "timed-out", "send-failed", "rate-limited"] },
+        "dry_run": { "type": "boolean" }
+      },
+      "allOf": [
+        { "if": { "properties": { "result": { "enum": ["answered", "already-awake"] } } }, "then": { "properties": { "answered_at": { "$ref": "common.schema.json#/$defs/utc_time" } } } },
+        { "if": { "properties": { "result": { "enum": ["pending", "timed-out", "send-failed", "rate-limited"] } } }, "then": { "properties": { "answered_at": { "type": "null" } } } }
+      ]
+    }
+  },
+  "x-examples": {
+    "valid": [
+      { "kind": "host-power", "host_id": "host-1", "state": "waking", "observed_at": "2026-10-02T09:59:30Z", "source": "wake-attempt", "last_wake": { "kind": "wake-attempt", "attempt_id": "wake-000012", "host_id": "host-1", "requested_by": "queue-head", "reason": "queue head for lane-gpu1", "started_at": "2026-10-02T09:59:20Z", "answered_at": null, "timeout_s": 180, "result": "pending", "dry_run": false }, "inhibitors": [], "boot": null },
+      { "kind": "wake-attempt", "attempt_id": "wake-000013", "host_id": "host-1", "requested_by": "acquire", "reason": "acquire lane-gpu1", "started_at": "2026-10-02T09:59:20Z", "answered_at": "2026-10-02T09:59:50Z", "timeout_s": 180, "result": "answered", "dry_run": false }
+    ],
+    "invalid": [
+      { "kind": "wake-attempt", "attempt_id": "wake-000013", "host_id": "host-1", "requested_by": "status-read", "reason": "status", "started_at": "2026-10-02T09:59:20Z", "answered_at": null, "timeout_s": 180, "result": "pending", "dry_run": false },
+      { "kind": "wake-attempt", "attempt_id": "wake-000013", "host_id": "host-1", "requested_by": "acquire", "reason": "acquire", "started_at": "2026-10-02T09:59:20Z", "answered_at": null, "timeout_s": 180, "result": "answered", "dry_run": false }
+    ]
+  }
+}

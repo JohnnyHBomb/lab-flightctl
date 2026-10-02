@@ -1,0 +1,29 @@
+# Checked migration gate (GATES G1b; Sol 6 B7). A packet may modify or delete an EXISTING test only if the test is listed here
+# for that packet. rewrite = the replacement test must exist (same packet) and pass; delete = the obligation's CONFORMANCE.tsv
+# row must point to its new home. The gauge diffs tests/ between base and head and checks every touched pre-existing test
+# against this file (tests/contracts_v2/test_v2_plan.py checks the file itself: columns, actions, packets exist in SLICES.md).
+v1_test	packet	action	replacement	reason
+tests/authority/test_revision2.py::test_revision2_restart_reconciliation_and_corrupt_store_keep_admission_closed	A8	rewrite	test_restart_reconciles_lane_by_inspect	pins the permanent freeze (G27); corrupt-store closure is kept in the replacement
+tests/authority/test_revision2.py (renew assertions expecting 'approved maximum reached')	A5b2	rewrite	test_renew_rolls_within_ceiling_and_refuses_past_it	pins renew-never-succeeds (Grok 2)
+tests/client/test_vectors.py (vector 'lane-first positional renew TTL minutes to seconds')	A5b2	rewrite	test_renew_rolls_within_ceiling_and_refuses_past_it	same defect at the CLI vector
+tests/contracts/vectors/cli.json (renew vector expecting approved maximum)	A5b2	rewrite	test_renew_rolls_within_ceiling_and_refuses_past_it	vector data for the same defect
+tests/executor/test_executor.py::test_reserve_start_fence	A5a	rewrite	test_stop_requires_reserve_identity_and_empty_proof	identity assigned after reserve (Grok 1)
+tests/executor/test_executor.py::test_clock_reboot_and_same_boot_deadline	A5a	rewrite	test_relative_deadline_anchored_on_host_clock	absolute cross-host deadline (G02)
+tests/executor/test_executor.py::test_reboot_reconcile_rejects_partial_and_reanchors_deadline	A5a	rewrite	test_relative_deadline_anchored_on_host_clock	absolute cross-host deadline (G02)
+tests/executor/test_executor.py::test_repeated_reboots_preserve_absolute_deadline	A5a	rewrite	test_relative_deadline_anchored_on_host_clock	absolute cross-host deadline (G02)
+tests/executor/test_executor.py::test_deadline_enforcement_calls_before_and_at_boundaries	A5a	rewrite	test_enforcer_real_seconds	absolute deadline helper
+tests/executor/test_executor.py::test_fake_isolation_guard	A6	delete	-	workaround for the frozen fake; replaced by conformance workload_runner
+tests/executor/systemd_adapter.py	A6	delete	-	package-local adapter replaced by the per-unit FakeRunner
+tests/contracts/test_fakes.py::test_fake_interfaces	A6	rewrite	test_fake_runner_per_unit_fail_closed	systemd part pins Grok 5 semantics; GPU part moves to A3 captures
+tests/fakes/fixtures/titan-rtx.json	A3	rewrite	test_golden_captures_all_card_models	private CSV, not real nvidia-smi output (Grok 4)
+tests/fakes/fixtures/rtx-8000.json	A3	rewrite	test_golden_captures_all_card_models	same
+tests/fakes/fixtures/t4.json	A3	rewrite	test_golden_captures_all_card_models	same
+tests/fakes/fixtures/amd.json	A3b	delete	-	AMD path dropped (D-amd-1)
+tests/discovery/test_discovery.py::test_raw_discovery_parsing_and_multidevice_lane	A3b	rewrite	test_discover_against_replayed_real_captures	parses the private CSV
+tests/discovery/test_discovery.py::test_raw_transport_inputs_use_production_parsers_and_projection	A3b	rewrite	test_v2_projection_takes_embedded_inventory	same
+tests/integration/test_p6_scaffold.py::test_assembled_scenarios	A0c	rewrite	test_repro_restart_freeze	required a file no package owned (Grok 8); assembly moves to ASM gates
+tests/roster/test_roster_scripts.py	B3	delete	-	BLAST-RADIUS R1; obligations carried by test_shim_cleanup_releases_only_own_token and test_batch_manifest_successors_visible_via_queue (N6)
+tests/roster/test_review3_regressions.py	B3	delete	-	BLAST-RADIUS R1
+tests/roster/shims.py	B3	delete	-	BLAST-RADIUS R1
+tests/roster/{conftest,fake_bridge,fake_cleanup,fake_client,fake_workload,__init__}.py	B3	delete	-	BLAST-RADIUS R1 test support files
+roster/{run_arm,run_local_arm,run_queue}.sh	B3	delete	-	BLAST-RADIUS R1 (not tests; listed so the gauge sees the scripted deletion)

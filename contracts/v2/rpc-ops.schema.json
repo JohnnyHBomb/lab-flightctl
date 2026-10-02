@@ -1,0 +1,2242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/rpc-ops.schema.json",
+  "title": "Flightctl RPC operations v2",
+  "description": "SUPERSEDES rpc-ops-v1 (all v1 ops keep their names; chat-load/chat-unload become aliases of endpoint-load/unload for one release). Every operator/UI action addresses records by PUBLIC id (G25); holders authenticate token operations with principal + token; the server derives identity from the socket peer (+ optional bearer token) and IGNORES any identity in the request. x-ops is the normative authorisation/MCP/CLI table: 'role' is checked first, then the token 'scope', then policy.approval_matrix for 'approval'. MCP tools are generated 1:1 from rows with mcp=true and carry no extra privilege.",
+  "$ref": "#/$defs/request",
+  "$defs": {
+    "op_name": {
+      "enum": [
+        "acquire",
+        "renew",
+        "heartbeat",
+        "release",
+        "claim",
+        "queue",
+        "book",
+        "cancel",
+        "approval-request",
+        "approve",
+        "preempt",
+        "status",
+        "snapshot",
+        "events",
+        "cal",
+        "free",
+        "usage",
+        "whoami",
+        "op-stop",
+        "op-extend",
+        "queue-reorder",
+        "queue-remove",
+        "booking-cancel",
+        "lane-drain",
+        "lane-undrain",
+        "window-set",
+        "window-remove",
+        "quarantine-clear",
+        "reconcile",
+        "host-wake",
+        "principal-disable",
+        "principal-enable",
+        "config-activate",
+        "job-submit",
+        "job-cancel",
+        "job-status",
+        "job-logs",
+        "job-list",
+        "session-open",
+        "session-close",
+        "endpoint-load",
+        "endpoint-unload",
+        "chat-load",
+        "chat-unload",
+        "template-list",
+        "model-list",
+        "model-prefetch",
+        "cache-evict",
+        "token-create",
+        "token-revoke",
+        "token-list",
+        "subscribe",
+        "unsubscribe",
+        "job-output-list",
+        "job-output-get"
+      ]
+    },
+    "admission": {
+      "description": "v2 admission: identity is NEVER supplied by the caller (v1 'ingress' removed). Dormant federation hooks (delegation, signed_manifest) are not accepted in v2 requests at all: the closed object rejects them (fail closed).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approval_id",
+        "pipeline",
+        "content_labels",
+        "batch"
+      ],
+      "properties": {
+        "approval_id": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pipeline": {
+          "anyOf": [
+            {
+              "$ref": "../common.schema.json#/$defs/pipeline_binding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "content_labels": {
+          "$ref": "../common.schema.json#/$defs/content_labels"
+        },
+        "batch": {
+          "anyOf": [
+            {
+              "$ref": "../common.schema.json#/$defs/batch_registration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shadow_of": {
+          "description": "Set only by the legacy shim in tee mode: the request mirrors a legacy lanes.sh call whose outcome is given. The authority decides as if live, executes nothing, and records shadow-decision/shadow-divergence events.",
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "legacy_op",
+                "legacy_exit",
+                "legacy_stdout_class",
+                "legacy_token_hint"
+              ],
+              "properties": {
+                "legacy_op": {
+                  "enum": [
+                    "acquire",
+                    "release",
+                    "renew",
+                    "wait",
+                    "status"
+                  ]
+                },
+                "legacy_exit": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 255
+                },
+                "legacy_stdout_class": {
+                  "enum": [
+                    "token",
+                    "busy",
+                    "released",
+                    "renewed",
+                    "refused",
+                    "timeout",
+                    "status",
+                    "unknown-lane",
+                    "other"
+                  ]
+                },
+                "legacy_token_hint": {
+                  "$ref": "common.schema.json#/$defs/token_hint"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "lane",
+        "args",
+        "request_fingerprint",
+        "admission"
+      ],
+      "properties": {
+        "schema": {
+          "const": 2
+        },
+        "request_id": {
+          "$ref": "common.schema.json#/$defs/identifier"
+        },
+        "op": {
+          "$ref": "#/$defs/op_name"
+        },
+        "lane": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/short_identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "args": {
+          "type": "object"
+        },
+        "request_fingerprint": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "admission": {
+          "$ref": "#/$defs/admission"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "acquire"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/acquire_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "renew"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/renew_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "enum": [
+                  "heartbeat",
+                  "release"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/lease_ref"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "claim"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "../rpc-ops-v1.schema.json#/$defs/claim_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "queue"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "../rpc-ops-v1.schema.json#/$defs/queue_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "book"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "../rpc-ops-v1.schema.json#/$defs/book_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "cancel"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "../rpc-ops-v1.schema.json#/$defs/cancel_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "approval-request"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "anyOf": [
+                  {
+                    "$ref": "../rpc-ops-v1.schema.json#/$defs/approval_request_args"
+                  },
+                  {
+                    "$ref": "#/$defs/override_approval_request_args"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "approve"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/approve_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "preempt"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/preempt_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "enum": [
+                  "status",
+                  "snapshot",
+                  "whoami",
+                  "template-list",
+                  "model-list",
+                  "token-list",
+                  "job-list",
+                  "lane-drain",
+                  "lane-undrain"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/empty_or_reason"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "events"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/events_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "enum": [
+                  "cal",
+                  "free"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/projection_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "usage"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/usage_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "enum": [
+                  "op-stop",
+                  "op-extend"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/op_lease_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "queue-reorder"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/queue_reorder_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "queue-remove"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/id_reason_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "booking-cancel"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/id_reason_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "window-set"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/window_set_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "enum": [
+                  "window-remove",
+                  "job-cancel",
+                  "job-status",
+                  "session-close",
+                  "endpoint-unload",
+                  "token-revoke",
+                  "unsubscribe",
+                  "principal-disable",
+                  "principal-enable"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/id_reason_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "quarantine-clear"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/quarantine_clear_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "reconcile"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/empty_or_reason"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "host-wake"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/id_reason_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "config-activate"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/config_activate_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "job-submit"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "spec"
+                ],
+                "properties": {
+                  "spec": {
+                    "$ref": "job.schema.json#/$defs/spec"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "job-logs"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/job_logs_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "session-open"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/session_open_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "endpoint-load"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/endpoint_load_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "chat-load"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "../rpc-ops-v1.schema.json#/$defs/chat_load_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "chat-unload"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "../rpc-ops-v1.schema.json#/$defs/chat_unload_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "enum": [
+                  "model-prefetch",
+                  "cache-evict"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/model_host_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "token-create"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/token_create_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "subscribe"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/subscribe_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "job-output-list"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/id_reason_args"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "job-output-get"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "$ref": "#/$defs/job_output_get_args"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "reason": {
+      "$ref": "common.schema.json#/$defs/text"
+    },
+    "empty_or_reason": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/reason"
+        }
+      }
+    },
+    "acquire_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "purpose",
+        "class",
+        "est_s",
+        "ttl_s"
+      ],
+      "properties": {
+        "purpose": {
+          "$ref": "common.schema.json#/$defs/text"
+        },
+        "class": {
+          "$ref": "common.schema.json#/$defs/class"
+        },
+        "est_s": {
+          "$ref": "common.schema.json#/$defs/positive_duration_s"
+        },
+        "ttl_s": {
+          "$ref": "common.schema.json#/$defs/positive_duration_s",
+          "description": "Rolling expiry from grant; renew extends it. Not the ceiling."
+        },
+        "max_s": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/positive_duration_s"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional requested ceiling; the authority uses min(max_s, lane, quota, class ceilings). A request above the quota limit is 403 quota_exceeded naming the limit, never silently clamped."
+        },
+        "booking_id": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "queue_id": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pipeline_ref": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/short_identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "token_format": {
+          "$ref": "common.schema.json#/$defs/token_format"
+        },
+        "client_label": {
+          "$ref": "common.schema.json#/$defs/client_label"
+        },
+        "holder_binding": {
+          "enum": [
+            "client-heartbeat",
+            "ttl-only"
+          ]
+        }
+      }
+    },
+    "lease_ref": {
+      "description": "Holder addressing: the token alone (legacy form; the authority looks up the lease) or the public lease_id plus the token. Both require the authenticated principal to own the lease.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "token"
+          ],
+          "properties": {
+            "token": {
+              "$ref": "common.schema.json#/$defs/lease_token"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "lease_id",
+            "token"
+          ],
+          "properties": {
+            "lease_id": {
+              "$ref": "common.schema.json#/$defs/public_id"
+            },
+            "token": {
+              "$ref": "common.schema.json#/$defs/lease_token"
+            }
+          }
+        }
+      ]
+    },
+    "renew_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "token",
+        "ttl_s"
+      ],
+      "properties": {
+        "token": {
+          "$ref": "common.schema.json#/$defs/lease_token"
+        },
+        "lease_id": {
+          "$ref": "common.schema.json#/$defs/public_id"
+        },
+        "ttl_s": {
+          "$ref": "common.schema.json#/$defs/positive_duration_s"
+        }
+      }
+    },
+    "override_approval_request_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "target",
+        "beneficiary",
+        "bounds",
+        "reason",
+        "payload_hash"
+      ],
+      "properties": {
+        "action": {
+          "$ref": "approval.schema.json#/$defs/action"
+        },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "id"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "lease",
+                "queue",
+                "booking",
+                "lane",
+                "config"
+              ]
+            },
+            "id": {
+              "$ref": "common.schema.json#/$defs/identifier"
+            }
+          }
+        },
+        "beneficiary": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "id"
+              ],
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "lease",
+                    "queue",
+                    "job",
+                    "booking"
+                  ]
+                },
+                "id": {
+                  "$ref": "common.schema.json#/$defs/identifier"
+                }
+              }
+            }
+          ]
+        },
+        "bounds": {
+          "$ref": "approval.schema.json#/$defs/bounds"
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        },
+        "payload_hash": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        }
+      }
+    },
+    "approve_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approval_id",
+        "proof"
+      ],
+      "properties": {
+        "approval_id": {
+          "$ref": "common.schema.json#/$defs/identifier"
+        },
+        "proof": {
+          "$ref": "common.schema.json#/$defs/proof"
+        }
+      },
+      "description": "v2 drops the caller-supplied 'evidence' object of v1: touch/PIN evidence is derived only by the server's verifier."
+    },
+    "preempt_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_lease_id",
+        "beneficiary"
+      ],
+      "properties": {
+        "target_lease_id": {
+          "$ref": "common.schema.json#/$defs/public_id"
+        },
+        "beneficiary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "id"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "queue",
+                "job",
+                "booking"
+              ]
+            },
+            "id": {
+              "$ref": "common.schema.json#/$defs/identifier"
+            }
+          }
+        }
+      }
+    },
+    "events_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "since_seq",
+        "limit"
+      ],
+      "properties": {
+        "since_seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "kinds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "event.schema.json#/$defs/kind"
+          }
+        },
+        "wait_s": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30,
+          "description": "Long-poll: return as soon as an event >= since_seq commits, or after wait_s with an empty page."
+        }
+      }
+    },
+    "projection_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/utc_time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "horizon_s": {
+          "type": "integer",
+          "minimum": 900,
+          "maximum": 1209600
+        }
+      }
+    },
+    "usage_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "group_by",
+        "from",
+        "to"
+      ],
+      "properties": {
+        "group_by": {
+          "enum": [
+            "principal",
+            "group",
+            "lane",
+            "tier"
+          ]
+        },
+        "from": {
+          "$ref": "common.schema.json#/$defs/utc_time"
+        },
+        "to": {
+          "$ref": "common.schema.json#/$defs/utc_time"
+        },
+        "principal_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        }
+      }
+    },
+    "op_lease_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lease_id",
+        "reason"
+      ],
+      "properties": {
+        "lease_id": {
+          "$ref": "common.schema.json#/$defs/public_id"
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        },
+        "until": {
+          "$ref": "common.schema.json#/$defs/utc_time"
+        }
+      }
+    },
+    "queue_reorder_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "queue_id",
+        "reason"
+      ],
+      "properties": {
+        "queue_id": {
+          "$ref": "common.schema.json#/$defs/identifier"
+        },
+        "before": {
+          "$ref": "common.schema.json#/$defs/identifier"
+        },
+        "after": {
+          "$ref": "common.schema.json#/$defs/identifier"
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "before"
+          ]
+        },
+        {
+          "required": [
+            "after"
+          ]
+        }
+      ]
+    },
+    "id_reason_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "common.schema.json#/$defs/identifier"
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        }
+      }
+    },
+    "window_set_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "kind",
+        "start",
+        "end",
+        "weekly",
+        "rule",
+        "class_ceiling",
+        "reason"
+      ],
+      "properties": {
+        "scope": {
+          "$ref": "window.schema.json#/$defs/window/properties/scope"
+        },
+        "kind": {
+          "$ref": "window.schema.json#/$defs/window/properties/kind"
+        },
+        "start": {
+          "$ref": "common.schema.json#/$defs/utc_time"
+        },
+        "end": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/utc_time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "weekly": {
+          "$ref": "window.schema.json#/$defs/window/properties/weekly"
+        },
+        "rule": {
+          "$ref": "window.schema.json#/$defs/window/properties/rule"
+        },
+        "class_ceiling": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/class"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        }
+      }
+    },
+    "quarantine_clear_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generation",
+        "evidence_seq",
+        "reason"
+      ],
+      "properties": {
+        "generation": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "evidence_seq": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "seq of an event carrying a fresh executor inspect (status ok, no tenants, cgroup empty or absent) taken AFTER the quarantine; the authority re-inspects and refuses if it no longer holds."
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        }
+      }
+    },
+    "config_activate_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "document_kind",
+        "config"
+      ],
+      "properties": {
+        "document_kind": {
+          "enum": [
+            "inventory",
+            "policy",
+            "quotas",
+            "accounts",
+            "templates",
+            "storage",
+            "adapters"
+          ]
+        },
+        "config": {
+          "$ref": "common.schema.json#/$defs/config_ref"
+        }
+      }
+    },
+    "job_logs_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "after_cursor",
+        "limit"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "common.schema.json#/$defs/public_id"
+        },
+        "after_cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 512
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        }
+      }
+    },
+    "session_open_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lease_id",
+        "key_fingerprint",
+        "idle_timeout_s"
+      ],
+      "properties": {
+        "lease_id": {
+          "$ref": "common.schema.json#/$defs/public_id"
+        },
+        "key_fingerprint": {
+          "$ref": "session.schema.json#/$defs/session/properties/key_fingerprint"
+        },
+        "idle_timeout_s": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 300
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "endpoint_load_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "template",
+        "model",
+        "purpose"
+      ],
+      "properties": {
+        "template": {
+          "$ref": "executor.schema.json#/$defs/workload/properties/template_ref"
+        },
+        "model": {
+          "$ref": "storage.schema.json#/$defs/model_ref"
+        },
+        "purpose": {
+          "$ref": "common.schema.json#/$defs/text"
+        }
+      }
+    },
+    "model_host_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "host_id"
+      ],
+      "properties": {
+        "model": {
+          "$ref": "storage.schema.json#/$defs/model_ref"
+        },
+        "host_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        }
+      }
+    },
+    "token_create_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "principal_id",
+        "scopes",
+        "expires_in_s"
+      ],
+      "properties": {
+        "principal_id": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/short_identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scopes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "accounts.schema.json#/$defs/scope"
+          }
+        },
+        "expires_in_s": {
+          "type": "integer",
+          "minimum": 3600,
+          "maximum": 31536000
+        }
+      }
+    },
+    "subscribe_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "topics",
+        "channel"
+      ],
+      "properties": {
+        "topics": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "notification.schema.json#/$defs/topic"
+          }
+        },
+        "channel": {
+          "$ref": "notification.schema.json#/$defs/channel"
+        }
+      }
+    },
+    "job_output_get_args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "relpath",
+        "offset",
+        "length",
+        "expect_sha256"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "common.schema.json#/$defs/public_id"
+        },
+        "relpath": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*\\.\\.)[A-Za-z0-9._/-]{1,512}$"
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4194304
+        },
+        "expect_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        }
+      }
+    }
+  },
+  "x-ops": [
+    [
+      "op",
+      "family",
+      "role",
+      "scope",
+      "mutates",
+      "approval",
+      "mcp",
+      "cli"
+    ],
+    [
+      "acquire",
+      "lease",
+      "member",
+      "lease",
+      true,
+      "operator-admission if class=operator",
+      true,
+      "acquire <lane> <purpose> [ttl-min]"
+    ],
+    [
+      "renew",
+      "lease",
+      "holder",
+      "lease",
+      true,
+      "none (within ceiling)",
+      true,
+      "renew <lane> <token> [ttl-min]"
+    ],
+    [
+      "heartbeat",
+      "lease",
+      "holder",
+      "lease",
+      true,
+      "none",
+      true,
+      "(client library, every holder_heartbeat_s)"
+    ],
+    [
+      "release",
+      "lease",
+      "holder",
+      "lease",
+      true,
+      "none",
+      true,
+      "release <lane> <token>"
+    ],
+    [
+      "claim",
+      "lease",
+      "holder",
+      "lease",
+      true,
+      "none",
+      false,
+      "(run/adoption, booking check-in)"
+    ],
+    [
+      "queue",
+      "lease",
+      "member",
+      "queue",
+      true,
+      "none",
+      true,
+      "wait <lane> <purpose> [ttl] [max-wait]; queue list"
+    ],
+    [
+      "book",
+      "booking",
+      "member",
+      "book",
+      true,
+      "displacement (v1) when displacing",
+      true,
+      "book <lane> <start> <end> <purpose>"
+    ],
+    [
+      "cancel",
+      "booking",
+      "owner",
+      "book",
+      true,
+      "none",
+      true,
+      "cancel <booking_id>"
+    ],
+    [
+      "approval-request",
+      "approval",
+      "operator",
+      "-",
+      true,
+      "-",
+      false,
+      "approve request ..."
+    ],
+    [
+      "approve",
+      "approval",
+      "operator",
+      "-",
+      true,
+      "-",
+      false,
+      "approve sign <approval_id> (ssh-sk)"
+    ],
+    [
+      "preempt",
+      "override",
+      "member|operator",
+      "lease",
+      true,
+      "policy.approval_matrix op-preempt",
+      false,
+      "preempt <lease_id> --for <queue_id|job_id>"
+    ],
+    [
+      "status",
+      "read",
+      "member",
+      "read",
+      false,
+      "-",
+      true,
+      "status <lane>"
+    ],
+    [
+      "snapshot",
+      "read",
+      "member",
+      "read",
+      false,
+      "-",
+      true,
+      "status --all"
+    ],
+    [
+      "events",
+      "read",
+      "member",
+      "read",
+      false,
+      "-",
+      true,
+      "events [--since N] [--follow]"
+    ],
+    [
+      "cal",
+      "read",
+      "member",
+      "read",
+      false,
+      "-",
+      true,
+      "cal [lane]"
+    ],
+    [
+      "free",
+      "read",
+      "member",
+      "read",
+      false,
+      "-",
+      true,
+      "free [lane]"
+    ],
+    [
+      "usage",
+      "read",
+      "member (own) | operator (all)",
+      "read",
+      false,
+      "-",
+      true,
+      "usage [--by principal|lane] [--from] [--to]"
+    ],
+    [
+      "whoami",
+      "read",
+      "member",
+      "read",
+      false,
+      "-",
+      true,
+      "whoami"
+    ],
+    [
+      "op-stop",
+      "override",
+      "operator",
+      "-",
+      true,
+      "policy.approval_matrix op-stop",
+      false,
+      "op stop <lease_id> --reason"
+    ],
+    [
+      "op-extend",
+      "override",
+      "operator",
+      "-",
+      true,
+      "policy.approval_matrix op-extend",
+      false,
+      "op extend <lease_id> --until --reason"
+    ],
+    [
+      "queue-reorder",
+      "override",
+      "operator",
+      "-",
+      true,
+      "policy.approval_matrix queue-reorder",
+      false,
+      "op reorder <queue_id> --before|--after <queue_id>"
+    ],
+    [
+      "queue-remove",
+      "override",
+      "owner|operator",
+      "queue",
+      true,
+      "queue-remove-other when not owner",
+      true,
+      "queue remove <queue_id>"
+    ],
+    [
+      "booking-cancel",
+      "override",
+      "operator",
+      "-",
+      true,
+      "booking-cancel-other",
+      false,
+      "op cancel-booking <booking_id>"
+    ],
+    [
+      "lane-drain",
+      "operator",
+      "operator",
+      "-",
+      true,
+      "policy lane-drain",
+      false,
+      "op drain <lane>"
+    ],
+    [
+      "lane-undrain",
+      "operator",
+      "operator",
+      "-",
+      true,
+      "policy lane-drain",
+      false,
+      "op undrain <lane>"
+    ],
+    [
+      "window-set",
+      "operator",
+      "operator",
+      "-",
+      true,
+      "policy window-set",
+      false,
+      "op window set ..."
+    ],
+    [
+      "window-remove",
+      "operator",
+      "operator",
+      "-",
+      true,
+      "policy window-set",
+      false,
+      "op window rm <window_id>"
+    ],
+    [
+      "quarantine-clear",
+      "operator",
+      "operator",
+      "-",
+      true,
+      "policy quarantine-clear",
+      false,
+      "op clear <lane> --generation N --evidence SEQ"
+    ],
+    [
+      "reconcile",
+      "operator",
+      "operator",
+      "-",
+      true,
+      "none",
+      false,
+      "op reconcile [lane]"
+    ],
+    [
+      "host-wake",
+      "operator",
+      "operator",
+      "-",
+      true,
+      "policy host-wake",
+      false,
+      "op wake <host>"
+    ],
+    [
+      "principal-disable",
+      "accounts",
+      "operator",
+      "-",
+      true,
+      "policy principal-disable",
+      false,
+      "op disable <principal>"
+    ],
+    [
+      "principal-enable",
+      "accounts",
+      "operator",
+      "-",
+      true,
+      "policy principal-disable",
+      false,
+      "op enable <principal>"
+    ],
+    [
+      "config-activate",
+      "operator",
+      "operator",
+      "-",
+      true,
+      "policy config-activate",
+      false,
+      "op activate <kind> <revision> <sha256>"
+    ],
+    [
+      "job-submit",
+      "work",
+      "member",
+      "job",
+      true,
+      "none",
+      true,
+      "job submit <template> [--param k=v] [--lane|--tier]"
+    ],
+    [
+      "job-cancel",
+      "work",
+      "owner|operator",
+      "job",
+      true,
+      "none (own) / op-stop rules (other)",
+      true,
+      "job cancel <job_id>"
+    ],
+    [
+      "job-status",
+      "work",
+      "owner|operator",
+      "job",
+      false,
+      "-",
+      true,
+      "job status <job_id>"
+    ],
+    [
+      "job-logs",
+      "work",
+      "owner|operator",
+      "job",
+      false,
+      "-",
+      true,
+      "job logs <job_id> [--follow]"
+    ],
+    [
+      "job-list",
+      "work",
+      "member",
+      "job",
+      false,
+      "-",
+      true,
+      "job list"
+    ],
+    [
+      "job-output-list",
+      "work",
+      "owner|operator",
+      "job",
+      false,
+      "-",
+      true,
+      "job outputs <job_id>"
+    ],
+    [
+      "job-output-get",
+      "work",
+      "owner|operator",
+      "job",
+      false,
+      "- (may return 202 waking: an explicit fetch may wake the lane host)",
+      true,
+      "job fetch <job_id> [dest-dir]  (chunked, sha256-verified)"
+    ],
+    [
+      "session-open",
+      "work",
+      "holder",
+      "session",
+      true,
+      "none",
+      false,
+      "session open <lease_id> --key FPR"
+    ],
+    [
+      "session-close",
+      "work",
+      "owner|operator",
+      "session",
+      true,
+      "none",
+      false,
+      "session close <session_id>"
+    ],
+    [
+      "endpoint-load",
+      "work",
+      "member",
+      "endpoint",
+      true,
+      "none",
+      true,
+      "endpoint load <template> <model>"
+    ],
+    [
+      "endpoint-unload",
+      "work",
+      "owner|operator",
+      "endpoint",
+      true,
+      "none",
+      true,
+      "endpoint unload <endpoint_id>"
+    ],
+    [
+      "chat-load",
+      "work",
+      "member",
+      "endpoint",
+      true,
+      "none",
+      false,
+      "chat load (alias, one release)"
+    ],
+    [
+      "chat-unload",
+      "work",
+      "owner|operator",
+      "endpoint",
+      true,
+      "none",
+      false,
+      "chat unload (alias, one release)"
+    ],
+    [
+      "template-list",
+      "read",
+      "member",
+      "read",
+      false,
+      "-",
+      true,
+      "templates"
+    ],
+    [
+      "model-list",
+      "read",
+      "member",
+      "read",
+      false,
+      "-",
+      true,
+      "models"
+    ],
+    [
+      "model-prefetch",
+      "operator",
+      "operator",
+      "-",
+      true,
+      "none",
+      false,
+      "op prefetch <model> <host>"
+    ],
+    [
+      "cache-evict",
+      "operator",
+      "operator",
+      "-",
+      true,
+      "none",
+      false,
+      "op evict <model> <host>"
+    ],
+    [
+      "token-create",
+      "accounts",
+      "member (self/sponsored agents) | operator",
+      "tokens:self",
+      true,
+      "none",
+      false,
+      "token create [--for agent] --scopes ..."
+    ],
+    [
+      "token-revoke",
+      "accounts",
+      "owner|operator",
+      "tokens:self",
+      true,
+      "token-revoke-other when not owner",
+      false,
+      "token revoke <token_id>"
+    ],
+    [
+      "token-list",
+      "accounts",
+      "member",
+      "tokens:self",
+      false,
+      "-",
+      false,
+      "token list"
+    ],
+    [
+      "subscribe",
+      "notify",
+      "member",
+      "notify:self",
+      true,
+      "none",
+      false,
+      "notify subscribe <topics> --channel email|slack"
+    ],
+    [
+      "unsubscribe",
+      "notify",
+      "owner",
+      "notify:self",
+      true,
+      "none",
+      false,
+      "notify unsubscribe <subscription_id>"
+    ]
+  ],
+  "x-examples": {
+    "valid": [
+      {
+        "schema": 2,
+        "request_id": "req-1",
+        "op": "acquire",
+        "lane": "lane-gpu1",
+        "args": {
+          "purpose": "roster arm",
+          "class": "batch",
+          "est_s": 1800,
+          "ttl_s": 1800,
+          "max_s": null,
+          "token_format": "hex16",
+          "client_label": "roster",
+          "holder_binding": "ttl-only"
+        },
+        "request_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "admission": {
+          "approval_id": null,
+          "pipeline": null,
+          "content_labels": [],
+          "batch": null
+        }
+      },
+      {
+        "schema": 2,
+        "request_id": "req-2",
+        "op": "renew",
+        "lane": "lane-gpu1",
+        "args": {
+          "token": "5f815964f2cbc5d6",
+          "ttl_s": 1800
+        },
+        "request_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "admission": {
+          "approval_id": null,
+          "pipeline": null,
+          "content_labels": [],
+          "batch": null
+        }
+      },
+      {
+        "schema": 2,
+        "request_id": "req-3",
+        "op": "queue-reorder",
+        "lane": "lane-gpu1",
+        "args": {
+          "queue_id": "q-0009",
+          "before": "q-0007",
+          "reason": "deadline"
+        },
+        "request_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "admission": {
+          "approval_id": "apr-0001",
+          "pipeline": null,
+          "content_labels": [],
+          "batch": null
+        }
+      },
+      {
+        "schema": 2,
+        "request_id": "req-4",
+        "op": "events",
+        "lane": null,
+        "args": {
+          "since_seq": 44,
+          "limit": 200,
+          "wait_s": 25
+        },
+        "request_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "admission": {
+          "approval_id": null,
+          "pipeline": null,
+          "content_labels": [],
+          "batch": null
+        }
+      },
+      {
+        "schema": 2,
+        "request_id": "req-5",
+        "op": "acquire",
+        "lane": "lane-gpu0",
+        "args": {
+          "purpose": "legacy mirror",
+          "class": "batch",
+          "est_s": 600,
+          "ttl_s": 600,
+          "token_format": "hex16"
+        },
+        "request_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "admission": {
+          "approval_id": null,
+          "pipeline": null,
+          "content_labels": [],
+          "batch": null,
+          "shadow_of": {
+            "legacy_op": "acquire",
+            "legacy_exit": 0,
+            "legacy_stdout_class": "token",
+            "legacy_token_hint": "5f815964"
+          }
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "schema": 2,
+        "request_id": "req-6",
+        "op": "preempt",
+        "lane": "lane-gpu1",
+        "args": {
+          "token": "5f815964f2cbc5d6",
+          "approval_id": "apr-1"
+        },
+        "request_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "admission": {
+          "approval_id": null,
+          "pipeline": null,
+          "content_labels": [],
+          "batch": null
+        }
+      },
+      {
+        "schema": 2,
+        "request_id": "req-7",
+        "op": "acquire",
+        "lane": "lane-gpu1",
+        "args": {
+          "purpose": "x",
+          "class": "batch",
+          "est_s": 60,
+          "ttl_s": 60
+        },
+        "request_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "admission": {
+          "approval_id": null,
+          "pipeline": null,
+          "content_labels": [],
+          "batch": null,
+          "ingress": {
+            "actor": "owner"
+          }
+        }
+      },
+      {
+        "schema": 2,
+        "request_id": "req-8",
+        "op": "renew",
+        "lane": "lane-gpu1",
+        "args": {
+          "token": "short",
+          "extend_s": 600
+        },
+        "request_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "admission": {
+          "approval_id": null,
+          "pipeline": null,
+          "content_labels": [],
+          "batch": null
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "schema_version": 2,
+  "kind": "legacy-shim-vectors",
+  "vectors": [
+    { "name": "acquire-prints-bare-hex16", "mode": "v2", "argv": ["acquire", "lane-gpu1", "roster arm", "30"], "env": { "LANE_OWNER": "roster" },
+      "rpc": [{ "op": "acquire", "lane": "lane-gpu1", "args_subset": { "purpose": "roster arm", "class": "batch", "est_s": 1800, "ttl_s": 1800, "token_format": "hex16", "client_label": "roster", "holder_binding": "ttl-only" }, "response_status": 200, "response_data": { "kind": "grant", "token": "5f815964f2cbc5d6" } }],
+      "stdout": "5f815964f2cbc5d6\n", "stdout_regex": "^[0-9a-f]{16}\\n$", "exit": 0 },
+    { "name": "acquire-busy-legacy-line", "mode": "v2", "argv": ["acquire", "lane-gpu1", "second job"], "env": {},
+      "rpc": [{ "op": "acquire", "lane": "lane-gpu1", "args_subset": { "ttl_s": 14400 }, "response_status": 409, "response_data": { "error": { "code": "busy", "details": { "holder": { "client_label": "roster", "purpose": "roster arm", "expires_at": "2026-10-02T10:30:00Z" } } } } }],
+      "stdout": null, "stdout_regex": "^BUSY lane-gpu1: roster@\\S+ 'roster arm' until [0-2][0-9]:[0-5][0-9]\\n$", "exit": 1 },
+    { "name": "acquire-unknown-lane", "mode": "v2", "argv": ["acquire", "no-such-lane", "x"], "env": {},
+      "rpc": [{ "op": "snapshot", "lane": null, "args_subset": {}, "response_status": 200, "response_data": { "lanes": ["lane-gpu0", "lane-gpu1"] } }],
+      "stdout": "unknown lane no-such-lane (known: lane-gpu0 lane-gpu1)\n", "stdout_regex": null, "exit": 2 },
+    { "name": "acquire-waking-then-grant", "mode": "v2", "argv": ["acquire", "lane-gpu1", "wake me"], "env": {},
+      "rpc": [
+        { "op": "acquire", "lane": "lane-gpu1", "args_subset": {}, "response_status": 202, "response_data": { "kind": "pending", "reason": "waking", "retry_after_s": 10 } },
+        { "op": "acquire", "lane": "lane-gpu1", "args_subset": {}, "response_status": 200, "response_data": { "kind": "grant", "token": "0123456789abcdef" } }
+      ],
+      "stdout": "0123456789abcdef\n", "stdout_regex": null, "exit": 0 },
+    { "name": "release-ok", "mode": "v2", "argv": ["release", "lane-gpu1", "5f815964f2cbc5d6"], "env": {},
+      "rpc": [{ "op": "release", "lane": "lane-gpu1", "args_subset": { "token": "5f815964f2cbc5d6" }, "response_status": 200, "response_data": { "kind": "mutation", "state": "closed" } }],
+      "stdout": "released lane-gpu1\n", "stdout_regex": null, "exit": 0 },
+    { "name": "release-wrong-token", "mode": "v2", "argv": ["release", "lane-gpu1", "ffffffffffffffff"], "env": {},
+      "rpc": [{ "op": "release", "lane": "lane-gpu1", "args_subset": { "token": "ffffffffffffffff" }, "response_status": 409, "response_data": { "error": { "code": "token_invalid" } } }],
+      "stdout": "REFUSED: lane-gpu1 held by a different token\n", "stdout_regex": null, "exit": 1 },
+    { "name": "renew-rolling-succeeds", "mode": "v2", "argv": ["renew", "lane-gpu1", "5f815964f2cbc5d6", "30"], "env": {},
+      "rpc": [{ "op": "renew", "lane": "lane-gpu1", "args_subset": { "token": "5f815964f2cbc5d6", "ttl_s": 1800 }, "response_status": 200, "response_data": { "kind": "mutation", "detail": { "expires_at": "2026-10-02T10:40:00Z", "clamped_to_max": false } } }],
+      "stdout": null, "stdout_regex": "^renewed lane-gpu1 to [0-2][0-9]:[0-5][0-9]\\n$", "exit": 0 },
+    { "name": "wait-default-120-min-and-queue", "mode": "v2", "argv": ["wait", "lane-gpu1", "queued arm"], "env": {},
+      "rpc": [
+        { "op": "queue", "lane": "lane-gpu1", "args_subset": { "action": "add", "class": "batch", "max_wait_s": 7200 }, "response_status": 200, "response_data": { "kind": "mutation", "record_id": "q-0004" } },
+        { "op": "acquire", "lane": "lane-gpu1", "args_subset": { "queue_id": "q-0004", "token_format": "hex16" }, "response_status": 200, "response_data": { "kind": "grant", "token": "00000000000000aa" } }
+      ],
+      "stdout": "00000000000000aa\n", "stdout_regex": null, "exit": 0 },
+    { "name": "status-all-legacy-lines", "mode": "v2", "argv": ["status", "--all"], "env": {},
+      "rpc": [{ "op": "snapshot", "lane": null, "args_subset": {}, "response_status": 200, "response_data": { "lanes": [{ "lane_id": "lane-gpu0", "state": "free" }, { "lane_id": "lane-gpu1", "state": "running", "lease": { "client_label": "roster", "purpose": "roster arm", "token_hint": "5f815964" } }, { "lane_id": "lane-gpu2", "state": "asleep" }] } }],
+      "stdout": null, "stdout_regex": "^lane-gpu0 {8}free\\nlane-gpu1 {8}HELD by roster@\\S+ for 'roster arm' \\(token 5f815964, [0-9]+ min left\\)\\nlane-gpu2  \\(asleep\\)\\n$", "exit": 0 },
+    { "name": "controller-unreachable-is-3", "mode": "v2", "argv": ["acquire", "lane-gpu1", "x"], "env": {},
+      "rpc": [{ "op": "acquire", "lane": "lane-gpu1", "args_subset": {}, "response_status": 503, "response_data": { "error": { "code": "transport_failed", "message": "connection refused" } } }],
+      "stdout": "", "stdout_regex": null, "exit": 3 },
+    { "name": "tee-mirror-never-changes-legacy-result", "mode": "tee", "argv": ["acquire", "lane-gpu0", "legacy job", "60"], "env": { "LANE_OWNER": "dev" },
+      "rpc": [{ "op": "acquire", "lane": "lane-gpu0", "args_subset": { "token_format": "hex16" }, "response_status": 503, "response_data": { "error": { "code": "timeout" } } }],
+      "stdout": null, "stdout_regex": "^[0-9a-f]{16}\\n$", "exit": 0 }
+  ]
+}

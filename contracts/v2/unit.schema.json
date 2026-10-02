@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/unit.schema.json",
+  "title": "Flightctl workload unit observation and runner results v2",
+  "description": "NEW (Grok finding 5). The WorkloadRunner port's result shapes, modelled on what real systemd reports: a never-started unit is LoadState=not-found -> state 'absent' with an EMPTY cgroup; everything is PER UNIT; any unscripted, unparsable or timed-out call is ok=false with a typed error. The v1 fake's 'unrecognised outcome = success' and instance-wide occupant clearing are explicitly non-conforming.",
+  "oneOf": [{ "$ref": "#/$defs/observation" }, { "$ref": "#/$defs/start_result" }, { "$ref": "#/$defs/stop_result" }],
+  "x-real-commands": {
+    "start": "systemd-run --user --unit=<unit> --collect --property=KillMode=control-group --property=TimeoutStopSec=<grace_s> --setenv=FLIGHTCTL_RUN_ID=<run_id> --setenv=CUDA_VISIBLE_DEVICES=<uuids> [--uid only when running as root: never in R1] -- <argv...>",
+    "inspect": "systemctl --user show <unit> --property=LoadState,ActiveState,SubState,Result,InvocationID,ControlGroup,MainPID,ExecMainStatus,Environment",
+    "cgroup_procs": "cat /sys/fs/cgroup/<ControlGroup>/cgroup.procs",
+    "stop": "systemctl --user stop <unit>   (bounded by TimeoutStopSec + 10 s; then inspect)",
+    "logs": "journalctl --user -u <unit> --output=json --after-cursor=<cursor> -n <limit>",
+    "notes": "run_id is authority-assigned BEFORE reserve and set in the unit environment; invocation_id is systemd's InvocationID, observed after start and recorded; stop/inspect verify both. A holder-mode lease (no unit) uses the reserved unit name only as an identity; inspect reports 'absent' honestly and emptiness rests on the occupancy probe."
+  },
+  "$defs": {
+    "unit_name": { "type": "string", "pattern": "^flightctl-[a-z][a-z0-9._-]{0,63}-g[1-9][0-9]{0,17}\\.service$" },
+    "state": { "enum": ["absent", "starting", "active", "deactivating", "inactive", "failed", "unknown"] },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "unit", "run_id", "invocation_id", "state", "load_state", "active_state", "sub_state", "result", "main_pid", "exit_status", "cgroup", "cgroup_pids", "cgroup_empty", "observed_at", "error"],
+      "properties": {
+        "kind": { "const": "unit-observation" },
+        "unit": { "$ref": "#/$defs/unit_name" },
+        "run_id": { "anyOf": [{ "$ref": "common.schema.json#/$defs/public_id" }, { "type": "null" }] },
+        "invocation_id": { "anyOf": [{ "type": "string", "pattern": "^[0-9a-f]{32}$" }, { "type": "null" }] },
+        "state": { "$ref": "#/$defs/state" },
+        "load_state": { "anyOf": [{ "enum": ["loaded", "not-found", "error", "masked"] }, { "type": "null" }] },
+        "active_state": { "anyOf": [{ "enum": ["active", "reloading", "inactive", "failed", "activating", "deactivating"] }, { "type": "null" }] },
+        "sub_state": { "anyOf": [{ "type": "string", "maxLength": 64 }, { "type": "null" }] },
+        "result": { "anyOf": [{ "type": "string", "maxLength": 64 }, { "type": "null" }] },
+        "main_pid": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "exit_status": { "anyOf": [{ "type": "integer" }, { "type": "null" }] },
+        "cgroup": { "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 4096 }, { "type": "null" }] },
+        "cgroup_pids": { "type": "array", "items": { "type": "integer", "minimum": 1 } },
+        "cgroup_empty": { "anyOf": [{ "type": "boolean" }, { "type": "null" }], "description": "null = could not be determined (=> unknown, never empty)." },
+        "observed_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "error": { "anyOf": [{ "$ref": "common.schema.json#/$defs/typed_error" }, { "type": "null" }] }
+      },
+      "allOf": [
+        { "if": { "properties": { "state": { "const": "absent" } } }, "then": { "properties": { "load_state": { "const": "not-found" }, "cgroup_pids": { "maxItems": 0 }, "cgroup_empty": { "const": true }, "invocation_id": { "type": "null" } } } },
+        { "if": { "properties": { "state": { "const": "unknown" } } }, "then": { "properties": { "cgroup_empty": { "type": "null" }, "error": { "$ref": "common.schema.json#/$defs/typed_error" } } } },
+        { "if": { "properties": { "cgroup_empty": { "const": true } } }, "then": { "properties": { "cgroup_pids": { "maxItems": 0 } } } }
+      ]
+    },
+    "start_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ok", "unit", "run_id", "invocation_id", "observation", "error", "dry_run"],
+      "properties": {
+        "kind": { "const": "unit-start" },
+        "ok": { "type": "boolean" },
+        "unit": { "$ref": "#/$defs/unit_name" },
+        "run_id": { "$ref": "common.schema.json#/$defs/public_id" },
+        "invocation_id": { "anyOf": [{ "type": "string", "pattern": "^[0-9a-f]{32}$" }, { "type": "null" }] },
+        "observation": { "anyOf": [{ "$ref": "#/$defs/observation" }, { "type": "null" }] },
+        "error": { "anyOf": [{ "$ref": "common.schema.json#/$defs/typed_error" }, { "type": "null" }] },
+        "dry_run": { "type": "boolean", "description": "true only from the dryrun twin: nothing was started; never presented as a real start." }
+      },
+      "allOf": [
+        { "if": { "properties": { "ok": { "const": true }, "dry_run": { "const": false } } }, "then": { "properties": { "invocation_id": { "type": "string" }, "error": { "type": "null" } } } },
+        { "if": { "properties": { "ok": { "const": false } } }, "then": { "properties": { "error": { "$ref": "common.schema.json#/$defs/typed_error" } } } }
+      ]
+    },
+    "stop_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ok", "unit", "invocation_id", "observation", "error", "dry_run"],
+      "properties": {
+        "kind": { "const": "unit-stop" },
+        "ok": { "type": "boolean", "description": "true only if the unit is now absent/inactive AND its cgroup is empty. Stopping an absent unit is idempotent success." },
+        "unit": { "$ref": "#/$defs/unit_name" },
+        "invocation_id": { "anyOf": [{ "type": "string", "pattern": "^[0-9a-f]{32}$" }, { "type": "null" }] },
+        "observation": { "anyOf": [{ "$ref": "#/$defs/observation" }, { "type": "null" }] },
+        "error": { "anyOf": [{ "$ref": "common.schema.json#/$defs/typed_error" }, { "type": "null" }] },
+        "dry_run": { "type": "boolean" }
+      },
+      "allOf": [
+        { "if": { "properties": { "ok": { "const": true }, "dry_run": { "const": false } } }, "then": { "properties": { "observation": { "type": "object", "properties": { "cgroup_empty": { "const": true } }, "required": ["cgroup_empty"] }, "error": { "type": "null" } } } },
+        { "if": { "properties": { "ok": { "const": false } } }, "then": { "properties": { "error": { "$ref": "common.schema.json#/$defs/typed_error" } } } }
+      ]
+    }
+  },
+  "x-examples": {
+    "valid": [
+      { "kind": "unit-observation", "unit": "flightctl-lane-gpu1-g7.service", "run_id": null, "invocation_id": null, "state": "absent", "load_state": "not-found", "active_state": "inactive", "sub_state": "dead", "result": null, "main_pid": 0, "exit_status": null, "cgroup": null, "cgroup_pids": [], "cgroup_empty": true, "observed_at": "2026-10-02T00:00:00Z", "error": null },
+      { "kind": "unit-observation", "unit": "flightctl-lane-gpu1-g7.service", "run_id": "run-0000007a", "invocation_id": "0123456789abcdef0123456789abcdef", "state": "active", "load_state": "loaded", "active_state": "active", "sub_state": "running", "result": "success", "main_pid": 3131, "exit_status": null, "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/flightctl-lane-gpu1-g7.service", "cgroup_pids": [3131], "cgroup_empty": false, "observed_at": "2026-10-02T00:00:00Z", "error": null },
+      { "kind": "unit-stop", "ok": false, "unit": "flightctl-lane-gpu1-g7.service", "invocation_id": "0123456789abcdef0123456789abcdef", "observation": null, "error": { "code": "timeout", "message": "systemctl --user stop exceeded 130 s", "layer": "runner", "cause": null }, "dry_run": false }
+    ],
+    "invalid": [
+      { "kind": "unit-observation", "unit": "flightctl-lane-gpu1-g7.service", "run_id": null, "invocation_id": null, "state": "absent", "load_state": "not-found", "active_state": null, "sub_state": null, "result": null, "main_pid": null, "exit_status": null, "cgroup": null, "cgroup_pids": [77], "cgroup_empty": true, "observed_at": "2026-10-02T00:00:00Z", "error": null },
+      { "kind": "unit-stop", "ok": true, "unit": "flightctl-lane-gpu1-g7.service", "invocation_id": null, "observation": { "kind": "unit-observation", "unit": "flightctl-lane-gpu1-g7.service", "run_id": null, "invocation_id": null, "state": "unknown", "load_state": null, "active_state": null, "sub_state": null, "result": null, "main_pid": null, "exit_status": null, "cgroup": null, "cgroup_pids": [], "cgroup_empty": null, "observed_at": "2026-10-02T00:00:00Z", "error": { "code": "unknown", "message": "unparsable systemctl output" } }, "error": null, "dry_run": false },
+      { "kind": "unit-start", "ok": true, "unit": "unit-a", "run_id": "run-0000007a", "invocation_id": null, "observation": null, "error": null, "dry_run": false }
+    ]
+  }
+}

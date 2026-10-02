@@ -1,0 +1,64 @@
+{
+  "schema_version": 2,
+  "document_id": "storage",
+  "revision": 1,
+  "updated_at": "2026-10-02T00:00:00Z",
+  "stores": [
+    {
+      "store_id": "models",
+      "host_id": "host-1",
+      "kind": "model-store",
+      "root_ref": "model-store",
+      "capacity_bytes": 1700000000000,
+      "per_principal_bytes": null,
+      "retention_s": null,
+      "wipe": "never"
+    },
+    {
+      "store_id": "cache-host-0",
+      "host_id": "host-0",
+      "kind": "model-cache",
+      "root_ref": "model-cache",
+      "capacity_bytes": 500000000000,
+      "per_principal_bytes": null,
+      "retention_s": null,
+      "wipe": "never"
+    },
+    {
+      "store_id": "scratch-host-1",
+      "host_id": "host-1",
+      "kind": "scratch",
+      "root_ref": "scratch",
+      "capacity_bytes": null,
+      "per_principal_bytes": 107374182400,
+      "retention_s": 604800,
+      "wipe": "after-retention"
+    }
+  ],
+  "models": [
+    {
+      "model_id": "small-q4",
+      "revision": 1,
+      "format": "gguf",
+      "store_id": "models",
+      "files": [
+        {
+          "relpath": "small/small-q4.gguf",
+          "bytes": 5400000000,
+          "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        }
+      ],
+      "total_bytes": 5400000000,
+      "vram_hint_bytes": 7000000000,
+      "pin": [],
+      "license_note": "Apache-2.0 weights"
+    }
+  ],
+  "cache_policy": {
+    "eviction": "lru-unpinned-unpopular-first",
+    "popular_window_s": 604800,
+    "popular_min_uses": 3,
+    "min_free_bytes": 50000000000,
+    "verify": "size+sha256"
+  }
+}

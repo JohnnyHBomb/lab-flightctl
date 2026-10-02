@@ -1,0 +1,415 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/quota.schema.json",
+  "title": "Flightctl quotas v2 (document and evaluation result)",
+  "description": "NEW (Grok finding 6, G18, TARGET-MODEL s5). Limits attach to groups and principals (Slurm association tree, two levels; design borrowed, no code). The effective limit for a principal is the minimum over its own entry and every group it belongs to. Agents are charged to their own entry and to their sponsor's groups. Classes listed in exempt_classes (default standby) do not count against GPU-hour or concurrency limits (UC Riverside preemptable-partition pattern).",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/document"
+    },
+    {
+      "$ref": "#/$defs/evaluation"
+    }
+  ],
+  "$defs": {
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_concurrent_leases": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_lease_s": {
+          "$ref": "common.schema.json#/$defs/positive_duration_s",
+          "description": "When set for a principal or group, REPLACES the class default ceiling (policy.lease); bounded by the lane cap and policy.lease.absolute_max_s."
+        },
+        "max_queue_entries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_future_bookings": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_booking_s": {
+          "$ref": "common.schema.json#/$defs/positive_duration_s"
+        },
+        "booking_hours_per_week": {
+          "type": "number",
+          "minimum": 0
+        },
+        "gpu_hours_per_week": {
+          "description": "Rolling 7-day GPU-hours (lane-hours x cards) per lane tier; key '*' applies to all tiers not listed.",
+          "type": "object",
+          "propertyNames": {
+            "anyOf": [
+              {
+                "$ref": "common.schema.json#/$defs/short_identifier"
+              },
+              {
+                "const": "*"
+              }
+            ]
+          },
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "allowed_classes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "common.schema.json#/$defs/class"
+          }
+        },
+        "allowed_lanes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "common.schema.json#/$defs/short_identifier"
+              },
+              {
+                "const": "*"
+              }
+            ]
+          }
+        },
+        "max_jobs_queued": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_sessions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scratch_bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subject_kind",
+        "subject",
+        "limits"
+      ],
+      "properties": {
+        "subject_kind": {
+          "enum": [
+            "group",
+            "principal"
+          ]
+        },
+        "subject": {
+          "$ref": "common.schema.json#/$defs/identifier"
+        },
+        "limits": {
+          "$ref": "#/$defs/limits"
+        }
+      }
+    },
+    "document": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "document_id",
+        "revision",
+        "updated_at",
+        "exempt_classes",
+        "defaults",
+        "entries",
+        "credits"
+      ],
+      "properties": {
+        "schema_version": {
+          "$ref": "common.schema.json#/$defs/schema_version"
+        },
+        "document_id": {
+          "$ref": "common.schema.json#/$defs/short_identifier"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "updated_at": {
+          "$ref": "common.schema.json#/$defs/utc_time"
+        },
+        "exempt_classes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "common.schema.json#/$defs/class"
+          }
+        },
+        "defaults": {
+          "$ref": "#/$defs/limits"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/entry"
+          }
+        },
+        "credits": {
+          "description": "RESERVED, deferred past R1 (TARGET-MODEL: does not earn its place yet). Must be null in R1.",
+          "type": "null"
+        }
+      }
+    },
+    "evaluation": {
+      "description": "Result of evaluating one admission against quotas. A denial names the limit, the subject that set it, current use and the request (explainable refusals).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "decision",
+        "limit",
+        "set_by",
+        "current",
+        "requested",
+        "window"
+      ],
+      "properties": {
+        "kind": {
+          "const": "quota-evaluation"
+        },
+        "decision": {
+          "enum": [
+            "allow",
+            "deny"
+          ]
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "enum": [
+                "max_concurrent_leases",
+                "max_lease_s",
+                "max_queue_entries",
+                "max_future_bookings",
+                "max_booking_s",
+                "booking_hours_per_week",
+                "gpu_hours_per_week",
+                "allowed_classes",
+                "allowed_lanes",
+                "max_jobs_queued",
+                "max_sessions",
+                "scratch_bytes"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "set_by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/entry/properties/subject"
+            },
+            {
+              "const": "defaults"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "current": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requested": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "window": {
+          "anyOf": [
+            {
+              "enum": [
+                "instant",
+                "rolling-7d",
+                "future"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "const": "deny"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "limit": {
+                "type": "string"
+              },
+              "set_by": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "const": "allow"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "limit": {
+                "type": "null"
+              },
+              "set_by": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "x-examples": {
+    "valid": [
+      {
+        "schema_version": 2,
+        "document_id": "quotas",
+        "revision": 1,
+        "updated_at": "2026-10-02T00:00:00Z",
+        "exempt_classes": [
+          "standby"
+        ],
+        "defaults": {
+          "max_concurrent_leases": 1,
+          "max_lease_s": 14400,
+          "max_future_bookings": 2,
+          "max_booking_s": 14400,
+          "gpu_hours_per_week": {
+            "*": 24
+          },
+          "allowed_classes": [
+            "batch",
+            "standby"
+          ],
+          "allowed_lanes": [
+            "*"
+          ],
+          "max_queue_entries": 4
+        },
+        "entries": [
+          {
+            "subject_kind": "group",
+            "subject": "friends",
+            "limits": {
+              "booking_hours_per_week": 12,
+              "max_sessions": 1,
+              "scratch_bytes": 107374182400
+            }
+          },
+          {
+            "subject_kind": "principal",
+            "subject": "review-agent",
+            "limits": {
+              "max_lease_s": 43200
+            }
+          },
+          {
+            "subject_kind": "group",
+            "subject": "operators",
+            "limits": {
+              "allowed_classes": [
+                "operator",
+                "booked",
+                "batch",
+                "service",
+                "resident",
+                "standby"
+              ],
+              "max_concurrent_leases": 8,
+              "max_lease_s": 43200
+            }
+          }
+        ],
+        "credits": null
+      },
+      {
+        "kind": "quota-evaluation",
+        "decision": "deny",
+        "limit": "gpu_hours_per_week",
+        "set_by": "friends",
+        "current": 23.5,
+        "requested": 2,
+        "window": "rolling-7d"
+      },
+      {
+        "kind": "quota-evaluation",
+        "decision": "allow",
+        "limit": null,
+        "set_by": null,
+        "current": null,
+        "requested": null,
+        "window": null
+      }
+    ],
+    "invalid": [
+      {
+        "kind": "quota-evaluation",
+        "decision": "deny",
+        "limit": null,
+        "set_by": null,
+        "current": 1,
+        "requested": 1,
+        "window": "instant"
+      },
+      {
+        "schema_version": 2,
+        "document_id": "quotas",
+        "revision": 1,
+        "updated_at": "2026-10-02T00:00:00Z",
+        "exempt_classes": [],
+        "defaults": {
+          "max_gpus": 4
+        },
+        "entries": [],
+        "credits": null
+      }
+    ]
+  }
+}

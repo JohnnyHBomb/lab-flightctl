@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/approval.schema.json",
+  "title": "Flightctl override approval v2",
+  "description": "EXTENDS approval-v1 (which is KEPT unchanged for extension, forced-preemption, displacement, pipeline and operator-admission). v2 adds approvals for operator overrides addressed by PUBLIC id (G25), with an explicit target and beneficiary so the authority can apply the approval matrix in policy (the owner 2 Oct: FIDO2 only when someone else's work of EQUAL class is pre-empted or overtaken). Signing is identical to v1 (fixed ordered field list, JCS-RFC8785, UTF-8, domain + NUL, SHA-256) with domain flightctl/approval/v2 and the field list below. ssh-sk (CLI) and WebAuthn (browser) proofs from ../common.schema.json.",
+  "oneOf": [{ "$ref": "#/$defs/challenge" }, { "$ref": "#/$defs/approval" }],
+  "$defs": {
+    "action": { "enum": ["op-preempt", "queue-reorder", "op-stop", "op-extend", "booking-cancel-other", "queue-remove-other", "quarantine-clear", "config-activate"] },
+    "target": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "id", "principal_id", "class", "generation", "revision"],
+      "properties": {
+        "kind": { "enum": ["lease", "queue", "booking", "lane", "config"] },
+        "id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "principal_id": { "anyOf": [{ "$ref": "common.schema.json#/$defs/short_identifier" }, { "type": "null" }] },
+        "class": { "anyOf": [{ "$ref": "common.schema.json#/$defs/class" }, { "type": "null" }] },
+        "generation": { "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+        "revision": { "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] }
+      }
+    },
+    "beneficiary": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "id", "principal_id", "class"],
+          "properties": { "kind": { "enum": ["lease", "queue", "job", "booking"] }, "id": { "$ref": "common.schema.json#/$defs/identifier" }, "principal_id": { "$ref": "common.schema.json#/$defs/short_identifier" }, "class": { "$ref": "common.schema.json#/$defs/class" } } }
+      ]
+    },
+    "signed_fields": { "type": "array", "const": ["id", "action", "requester", "target", "beneficiary", "bounds", "reason", "nonce", "expires", "destination_site", "controller_id", "payload_hash", "policy_hash", "challenge_id", "challenge_nonce"] },
+    "bounds": { "anyOf": [{ "$ref": "../approval-v1.schema.json#/$defs/bounds" }, { "type": "null" }] },
+    "challenge": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "challenge_id", "action", "requester", "target", "beneficiary", "bounds", "payload_hash", "policy_hash", "destination_site", "controller_id", "nonce", "issued_at", "expires", "domain", "state"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "challenge_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "action": { "$ref": "#/$defs/action" },
+        "requester": { "$ref": "common.schema.json#/$defs/principal" },
+        "target": { "$ref": "#/$defs/target" },
+        "beneficiary": { "$ref": "#/$defs/beneficiary" },
+        "bounds": { "$ref": "#/$defs/bounds" },
+        "payload_hash": { "$ref": "common.schema.json#/$defs/sha256" },
+        "policy_hash": { "$ref": "common.schema.json#/$defs/sha256" },
+        "destination_site": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "controller_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "nonce": { "$ref": "common.schema.json#/$defs/identifier" },
+        "issued_at": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "expires": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "domain": { "const": "flightctl/approval/v2" },
+        "state": { "enum": ["issued", "expired", "revoked"] }
+      }
+    },
+    "approval": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "id", "challenge_id", "challenge_nonce", "action", "requester", "target", "beneficiary", "bounds", "reason", "nonce", "expires", "destination_site", "controller_id", "payload_hash", "policy_hash", "approver", "approved_at", "proof", "verified_evidence", "consumed_at", "canonicalization", "hash_algorithm", "domain", "signed_fields", "state"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "challenge_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "challenge_nonce": { "$ref": "common.schema.json#/$defs/identifier" },
+        "action": { "$ref": "#/$defs/action" },
+        "requester": { "$ref": "common.schema.json#/$defs/principal" },
+        "target": { "$ref": "#/$defs/target" },
+        "beneficiary": { "$ref": "#/$defs/beneficiary" },
+        "bounds": { "$ref": "#/$defs/bounds" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "nonce": { "$ref": "common.schema.json#/$defs/identifier" },
+        "expires": { "$ref": "common.schema.json#/$defs/utc_time" },
+        "destination_site": { "$ref": "common.schema.json#/$defs/short_identifier" },
+        "controller_id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "payload_hash": { "$ref": "common.schema.json#/$defs/sha256" },
+        "policy_hash": { "$ref": "common.schema.json#/$defs/sha256" },
+        "approver": { "anyOf": [{ "$ref": "common.schema.json#/$defs/principal" }, { "type": "null" }] },
+        "approved_at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/utc_time" }, { "type": "null" }] },
+        "proof": { "anyOf": [{ "$ref": "common.schema.json#/$defs/proof" }, { "type": "null" }] },
+        "verified_evidence": { "anyOf": [{ "$ref": "../common.schema.json#/$defs/verified_evidence" }, { "type": "null" }] },
+        "consumed_at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/utc_time" }, { "type": "null" }] },
+        "canonicalization": { "const": "JCS-RFC8785" },
+        "hash_algorithm": { "const": "SHA-256" },
+        "domain": { "const": "flightctl/approval/v2" },
+        "signed_fields": { "$ref": "#/$defs/signed_fields" },
+        "state": { "enum": ["issued", "approved", "consumed", "expired", "revoked"] }
+      },
+      "allOf": [
+        { "if": { "properties": { "state": { "enum": ["approved", "consumed"] } } }, "then": { "properties": { "approver": { "$ref": "common.schema.json#/$defs/principal" }, "approved_at": { "$ref": "common.schema.json#/$defs/utc_time" }, "proof": { "$ref": "common.schema.json#/$defs/proof" }, "verified_evidence": { "$ref": "../common.schema.json#/$defs/verified_evidence" } } } },
+        { "if": { "properties": { "state": { "const": "consumed" } } }, "then": { "properties": { "consumed_at": { "$ref": "common.schema.json#/$defs/utc_time" } } } },
+        { "if": { "properties": { "action": { "const": "op-extend" } } }, "then": { "properties": { "bounds": { "type": "object" }, "target": { "properties": { "kind": { "const": "lease" } } } } } },
+        { "if": { "properties": { "action": { "enum": ["op-preempt", "queue-reorder"] } } }, "then": { "properties": { "beneficiary": { "type": "object" } } } }
+      ]
+    }
+  },
+  "x-examples": {
+    "valid": [
+      { "schema_version": 2, "challenge_id": "chl-0001", "action": "queue-reorder", "requester": { "site_id": "site-a", "tenant_id": "site-a", "issuer": "tailnet-a", "subject": "owner" },
+        "target": { "kind": "queue", "id": "q-0007", "principal_id": "friend-a", "class": "batch", "generation": null, "revision": null },
+        "beneficiary": { "kind": "queue", "id": "q-0009", "principal_id": "friend-b", "class": "batch" }, "bounds": null,
+        "payload_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "policy_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "destination_site": "site-a", "controller_id": "controller-a", "nonce": "nonce-1", "issued_at": "2026-10-02T10:00:00Z", "expires": "2026-10-02T10:05:00Z", "domain": "flightctl/approval/v2", "state": "issued" }
+    ],
+    "invalid": [
+      { "schema_version": 2, "challenge_id": "chl-0002", "action": "op-preempt", "requester": { "site_id": "site-a", "tenant_id": "site-a", "issuer": "tailnet-a", "subject": "owner" },
+        "target": { "kind": "lease", "token": "5f815964f2cbc5d6" }, "beneficiary": null, "bounds": null,
+        "payload_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "policy_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "destination_site": "site-a", "controller_id": "controller-a", "nonce": "nonce-1", "issued_at": "2026-10-02T10:00:00Z", "expires": "2026-10-02T10:05:00Z", "domain": "flightctl/approval/v1", "state": "issued" }
+    ]
+  }
+}

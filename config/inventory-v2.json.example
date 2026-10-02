@@ -1,0 +1,154 @@
+{
+  "schema_version": 2,
+  "site_id": "site-a",
+  "revision": 3,
+  "stage": "confirmed",
+  "controller": {
+    "controller_id": "controller-a",
+    "host_id": "host-0",
+    "endpoint": "https://controller-a.example:8790/v2/rpc",
+    "auth_state": "configured"
+  },
+  "timezone": "Europe/London",
+  "endpoint_lane_order": [
+    "lane-gpu1"
+  ],
+  "hosts": [
+    {
+      "host_id": "host-0",
+      "roles": [
+        "controller",
+        "gpu"
+      ],
+      "ssh_endpoint": "host-0.example",
+      "ssh_user": "runner",
+      "reachability": "confirmed",
+      "observed_at": "2026-10-02T00:00:00Z",
+      "observation_error": null,
+      "gpu_count": 1,
+      "gpu_count_reason": null,
+      "devices": [
+        {
+          "device_id": "gpu-a",
+          "vendor": "nvidia",
+          "model": "Example GPU",
+          "vram_bytes": 25769803776,
+          "driver": "600.1",
+          "uuid": "GPU-00000000-0000-0000-0000-000000000001",
+          "pci_bus_id": "0000:8d:00.0",
+          "numa_node": 1,
+          "drives_display": false,
+          "unknown_reasons": {},
+          "device_minor": 0
+        }
+      ],
+      "power": {
+        "mode": "always-on",
+        "wakeable": false,
+        "wake_method": "none",
+        "wake_profile_ref": null,
+        "typical_wake_s": null,
+        "wake_timeout_s": 180,
+        "sleep_guard": false,
+        "inhibitor_what": "idle",
+        "linger": "enabled"
+      }
+    },
+    {
+      "host_id": "host-1",
+      "roles": [
+        "gpu",
+        "storage"
+      ],
+      "ssh_endpoint": "host-1.example",
+      "ssh_user": "runner",
+      "reachability": "asleep",
+      "observed_at": "2026-10-02T00:00:00Z",
+      "observation_error": null,
+      "gpu_count": 1,
+      "gpu_count_reason": null,
+      "devices": [
+        {
+          "device_id": "gpu-b",
+          "vendor": "nvidia",
+          "model": "Example GPU",
+          "vram_bytes": 16106127360,
+          "driver": "600.1",
+          "uuid": "GPU-00000000-0000-0000-0000-000000000002",
+          "pci_bus_id": "0000:03:00.0",
+          "numa_node": null,
+          "drives_display": false,
+          "unknown_reasons": {
+            "numa_node": "no numa affinity reported"
+          },
+          "device_minor": 0
+        }
+      ],
+      "power": {
+        "mode": "sleeps",
+        "wakeable": true,
+        "wake_method": "wol",
+        "wake_profile_ref": "wake-host-1",
+        "typical_wake_s": 30,
+        "wake_timeout_s": 180,
+        "sleep_guard": true,
+        "inhibitor_what": "idle",
+        "linger": "unknown"
+      }
+    }
+  ],
+  "lanes": [
+    {
+      "lane_id": "lane-gpu1",
+      "host_id": "host-1",
+      "device_ids": [
+        "gpu-b"
+      ],
+      "class": "gpu",
+      "enabled": true,
+      "policy": {
+        "site_id": "site-a",
+        "capability_class": "small-16g",
+        "capabilities": [
+          "compute"
+        ],
+        "isolation": [
+          "cgroup"
+        ],
+        "sanitisation": [
+          "gpu-empty-check"
+        ],
+        "assurance": {
+          "required": [],
+          "offered": [
+            "observed"
+          ],
+          "verified": [],
+          "evidence_refs": [],
+          "unknown": false
+        },
+        "observed_at": "2026-10-02T00:00:00Z"
+      },
+      "rules": {
+        "tier": "small",
+        "class_ceiling": {
+          "agent": "batch"
+        },
+        "max_lease_s": 43200,
+        "access_modes": [
+          "lease",
+          "queue",
+          "booking",
+          "job",
+          "endpoint"
+        ],
+        "vram_cap_bytes": null,
+        "external_tenant": {
+          "policy": "collision",
+          "process_noise_mib": 512,
+          "lane_noise_mib": 1024
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,632 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/adapters.schema.json",
+  "title": "Flightctl site adapters configuration v2 (the 'flip a switch to real lanes' file)",
+  "description": "NEW (ADAPTER-PRINCIPLE). Site configuration, not wire format; lives in the site deploy directory, never in the repo (the repo ships config/adapters.json.example). Selects fake | dryrun | real | record per port, sets the site profile (sim | shadow | live) and a mode per lane (off | sim | shadow | live). Semantic fail-closed rules that JSON Schema cannot express are in ADAPTERS.md section 3 and tests/contracts_v2/validation.py adapters_semantics(); startup refuses a config that violates any of them and names the port and lane. Round 2 (Sol 6 B3): command_runner is selected here like every other port; 'features' declares which capabilities are ON, and a port REQUIRED by an enabled feature may not be fake in live (allow_fake cannot override that); every mutating port is lane-scoped, and a shadow lane forces ALL of them to dryrun (a global host-write prohibition for that lane).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "site_id",
+    "profile",
+    "features",
+    "ports",
+    "allow_fake",
+    "lanes",
+    "hosts",
+    "roots",
+    "wake_profiles",
+    "secrets",
+    "evidence_dir_ref"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "common.schema.json#/$defs/schema_version"
+    },
+    "site_id": {
+      "$ref": "common.schema.json#/$defs/short_identifier"
+    },
+    "profile": {
+      "enum": [
+        "sim",
+        "shadow",
+        "live"
+      ]
+    },
+    "ports": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clock",
+        "command_runner",
+        "executor_transport",
+        "workload_runner",
+        "occupancy_probe",
+        "inventory_probe",
+        "peer_identity",
+        "waker",
+        "inhibitor",
+        "notifier",
+        "model_cache",
+        "session_gateway",
+        "signer",
+        "health_probe",
+        "legacy_observer",
+        "release_backend"
+      ],
+      "properties": {
+        "clock": {
+          "$ref": "#/$defs/impl"
+        },
+        "executor_transport": {
+          "$ref": "#/$defs/impl"
+        },
+        "workload_runner": {
+          "$ref": "#/$defs/impl"
+        },
+        "occupancy_probe": {
+          "$ref": "#/$defs/impl"
+        },
+        "inventory_probe": {
+          "$ref": "#/$defs/impl"
+        },
+        "peer_identity": {
+          "$ref": "#/$defs/impl"
+        },
+        "waker": {
+          "$ref": "#/$defs/impl"
+        },
+        "inhibitor": {
+          "$ref": "#/$defs/impl"
+        },
+        "notifier": {
+          "$ref": "#/$defs/impl"
+        },
+        "model_cache": {
+          "$ref": "#/$defs/impl"
+        },
+        "session_gateway": {
+          "$ref": "#/$defs/impl"
+        },
+        "signer": {
+          "$ref": "#/$defs/impl"
+        },
+        "health_probe": {
+          "$ref": "#/$defs/impl"
+        },
+        "legacy_observer": {
+          "$ref": "#/$defs/impl"
+        },
+        "release_backend": {
+          "$ref": "#/$defs/impl"
+        },
+        "command_runner": {
+          "$ref": "#/$defs/impl"
+        }
+      }
+    },
+    "allow_fake": {
+      "description": "Ports permitted to stay fake in profile live (e.g. notifier before a channel is configured). Lane-critical ports may never be listed.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "notifier",
+          "model_cache",
+          "session_gateway",
+          "signer",
+          "legacy_observer",
+          "release_backend",
+          "health_probe"
+        ]
+      }
+    },
+    "lanes": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "common.schema.json#/$defs/short_identifier"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "enum": [
+              "off",
+              "sim",
+              "shadow",
+              "live"
+            ]
+          },
+          "ports": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "command_runner": {
+                "$ref": "#/$defs/impl"
+              },
+              "executor_transport": {
+                "$ref": "#/$defs/impl"
+              },
+              "occupancy_probe": {
+                "$ref": "#/$defs/impl"
+              },
+              "workload_runner": {
+                "$ref": "#/$defs/impl"
+              },
+              "inhibitor": {
+                "$ref": "#/$defs/impl"
+              },
+              "waker": {
+                "$ref": "#/$defs/impl"
+              },
+              "model_cache": {
+                "$ref": "#/$defs/impl"
+              },
+              "session_gateway": {
+                "$ref": "#/$defs/impl"
+              },
+              "notifier": {
+                "$ref": "#/$defs/impl"
+              },
+              "release_backend": {
+                "$ref": "#/$defs/impl"
+              },
+              "health_probe": {
+                "$ref": "#/$defs/impl"
+              }
+            }
+          },
+          "wake_needed": {
+            "type": "boolean",
+            "default": true,
+            "description": "false for lanes on always-on hosts (no waker required)."
+          },
+          "shadow_since": {
+            "anyOf": [
+              {
+                "$ref": "common.schema.json#/$defs/utc_time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "legacy_lane": {
+            "anyOf": [
+              {
+                "$ref": "common.schema.json#/$defs/short_identifier"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Legacy lane name the shadow observer and shim map to this lane."
+          },
+          "shadow_real": {
+            "description": "Round 3 (Sol 6 B1): the ONLY permitted real write on a shadow lane, used for A-ASM step 4 (prove the real inhibitor while legacy lanes.sh still fences the lane). Allowed only with mode shadow and a non-null legacy_lane; never workload, waker or any other port.",
+            "type": "array",
+            "maxItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "const": "inhibitor"
+            }
+          }
+        }
+      }
+    },
+    "hosts": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "common.schema.json#/$defs/short_identifier"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "executor"
+        ],
+        "properties": {
+          "executor": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "transport",
+              "target",
+              "key_ref",
+              "timeout_s"
+            ],
+            "properties": {
+              "transport": {
+                "enum": [
+                  "in-process",
+                  "local-subprocess",
+                  "ssh-forced-command"
+                ]
+              },
+              "target": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._@-]{1,253}$"
+              },
+              "key_ref": {
+                "anyOf": [
+                  {
+                    "$ref": "common.schema.json#/$defs/short_identifier"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "timeout_s": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 120
+              }
+            }
+          }
+        }
+      }
+    },
+    "roots": {
+      "description": "Named filesystem roots (model store, cache, scratch, output, deploy, executor state). Absolute paths are site data and appear only here.",
+      "type": "object",
+      "propertyNames": {
+        "$ref": "common.schema.json#/$defs/short_identifier"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "host_id",
+          "path"
+        ],
+        "properties": {
+          "host_id": {
+            "$ref": "common.schema.json#/$defs/short_identifier"
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^(/|~/)[^\\0]{0,1023}$"
+          }
+        }
+      }
+    },
+    "wake_profiles": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "common.schema.json#/$defs/short_identifier"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "method",
+          "mac",
+          "broadcast",
+          "port",
+          "send_from_host",
+          "answer_probe"
+        ],
+        "properties": {
+          "method": {
+            "const": "wol"
+          },
+          "mac": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{2}(:[0-9a-f]{2}){5}$"
+          },
+          "broadcast": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "port": {
+            "type": "integer",
+            "enum": [
+              7,
+              9
+            ]
+          },
+          "send_from_host": {
+            "$ref": "common.schema.json#/$defs/short_identifier"
+          },
+          "answer_probe": {
+            "enum": [
+              "ssh-true",
+              "executor-inspect"
+            ]
+          }
+        }
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "smtp_ref",
+        "slack_ref",
+        "approval_keys_ref"
+      ],
+      "properties": {
+        "smtp_ref": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(/|~/)[^\\0]{0,1023}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "slack_ref": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(/|~/)[^\\0]{0,1023}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "approval_keys_ref": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(/|~/)[^\\0]{0,1023}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "evidence_dir_ref": {
+      "$ref": "common.schema.json#/$defs/short_identifier",
+      "description": "Root where onlab conformance runs write dated JSON results (ADAPTERS.md D3)."
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "holder_leases",
+        "wake",
+        "jobs",
+        "endpoints",
+        "sessions",
+        "model_cache",
+        "notifications",
+        "fido2_approvals",
+        "release_backend",
+        "shadow_observer"
+      ],
+      "properties": {
+        "holder_leases": {
+          "type": "boolean"
+        },
+        "wake": {
+          "type": "boolean"
+        },
+        "jobs": {
+          "type": "boolean"
+        },
+        "endpoints": {
+          "type": "boolean"
+        },
+        "sessions": {
+          "type": "boolean"
+        },
+        "model_cache": {
+          "type": "boolean"
+        },
+        "notifications": {
+          "type": "boolean"
+        },
+        "fido2_approvals": {
+          "type": "boolean"
+        },
+        "release_backend": {
+          "type": "boolean"
+        },
+        "shadow_observer": {
+          "type": "boolean"
+        }
+      },
+      "x-required-ports": {
+        "holder_leases": [
+          "clock",
+          "command_runner",
+          "executor_transport",
+          "occupancy_probe",
+          "inventory_probe",
+          "peer_identity",
+          "inhibitor"
+        ],
+        "wake": [
+          "waker"
+        ],
+        "jobs": [
+          "workload_runner",
+          "model_cache"
+        ],
+        "endpoints": [
+          "workload_runner",
+          "health_probe",
+          "model_cache"
+        ],
+        "sessions": [
+          "session_gateway"
+        ],
+        "model_cache": [
+          "model_cache"
+        ],
+        "notifications": [
+          "notifier"
+        ],
+        "fido2_approvals": [
+          "signer"
+        ],
+        "release_backend": [
+          "release_backend"
+        ],
+        "shadow_observer": [
+          "legacy_observer"
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "impl": {
+      "enum": [
+        "fake",
+        "dryrun",
+        "real",
+        "record"
+      ]
+    }
+  },
+  "x-examples": {
+    "valid": [
+      {
+        "schema_version": 2,
+        "site_id": "site-a",
+        "profile": "live",
+        "ports": {
+          "clock": "real",
+          "command_runner": "real",
+          "executor_transport": "real",
+          "workload_runner": "real",
+          "occupancy_probe": "real",
+          "inventory_probe": "real",
+          "peer_identity": "real",
+          "waker": "real",
+          "inhibitor": "real",
+          "notifier": "fake",
+          "model_cache": "fake",
+          "session_gateway": "fake",
+          "signer": "fake",
+          "health_probe": "fake",
+          "legacy_observer": "real",
+          "release_backend": "fake"
+        },
+        "allow_fake": [
+          "notifier",
+          "session_gateway",
+          "signer",
+          "release_backend",
+          "model_cache",
+          "health_probe"
+        ],
+        "lanes": {
+          "lane-gpu1": {
+            "mode": "live",
+            "shadow_since": "2026-10-03T00:00:00Z",
+            "legacy_lane": "lane-gpu1"
+          },
+          "lane-gpu0": {
+            "mode": "shadow",
+            "ports": {
+              "workload_runner": "dryrun",
+              "inhibitor": "dryrun",
+              "waker": "dryrun",
+              "model_cache": "dryrun",
+              "session_gateway": "dryrun",
+              "notifier": "dryrun",
+              "release_backend": "dryrun"
+            },
+            "wake_needed": false,
+            "shadow_since": "2026-10-04T00:00:00Z",
+            "legacy_lane": "lane-gpu0"
+          },
+          "lane-desk": {
+            "mode": "off"
+          }
+        },
+        "hosts": {
+          "host-1": {
+            "executor": {
+              "transport": "ssh-forced-command",
+              "target": "runner@host-1.example",
+              "key_ref": "executor-key",
+              "timeout_s": 20
+            }
+          }
+        },
+        "roots": {
+          "model-store": {
+            "host_id": "host-1",
+            "path": "/srv-example/models"
+          }
+        },
+        "wake_profiles": {
+          "wake-host-1": {
+            "method": "wol",
+            "mac": "00:11:22:33:44:55",
+            "broadcast": "broadcast-example",
+            "port": 9,
+            "send_from_host": "host-0",
+            "answer_probe": "ssh-true"
+          }
+        },
+        "secrets": {
+          "smtp_ref": null,
+          "slack_ref": null,
+          "approval_keys_ref": null
+        },
+        "evidence_dir_ref": "evidence",
+        "features": {
+          "holder_leases": true,
+          "wake": true,
+          "jobs": false,
+          "endpoints": false,
+          "sessions": false,
+          "model_cache": false,
+          "notifications": false,
+          "fido2_approvals": false,
+          "release_backend": false,
+          "shadow_observer": true
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "schema_version": 2,
+        "site_id": "site-a",
+        "profile": "live",
+        "ports": {
+          "clock": "real"
+        },
+        "allow_fake": [
+          "executor_transport"
+        ],
+        "lanes": {},
+        "hosts": {},
+        "roots": {},
+        "wake_profiles": {},
+        "secrets": {
+          "smtp_ref": null,
+          "slack_ref": null,
+          "approval_keys_ref": null
+        },
+        "evidence_dir_ref": "evidence",
+        "features": {
+          "holder_leases": true,
+          "wake": true,
+          "jobs": false,
+          "endpoints": false,
+          "sessions": false,
+          "model_cache": false,
+          "notifications": false,
+          "fido2_approvals": false,
+          "release_backend": false,
+          "shadow_observer": true
+        }
+      }
+    ]
+  }
+}

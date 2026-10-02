@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightctl.local/contracts/v2/helper-config.schema.json",
+  "title": "flightctl-helper trusted configuration v2 (root-owned allowlist)",
+  "description": "NEW in round 3 (Sol 6 C7h finding). The privilege boundary of the root helper, as data the helper reads from ONE fixed root-owned path. The caller (executor account) can pass no config path, no environment and no free-form argument: every subcommand argument must match this allowlist. Install invariants (checked by the C7h install audit, tests/contracts_v2/validation.py helper_install_audit/sudoers_audit): the helper executable, this config and every directory up to / are owned by root and not writable by group or other; sudo has exactly ONE rule for the executor account, NOPASSWD, naming the helper's absolute path, with env_reset and no SETENV; managed keys live in a root-owned directory referenced by sshd AuthorizedKeysFile (never in the friend's home, so no attacker-controlled path or symlink is followed) and are written with O_NOFOLLOW to a temp file in that directory then renamed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "caller_account",
+    "agent_isolation",
+    "friend_accounts",
+    "lanes",
+    "unit_name_pattern",
+    "keys_dir",
+    "argv_roots",
+    "max_argv",
+    "claims_dir",
+    "operator_account"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "common.schema.json#/$defs/schema_version"
+    },
+    "caller_account": {
+      "type": "string",
+      "pattern": "^[a-z_][a-z0-9_-]{0,31}$",
+      "description": "The only account sudo lets run the helper (the executor account)."
+    },
+    "friend_accounts": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^fc-[a-z0-9][a-z0-9_-]{0,28}$",
+        "not": {
+          "pattern": "^fc-svc$"
+        }
+      }
+    },
+    "lanes": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "common.schema.json#/$defs/short_identifier"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "device_minors"
+        ],
+        "properties": {
+          "device_minors": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            }
+          }
+        }
+      }
+    },
+    "unit_name_pattern": {
+      "const": "^flightctl-[a-z][a-z0-9._-]{0,63}-g[1-9][0-9]{0,17}\\.service$"
+    },
+    "keys_dir": {
+      "type": "string",
+      "pattern": "^/etc/ssh/flightctl-keys$"
+    },
+    "argv_roots": {
+      "description": "argv[0] of unit-start must resolve (realpath) under one of these root-owned directories; no shell.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "pattern": "^/(usr|opt|srv)/[A-Za-z0-9._/-]{1,200}$"
+      }
+    },
+    "max_argv": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 256
+    },
+    "agent_isolation": {
+      "const": "dynamic-user",
+      "description": "Round 5 (Sol 6 r4): agents' unit work runs with systemd DynamicUser=yes, one ephemeral UID per job unit, and StateDirectory=flightctl-jobs/<job_id> with StateDirectoryMode=0700. systemd keeps DynamicUser state directories under a root-only (0700) private parent, so another agent job (another ephemeral UID) cannot traverse to or read this job's staging; the shared fc-svc account is gone. The helper records the job's UID from the running unit (systemctl show -p UID) and output-collect accepts only files owned by that UID. output-collect takes the job id only and resolves the recorded UID (round 6)."
+    },
+    "claims_dir": {
+      "type": "string",
+      "pattern": "^/(etc|usr/local|srv)/[A-Za-z0-9._/-]{1,200}$",
+      "description": "Root-owned 0700 directory on PERSISTENT storage (never tmpfs: a claim must survive reboot until reconciled); one <account>.parent file per active friend parent lease."
+    },
+    "operator_account": {
+      "type": "string",
+      "pattern": "^[a-z_][a-z0-9_-]{0,31}$",
+      "description": "Round 8 (Sol 6 r7): the only account whose sudo-started invocation of /usr/local/libexec/flightctl-claim-clear may lift a quarantine. Must differ from caller_account and from every friend account (helper_config_semantics). Its sudoers rule must re-authenticate (no NOPASSWD): operator_sudo_audit. Round 9: that rule must also set timestamp_timeout=0 for the program (clear_fresh_auth_audit)."
+    }
+  },
+  "x-subcommands": {
+    "unit-start": "agents: --job <public id> --lane <lanes key> --unit <unit_name_pattern> -- <argv>  => systemd-run (system manager) -p DynamicUser=yes -p StateDirectory=flightctl-jobs/<job> -p StateDirectoryMode=0700 -p DevicePolicy=closed -p DeviceAllow=<lane nodes> -p KillMode=control-group --collect; friends: --account <friend_accounts> --parent-lease <lease_id> (ONE admission rule (round 8): while the account is quarantined, no claim of any kind is admitted (no new parent, no child of the old parent); otherwise a request is admitted only as the account's first parent claim or as a child of the claimed parent; the claim check and systemd-run run under the account's flock) and --uid=<account> instead of DynamicUser",
+    "unit-stop": "--unit <unit_name_pattern>  (only units this helper started: checked by the unit's FLIGHTCTL_HELPER=1 property)",
+    "session-open": "--account <friend_accounts> --parent-lease <lease_id> --lane <lanes key> --pubkey-file-fd 0 --expires <utc>: ONE admission rule (round 8): while the account is quarantined, no claim of any kind is admitted (no new parent, no child of the old parent); otherwise a request is admitted only as the account's first parent claim or as a child of the claimed parent. The first parent claim is published with an atomic link(); the claim check and the session setup run under the account's flock, which claim-reconcile also takes to write the marker",
+    "session-close": "--account <friend_accounts>",
+    "output-collect": "--job <public id>  (round 6: no account argument. The helper resolves the job id in its root-owned job registry, written at unit-start, to the job's unit and the UID recorded from that unit (systemctl show -p UID right after start: the per-job DynamicUser UID for agents, the fc-<name> UID for friends). After the unit stopped and its cgroup is empty it copies from that job's staging only regular files with st_nlink == 1 and st_uid == the recorded UID into the executor-owned output store, and rejects the rest.)",
+    "account-check": "--account <friend_accounts>",
+    "claim-release": "--account <friend_accounts> --parent-lease <lease_id> + close proof (user slice empty, lane occupancy empty, keys removed): the ONLY way a claim is removed. Race-safe: open the claim O_NOFOLLOW, check the lease, rename it to a unique tombstone, and delete only if the tombstone's inode equals the opened fd's inode; otherwise restore it and refuse. Refused while the account is quarantined (only the operator's claim-clear lifts a quarantine)",
+    "claim-reconcile": "--active <account=lease_id,...> --boot <boot id>: called during A8 reconcile. NEVER removes a claim: a claim the authority lists is 'kept'; one it omits is 'orphaned-quarantined' and one naming another parent is 'conflict'; both write the account's quarantine marker, which REFUSES every later session-open/unit-start for the account (children of the old parent included), under the account's flock, and raise an operator alert; NOT a way to clear: see x-operator-clear"
+  },
+  "x-examples": {
+    "valid": [
+      {
+        "schema_version": 2,
+        "caller_account": "runner",
+        "friend_accounts": [
+          "fc-frienda"
+        ],
+        "lanes": {
+          "lane-gpu1": {
+            "device_minors": [
+              0,
+              1
+            ]
+          }
+        },
+        "unit_name_pattern": "^flightctl-[a-z][a-z0-9._-]{0,63}-g[1-9][0-9]{0,17}\\.service$",
+        "keys_dir": "/etc/ssh/flightctl-keys",
+        "argv_roots": [
+          "/usr/local/lib/flightctl-templates"
+        ],
+        "max_argv": 64,
+        "agent_isolation": "dynamic-user",
+        "claims_dir": "/etc/flightctl/claims",
+        "operator_account": "opr"
+      }
+    ],
+    "invalid": [
+      {
+        "schema_version": 2,
+        "caller_account": "runner",
+        "friend_accounts": [
+          "fc-svc"
+        ],
+        "lanes": {},
+        "unit_name_pattern": "^flightctl-[a-z][a-z0-9._-]{0,63}-g[1-9][0-9]{0,17}\\.service$",
+        "keys_dir": "/etc/ssh/flightctl-keys",
+        "argv_roots": [
+          "/usr/local/lib/flightctl-templates"
+        ],
+        "max_argv": 64,
+        "agent_isolation": "dynamic-user",
+        "claims_dir": "/etc/flightctl/claims",
+        "operator_account": "opr"
+      },
+      {
+        "schema_version": 2,
+        "caller_account": "runner",
+        "friend_accounts": [],
+        "lanes": {},
+        "unit_name_pattern": ".*",
+        "keys_dir": "/tmp/keys",
+        "argv_roots": [
+          "/tmp"
+        ],
+        "max_argv": 64,
+        "agent_isolation": "dynamic-user",
+        "claims_dir": "/etc/flightctl/claims",
+        "operator_account": "opr"
+      },
+      {
+        "schema_version": 2,
+        "caller_account": "runner",
+        "friend_accounts": [
+          "fc-frienda"
+        ],
+        "lanes": {
+          "lane-gpu1": {
+            "device_minors": [
+              0,
+              1
+            ]
+          }
+        },
+        "unit_name_pattern": "^flightctl-[a-z][a-z0-9._-]{0,63}-g[1-9][0-9]{0,17}\\.service$",
+        "keys_dir": "/etc/ssh/flightctl-keys",
+        "argv_roots": [
+          "/usr/local/lib/flightctl-templates"
+        ],
+        "max_argv": 64,
+        "agent_isolation": "dynamic-user",
+        "claims_dir": "/etc/flightctl/claims"
+      }
+    ]
+  },
+  "x-operator-clear": "Round 8 (Sol 6 r7): claim-clear is NOT a subcommand of the executor's helper (which refuses the name). It is the separate program /usr/local/libexec/flightctl-claim-clear --account <friend_accounts> --parent-lease <lease_id> + close proof, mode 0700 root:root, so only root can execute it, reachable only through the operator's own sudoers rule '<operator_account> ALL=(root) /usr/local/libexec/flightctl-claim-clear' WITHOUT NOPASSWD and with FRESH authentication on every invocation: 'Defaults!/usr/local/libexec/flightctl-claim-clear timestamp_timeout=0' (round 9, Sol 6 r8: sudo otherwise accepts a cached credential for 5 minutes; sudoers(5) 1.9.17p2: 0 = always prompt, command-specific Defaults are applied once the command's path is known; `!authenticate` is forbidden; config/flightctl-claim-clear-sudoers.example). It refuses unless its real and effective UID are 0 and SUDO_USER/SUDO_UID (set by sudo after env_reset) equal operator_account and its UID (clear_authorized). It takes the account's flock, removes the claim (inode-checked tombstone) and then the marker; a crash in between leaves the account blocked. The C7h install audit runs operator_sudo_audit on `sudo -l -U <operator>` (every route to the program, including ALL, wildcard, directory, regex, argument-bearing and Cmnd_Alias grants, must be password-protected, and the EFFECTIVE timestamp_timeout for the program must be 0) and no_clear_route_audit (the same route matching) for the executor and every friend account; both also read the installed sudoers files to expand Cmnd_Alias, and an unresolvable alias counts as a route (fail closed)."
+}

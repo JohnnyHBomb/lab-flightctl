@@ -1,0 +1,5 @@
+# /etc/sudoers.d/flightctl-helper (example; install with visudo -cf, mode 0440 root:root)
+# Exactly one rule: the executor account may run the helper, as root, without a password, with a clean environment.
+# The helper validates every argument against its root-owned allowlist (helper-config.schema.json).
+Defaults:runner env_reset, !setenv, secure_path="/usr/sbin:/usr/bin:/sbin:/bin"
+runner ALL=(root) NOPASSWD: /usr/local/libexec/flightctl-helper

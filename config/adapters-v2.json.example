@@ -1,0 +1,100 @@
+{
+  "schema_version": 2,
+  "site_id": "site-a",
+  "profile": "live",
+  "ports": {
+    "clock": "real",
+    "command_runner": "real",
+    "executor_transport": "real",
+    "workload_runner": "real",
+    "occupancy_probe": "real",
+    "inventory_probe": "real",
+    "peer_identity": "real",
+    "waker": "real",
+    "inhibitor": "real",
+    "notifier": "fake",
+    "model_cache": "fake",
+    "session_gateway": "fake",
+    "signer": "fake",
+    "health_probe": "fake",
+    "legacy_observer": "real",
+    "release_backend": "fake"
+  },
+  "allow_fake": [
+    "notifier",
+    "session_gateway",
+    "signer",
+    "release_backend",
+    "model_cache",
+    "health_probe"
+  ],
+  "lanes": {
+    "lane-gpu1": {
+      "mode": "live",
+      "shadow_since": "2026-10-03T00:00:00Z",
+      "legacy_lane": "lane-gpu1"
+    },
+    "lane-gpu0": {
+      "mode": "shadow",
+      "ports": {
+        "workload_runner": "dryrun",
+        "inhibitor": "dryrun",
+        "waker": "dryrun",
+        "model_cache": "dryrun",
+        "session_gateway": "dryrun",
+        "notifier": "dryrun",
+        "release_backend": "dryrun"
+      },
+      "wake_needed": false,
+      "shadow_since": "2026-10-04T00:00:00Z",
+      "legacy_lane": "lane-gpu0"
+    },
+    "lane-desk": {
+      "mode": "off"
+    }
+  },
+  "hosts": {
+    "host-1": {
+      "executor": {
+        "transport": "ssh-forced-command",
+        "target": "runner@host-1.example",
+        "key_ref": "executor-key",
+        "timeout_s": 20
+      }
+    }
+  },
+  "roots": {
+    "model-store": {
+      "host_id": "host-1",
+      "path": "/srv-example/models"
+    }
+  },
+  "wake_profiles": {
+    "wake-host-1": {
+      "method": "wol",
+      "mac": "00:11:22:33:44:55",
+      "broadcast": "broadcast-example",
+      "port": 9,
+      "send_from_host": "host-0",
+      "answer_probe": "ssh-true"
+    }
+  },
+  "secrets": {
+    "smtp_ref": null,
+    "slack_ref": null,
+    "approval_keys_ref": null
+  },
+  "evidence_dir_ref": "evidence",
+  "features": {
+    "holder_leases": true,
+    "wake": true,
+    "jobs": false,
+    "endpoints": false,
+    "sessions": false,
+    "model_cache": false,
+    "notifications": false,
+    "fido2_approvals": false,
+    "release_backend": false,
+    "shadow_observer": true
+  }
+}
