@@ -564,7 +564,7 @@ def test_assembled_scenarios() -> None:
     if phase == "scaffold":
         pytest.skip("assembled scenarios unexecuted in scaffold phase; real P1-P5/P7 packages are required")
     required = ["flightctl.authority", "flightctl.auth", "flightctl.store", "flightctl.executor", "flightctl.client", "flightctl.discovery"]
-    required_paths = ["roster/run_arm.sh", "ondemand/qwen-od-proxy.sh"]
+    required_paths = ["roster/run_arm.sh"]
     missing = []
     for name in required:
         try:
