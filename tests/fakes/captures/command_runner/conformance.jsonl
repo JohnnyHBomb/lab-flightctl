@@ -1,0 +1,2 @@
+{"argv": ["sleep", "5"], "duration_s": 5.0021182369673625, "error": null, "host_id": null, "returncode": 0, "stderr": "", "stdin_sha256": null, "stdout": "", "timed_out": false}
+{"argv": ["printf", "%s", "a b; $(echo x) `y`"], "duration_s": 0.0011768529657274485, "error": null, "host_id": null, "returncode": 0, "stderr": "", "stdin_sha256": null, "stdout": "a b; $(echo x) `y`", "timed_out": false}
