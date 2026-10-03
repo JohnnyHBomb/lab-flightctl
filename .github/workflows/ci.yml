@@ -82,7 +82,7 @@ jobs:
         run: >-
           python -m pytest -o addopts="" -q
           tests/authority tests/chat tests/client tests/conformance tests/contracts tests/contracts_v2
-          tests/discovery tests/executor tests/integration tests/roster tests/adapters tests/sim
+          tests/discovery tests/executor tests/integration tests/roster tests/adapters tests/sim tests/clock
       - name: Portability
         run: python tools/check_portability.py .
       - name: External denylist

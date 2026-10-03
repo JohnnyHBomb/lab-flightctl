@@ -32,6 +32,7 @@ from .auth import (
     local_action_digest,
     local_action_projection,
 )
+from .clock import RealClock
 from .store import SQLiteStore, StoreError, StoreUnavailable, utc_text
 
 
@@ -56,24 +57,6 @@ class _Reject(Exception):
         self.retryable = retryable
         self.failure_class = failure_class
         self.details = dict(details or {})
-
-
-class RealClock:
-    def utc(self) -> datetime:
-        return datetime.now(timezone.utc)
-
-    def monotonic(self) -> float:
-        import time
-
-        return time.monotonic()
-
-    def boot_id(self) -> str:
-        # The controller does not need a host-specific boot identifier to be
-        # useful in tests; a process identifier still prevents accidental
-        # reuse across real process restarts.
-        import os
-
-        return f"process-{os.getpid()}"
 
 
 def _parse_time(value: str) -> datetime:
