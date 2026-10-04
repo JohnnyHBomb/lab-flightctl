@@ -68,9 +68,9 @@ each assembly's prerequisites are delivered before that assembly runs.
 | A3 | Part 1 (Amendment 5): OccupancyProbe real twin; aggregate-memory emptiness, noise by identity | A | S | A2 | L, S6, A | occupancy_probe | G05 probe, Grok 3, Sol B2 |
 | A3i | Part 2 (Amendment 5): InventoryProbe real twin + golden captures per card model + replay-backed probe fakes | A | S | A3 | L, A, Q | inventory_probe | Grok 4, G05 fixtures |
 | A3b | Inventory v2 (+device minor) + discovery v2 on the real probe | A | S | A3i | L, A, Q | - | G07, Grok 4 |
-| A4 | Executor stdio entry point + local-subprocess and ssh forced-command transports | A | M | A1, A2 | O, L, S6 | executor_transport | G04 |
+| A4 | Executor stdio entry point + local-subprocess and ssh forced-command transports | A | M | A1, A2 | O, L, S6 | - | G04 |
 | A4u | Unit and timer templates, deploy-dir layout, config loader | A | S | A4, A3 | L, A, Q | - | G04 timer, G24 |
-| A5a | Executor v2 semantics (executor side), ceiling invariant | A | M | A0c, A4 | O, L, S6 | - | G02, G03 host side, Grok 1/7, Sol N1 |
+| A5a | Executor v2 semantics (executor side), ceiling invariant | A | M | A0c, A4 | O, L, S6 | executor_transport | G02, G03 host side, Grok 1/7, Sol N1 |
 | A5b1 | Authority executor client: identity before reserve, definite refusal, cause chain | A | M | A5a | O, L, S6 | - | Grok 1/7 |
 | A5b2 | Authority beat loop + rolling renew within ceiling + max-end margin | A | M | A5b1 | O, L, S6 | - | G03, Grok 2, Sol N1 |
 | A6 | WorkloadRunner real twin (systemd --user) + dryrun + per-unit fake; linger probe | A | S | A2 | L, S6, A | workload_runner | G05 systemd, Grok 5, D-pow-4 |
@@ -260,7 +260,7 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
 ### A4: executor entry point and transports
 - GOAL: A real executor process answers the authority over a real pipe, both locally and through a forced-command ssh key.
 - SCOPE: `flightctl/executor_stdio.py` (one-shot: JSON in, JSON out, persistent state), `flightctl/transport.py`, tests.
-- ACCEPTANCE: executor_transport conformance [strict]; `test_one_shot_invocations_keep_state` [realtime]; `test_wrong_key_denied` [onlab]; `test_garbage_is_unparsable_not_ok`.
+- ACCEPTANCE: `test_one_shot_invocations_keep_state` [realtime]; `test_wrong_key_denied` [onlab]; `test_garbage_is_unparsable_not_ok`; `test_transport_failures_are_typed_and_bounded` [realtime]. Amendment 6: executor_transport conformance [strict] moved to A5a (the frozen cases assert v2 executor replies, which A5a delivers).
 - PROOF: G3 local plus ssh to the pilot host (inspect only). SEATS: O, L, S6.
 
 ### A4u: units, timers, deploy-dir layout
@@ -276,7 +276,7 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
   - Max-end is set once and never increases. Only `extend` with an approval moves it.
   - A message older than `max_clock_skew_s` is refused as definite `clock_skew`.
   - Reserve takes the inhibitor first, then the fence (D-pow-3).
-- ACCEPTANCE: `test_relative_deadline_anchored_on_host_clock`; `test_beat_extends_expiry_never_max_end`; `test_stop_requires_reserve_identity_and_empty_proof`; `test_definite_refusal_leaves_no_fence_and_no_inhibitor`; `test_enforcer_real_seconds` [realtime].
+- ACCEPTANCE: executor_transport conformance [strict] (Amendment 6, moved from A4: register the transport rig over A4's `LocalSubprocessTransport` and the v2 executor; update A4's `tests/transport/` requests to v2 under migration-map rows for A5a); `test_relative_deadline_anchored_on_host_clock`; `test_beat_extends_expiry_never_max_end`; `test_stop_requires_reserve_identity_and_empty_proof`; `test_definite_refusal_leaves_no_fence_and_no_inhibitor`; `test_enforcer_real_seconds` [realtime].
 - PROOF: G0, G2, G4. SEATS: O, L, S6.
 
 ### A5b1: authority executor client, identity and errors
