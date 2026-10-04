@@ -57,6 +57,10 @@ GATES EVERY PACKET MUST PASS (gauge reruns each one itself and files the evidenc
                   FLIGHTCTL_CONFORMANCE_FRIEND_FLAGS (default off, every R1 host) matches, and are "n/a" otherwise;
                   the case asserts the target's read-back flag state. Implementations register from
                   tests/conformance/impl_*.py, which the conformance conftest imports.
+                  Amendment 5 (race R-A3, measured): in a sandbox without the hardware a real twin passes its strict
+                  cases on `unknown`, so strict evidence alone can be vacuous. G3 evidence for a probe's real twin must
+                  include at least one `status: ok` observation from the real host (the observation itself, schema-valid,
+                  with occupancy_semantics clean for an occupancy probe), recorded with the evidence file.
                   Each case is attributed to its own port (port marker), never to a module. Read-only probes need no
                   lane; anything that starts a process on a GPU host runs under a lane held through the CURRENT
                   authority (legacy lanes.sh until that lane is live).

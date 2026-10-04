@@ -37,7 +37,10 @@ Result = Mapping[str, object]
 
 
 class CommandResult(TypedDict):
-    """Outcome of one bounded command. returncode is None when the process did not finish."""
+    """Outcome of one bounded command. returncode is None when the process did not finish.
+    Amendment 5: `error` is the typed error (common.schema.json#/$defs/typed_error) of a failure the runner itself saw
+    (a spawn failure, a timeout, an unreachable host, ssh exit 255), keeping the lowest-level reason per the failure
+    semantics above; None when the command ran and exited (whatever its returncode). A2's runners already return it."""
 
     argv: list[str]
     host_id: str | None  # None = local
@@ -46,6 +49,7 @@ class CommandResult(TypedDict):
     stderr: str
     timed_out: bool
     duration_s: float
+    error: Result | None
 
 
 # ---------------------------------------------------------------------------------------------- time

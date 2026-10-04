@@ -710,6 +710,23 @@ def _num(text: str) -> int | float | None:
 DYNAMIC_USER_UIDS = range(61184, 65520)  # systemd DynamicUser range (systemd.exec(5)); never a noise identity
 
 
+def _out_of_range(sample: Mapping[str, Any]) -> str | None:
+    """Amendment 5: the gpu_sample bounds of gpu-probe.schema.json, applied by the oracle so that it never returns an ok
+    observation the schema refuses (integers where the schema says integer; finite numbers; the schema's limits)."""
+    import math
+    limits = {"memory_used_mib": (True, 0, None), "memory_total_mib": (True, 1, None), "utilization_pct": (True, 0, 100),
+              "temperature_c": (True, 0, 130), "power_draw_w": (False, 0, None), "power_limit_w": (False, 0, None),
+              "ecc_uncorrected": (True, 0, None)}
+    for field, (integer, low, high) in limits.items():
+        value = sample[field]
+        if value is None:
+            continue
+        if (integer and not isinstance(value, int)) or (isinstance(value, float) and not math.isfinite(value)) \
+                or value < low or (high is not None and value > high):
+            return f"{field}={value}"
+    return None
+
+
 def noise_identity_ok(identity: Mapping[str, Any] | None, allowlist: Sequence[Mapping[str, Any]]) -> bool:
     """Amendment 2 (Sol 6.1 cold review P1-1): a process is desktop NOISE only by IDENTITY, never by size. Identity =
     the owner uid of /proc/<pid> (kernel-set, readable by any user), argv[0] from /proc/<pid>/cmdline (forgeable only by
@@ -722,7 +739,18 @@ def noise_identity_ok(identity: Mapping[str, Any] | None, allowlist: Sequence[Ma
     uid = identity.get("uid")
     if not isinstance(uid, int) or uid == 0 or uid in DYNAMIC_USER_UIDS:
         return False
-    return any(e.get("argv0") == identity.get("argv0") and e.get("uid") == uid for e in allowlist)
+    argv0 = identity.get("argv0")
+    return isinstance(argv0, str) and any(argv0_matches(argv0, e.get("argv0")) and e.get("uid") == uid for e in allowlist)
+
+
+def argv0_matches(argv0: str, entry: Any) -> bool:
+    """Amendment 5: argv0 is the text before the first NUL of /proc/<pid>/cmdline, unchanged. Some programs rewrite
+    their command line into ONE string (measured: a browser GPU process, 817 and 912 bytes with one NUL), so argv0 is
+    then the executable followed by its arguments. An entry matches when argv0 equals it OR begins with it followed by
+    a space. 'Text before the first space' would be wrong, because executable paths may contain spaces (measured: a GPU
+    process whose executable directory name contains a space). The trust boundary is unchanged: only processes of the entry's
+    uid can set this text."""
+    return isinstance(entry, str) and bool(entry) and (argv0 == entry or argv0.startswith(entry + " "))
 
 
 def occupancy_from_capture(gpus_csv: str, procs_csv: str, *, returncode: int, lane_id: str, host_id: str, observed_at: str,
@@ -760,9 +788,13 @@ def occupancy_from_capture(gpus_csv: str, procs_csv: str, *, returncode: int, la
         if not isinstance(used, int) or not isinstance(total, int):
             return unknown | {"reason": f"memory.used unknown on {uuid}"}
         slow = None if cells[7].startswith("[") else (cells[7] == "Active" or cells[8] == "Active")
-        gpus.append({"uuid": uuid, "memory_used_mib": used, "memory_total_mib": total, "utilization_pct": _num(cells[3]),
-                     "temperature_c": _num(cells[4]), "power_draw_w": _num(cells[5]), "power_limit_w": _num(cells[6]),
-                     "thermal_slowdown": slow, "ecc_uncorrected": _num(cells[9])})
+        sample = {"uuid": uuid, "memory_used_mib": used, "memory_total_mib": total, "utilization_pct": _num(cells[3]),
+                  "temperature_c": _num(cells[4]), "power_draw_w": _num(cells[5]), "power_limit_w": _num(cells[6]),
+                  "thermal_slowdown": slow, "ecc_uncorrected": _num(cells[9])}
+        bad = _out_of_range(sample)
+        if bad:  # Amendment 5: a value nvidia-smi does not print (fractional, NaN, out of range) is unknown, never ok
+            return unknown | {"reason": f"out-of-range {bad} on {uuid}"}
+        gpus.append(sample)
     if sorted(g["uuid"] for g in gpus) != sorted(lane_uuids):
         return unknown | {"reason": "a lane card is missing from nvidia-smi output"}
     processes, tenants, noise = [], [], []
@@ -772,14 +804,18 @@ def occupancy_from_capture(gpus_csv: str, procs_csv: str, *, returncode: int, la
             return unknown | {"reason": "unparsable process row"}
         uuid, pid_text = head[0].strip(), head[1].strip()
         name, _, mem_text = head[2].rpartition(", ")
-        if not pid_text.isdigit() or not name:
+        if not pid_text.isdigit() or int(pid_text) < 1 or not name:  # Amendment 5: pid 0 is not a process
             return unknown | {"reason": "unparsable process row"}
         if uuid not in lane_uuids:
             continue
         mem = _num(mem_text)
         mem = mem if isinstance(mem, int) else None
+        if mem is not None and mem < 0:
+            return unknown | {"reason": f"out-of-range used_memory {mem} on {uuid}"}
         pid = int(pid_text)
-        ident = dict(identities.get(pid) or {}, context_type=context_types.get((uuid, pid)))  # rev 2: per card
+        ctype = context_types.get((uuid, pid))
+        ctype = ctype if ctype in ("C", "G", "C+G") else None  # Amendment 5: any other type is null (never noise)
+        ident = dict(identities.get(pid) or {}, context_type=ctype)  # rev 2: per card
         if pid in attributed_pids:
             kind = "lease"
         elif mem is not None and noise_identity_ok(ident, noise_allowlist):

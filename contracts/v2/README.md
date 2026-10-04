@@ -206,6 +206,13 @@ Normative documents in this directory:
     - Rev 2: a `sim` lane runs on fake lane-scoped ports in every profile.
     - Rev 2: the orphaned `adapter-refused` topic and `adapter_refused` code are removed.
     - Rev 2: the pr job's Semgrep step scans `flightctl`, `deploy` and `tests`.
+79. **Probe follow-ups from races R-A2 and R-A3 (Amendment 5).**
+    - A3 is split: A3 is the OccupancyProbe; A3i is the InventoryProbe, golden captures and fakes.
+    - `CommandResult` carries `error`.
+    - A one-string command line matches an allow-list entry when it begins with the entry and a space.
+    - The PIDS query is per card (`-i <uuid>`).
+    - The occupancy oracle never returns an ok observation the schema refuses.
+    - G3 evidence for a probe needs a `status: ok` observation from the real host.
 
 ## Lifecycle tables
 
