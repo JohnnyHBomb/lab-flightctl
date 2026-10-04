@@ -2,7 +2,7 @@
 
 - **Date:** 4 Oct 2026. **Approved:** by the owner, 4 Oct 2026 (the split, and G3's one non-sleep unit). It needs review
   before use, as `FROZEN.md` requires.
-- **Basis:** race R-A6 staging (measured on main `c74bfea` and on Caprica's systemd 261).
+- **Basis:** race R-A6 staging (measured on main `c74bfea` and on a lab host's systemd 261).
 
 ## Reproduced first (measured)
 1. **A6 does not fit the 400-line cap.** A full A6 reference measured 541 changed lines (runner 222, tests 152, fake 89,
