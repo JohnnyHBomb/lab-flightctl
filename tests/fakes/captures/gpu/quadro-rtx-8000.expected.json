@@ -1,0 +1,50 @@
+{
+ "capture": "quadro-rtx-8000.jsonl",
+ "card_model": "Quadro RTX 8000",
+ "expected": {
+  "empty": true,
+  "expected_uuids": [
+   "GPU-5a5a3b4b-f261-6553-75d6-67c745887ffd"
+  ],
+  "gpus": [
+   {
+    "ecc_uncorrected": null,
+    "memory_total_mib": 49152,
+    "memory_used_mib": 2,
+    "power_draw_w": 61.75,
+    "power_limit_w": 260.0,
+    "temperature_c": 37,
+    "thermal_slowdown": false,
+    "utilization_pct": 0,
+    "uuid": "GPU-5a5a3b4b-f261-6553-75d6-67c745887ffd"
+   }
+  ],
+  "host_id": "host-p",
+  "kind": "gpu-occupancy",
+  "lane_id": "lane-golden",
+  "lane_memory_used_mib": 2,
+  "noise": [],
+  "observed_at": "2026-10-04T00:00:00Z",
+  "processes": [],
+  "reason": null,
+  "status": "ok",
+  "tenants": [],
+  "thresholds": {
+   "lane_noise_mib": 1024,
+   "noise_allowlist": [],
+   "noise_cap_mib": 0
+  },
+  "unexplained_mib": 2
+ },
+ "host_id": "host-p",
+ "lane_id": "lane-golden",
+ "lane_noise_mib": 1024,
+ "lane_uuids": [
+  "GPU-5a5a3b4b-f261-6553-75d6-67c745887ffd"
+ ],
+ "local_host_id": null,
+ "noise_allowlist": [],
+ "noise_cap_mib": 0,
+ "observed_at": "2026-10-04T00:00:00Z",
+ "timeout_s": 10
+}
