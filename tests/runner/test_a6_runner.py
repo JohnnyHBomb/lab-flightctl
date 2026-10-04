@@ -26,9 +26,7 @@ def show(load="loaded", active="active", sub="running", result="success", inv=IN
             f"SubState={sub}\nInvocationID={inv}\nControlGroup={cg}\nEnvironment={env}\n\n")
 
 
-class Scripted:
-    """Answers systemd-run, each systemctl verb and cat from a dict; records every argv; unscripted exits 1."""
-
+class Scripted:  # answers systemd-run, each systemctl verb and cat from a dict; records argv; unscripted exits 1
     def __init__(self, script):
         self.script, self.calls = script, []
 
@@ -72,19 +70,17 @@ def test_real_twin_reads_systemd_captures() -> None:
     gone = show(load="not-found", active="inactive", sub="dead", inv="", cg="", pid="0", env="")
     runner, commands = twin({"systemctl show": (0, gone)})
     absent = runner.inspect(UNIT, "run-a6test01", timeout_s=10)
-    assert_valid(absent, "unit", "observation")
-    assert absent["state"] == "absent" and absent["cgroup_empty"] is True and absent["error"] is None
     stopped = runner.stop(UNIT, None, timeout_s=30)
-    assert_valid(stopped, "unit", "stop_result")
+    assert_valid(absent, "unit", "observation") or assert_valid(stopped, "unit", "stop_result")
+    assert absent["state"] == "absent" and absent["cgroup_empty"] is True and absent["error"] is None
     assert stopped["ok"] is True and [c[4] for c in commands.calls] == ["show", "show"]
 
     for answer in [(0, "garbage\n"), (1, show()), (0, show(load="masked")), (0, show(inv="XYZ"))]:
         runner, _ = twin({"systemctl show": answer, "cat": (0, "4242\n")})
         unknown = runner.inspect(UNIT, None, timeout_s=10)
-        assert_valid(unknown, "unit", "observation")
-        assert unknown["state"] == "unknown" and unknown["cgroup_empty"] is None and unknown["error"]["code"] in {"unknown", "probe_failed"}
         stopped = runner.stop(UNIT, INV, timeout_s=30)
-        assert_valid(stopped, "unit", "stop_result")
+        assert_valid(unknown, "unit", "observation") or assert_valid(stopped, "unit", "stop_result")
+        assert unknown["state"] == "unknown" and unknown["cgroup_empty"] is None and unknown["error"]["code"] in {"unknown", "probe_failed"}
         assert stopped["ok"] is False
 
 
@@ -105,10 +101,8 @@ def _start(runner, n, argv):
 def test_crash_observed_and_cgroup_empty() -> None:
     runner, _ = _onlab()
     a, b = "flightctl-a6test-g1.service", "flightctl-a6test-g2.service"
-    sa = _start(runner, 1, ["sleep", "300"])
-    sb = {}
+    sa, sb = _start(runner, 1, ["sleep", "300"]), _start(runner, 2, ["sleep", "not-a-number"])
     try:
-        sb = _start(runner, 2, ["sleep", "not-a-number"])
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline and runner.inspect(b, "run-a6test02", timeout_s=10)["state"] in {"active", "starting"}:
             time.sleep(0.5)
