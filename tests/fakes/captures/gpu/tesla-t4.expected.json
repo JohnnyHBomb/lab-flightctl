@@ -1,0 +1,63 @@
+{
+ "capture": "tesla-t4.jsonl",
+ "card_model": "Tesla T4",
+ "expected": {
+  "empty": true,
+  "expected_uuids": [
+   "GPU-5a5afeca-913b-cd9a-4a1e-8984d8eb85bd",
+   "GPU-5a5a350c-82b7-aa0a-7929-876088da35f2"
+  ],
+  "gpus": [
+   {
+    "ecc_uncorrected": 0,
+    "memory_total_mib": 15360,
+    "memory_used_mib": 1,
+    "power_draw_w": 14.18,
+    "power_limit_w": 70.0,
+    "temperature_c": 33,
+    "thermal_slowdown": false,
+    "utilization_pct": 0,
+    "uuid": "GPU-5a5afeca-913b-cd9a-4a1e-8984d8eb85bd"
+   },
+   {
+    "ecc_uncorrected": 0,
+    "memory_total_mib": 15360,
+    "memory_used_mib": 1,
+    "power_draw_w": 13.32,
+    "power_limit_w": 70.0,
+    "temperature_c": 33,
+    "thermal_slowdown": false,
+    "utilization_pct": 0,
+    "uuid": "GPU-5a5a350c-82b7-aa0a-7929-876088da35f2"
+   }
+  ],
+  "host_id": "host-s",
+  "kind": "gpu-occupancy",
+  "lane_id": "lane-golden",
+  "lane_memory_used_mib": 2,
+  "noise": [],
+  "observed_at": "2026-10-04T00:00:00Z",
+  "processes": [],
+  "reason": null,
+  "status": "ok",
+  "tenants": [],
+  "thresholds": {
+   "lane_noise_mib": 1024,
+   "noise_allowlist": [],
+   "noise_cap_mib": 0
+  },
+  "unexplained_mib": 2
+ },
+ "host_id": "host-s",
+ "lane_id": "lane-golden",
+ "lane_noise_mib": 1024,
+ "lane_uuids": [
+  "GPU-5a5afeca-913b-cd9a-4a1e-8984d8eb85bd",
+  "GPU-5a5a350c-82b7-aa0a-7929-876088da35f2"
+ ],
+ "local_host_id": null,
+ "noise_allowlist": [],
+ "noise_cap_mib": 0,
+ "observed_at": "2026-10-04T00:00:00Z",
+ "timeout_s": 10
+}

@@ -1,0 +1,40 @@
+{
+ "capture": "titan-rtx-fault.jsonl",
+ "card_model": "NVIDIA TITAN RTX (fault: Xid 62, GPU requires reset)",
+ "expected": {
+  "empty": false,
+  "expected_uuids": [
+   "GPU-5a5aa0a1-94b5-c45a-15fe-99721b906576",
+   "GPU-5a5a19b4-44ab-7cf1-6c15-db5505fea97c"
+  ],
+  "gpus": [],
+  "host_id": "host-c",
+  "kind": "gpu-occupancy",
+  "lane_id": "lane-golden",
+  "lane_memory_used_mib": null,
+  "noise": [],
+  "observed_at": "2026-10-04T00:00:00Z",
+  "processes": [],
+  "reason": "unparsable process row",
+  "status": "unknown",
+  "tenants": [],
+  "thresholds": {
+   "lane_noise_mib": 1024,
+   "noise_allowlist": [],
+   "noise_cap_mib": 0
+  },
+  "unexplained_mib": null
+ },
+ "host_id": "host-c",
+ "lane_id": "lane-golden",
+ "lane_noise_mib": 1024,
+ "lane_uuids": [
+  "GPU-5a5aa0a1-94b5-c45a-15fe-99721b906576",
+  "GPU-5a5a19b4-44ab-7cf1-6c15-db5505fea97c"
+ ],
+ "local_host_id": "host-c",
+ "noise_allowlist": [],
+ "noise_cap_mib": 0,
+ "observed_at": "2026-10-04T00:00:00Z",
+ "timeout_s": 10
+}
