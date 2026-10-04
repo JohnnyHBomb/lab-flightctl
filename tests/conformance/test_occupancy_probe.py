@@ -52,7 +52,7 @@ def test_tool_failure_and_timeout_are_unknown_not_empty(kind, factory) -> None:
 @pytest.mark.fake_only
 def test_golden_captures_parse_for_every_lab_card_model(kind, factory) -> None:
     probe = _probe(kind, factory)
-    for capture in probe.golden_captures():  # one per card model, recorded by the 'record' wrapper (slice A3)
+    for capture in probe.golden_captures():  # one per card model, recorded by the 'record' wrapper (slice A3i)
         obs = probe.parse_capture(capture)
         assert_valid(obs, "gpu-probe", "occupancy_observation")
         assert obs == capture["expected"]

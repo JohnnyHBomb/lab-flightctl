@@ -25,7 +25,7 @@ _REGISTRY: dict[str, dict[str, Factory]] = {}
 
 OWED_BY = {
     "clock": "A1", "command_runner": "A2", "executor_transport": "A4", "workload_runner": "A6",
-    "inventory_probe": "A3", "occupancy_probe": "A3", "inhibitor": "A11", "waker": "A12", "peer_identity": "A7",
+    "inventory_probe": "A3i", "occupancy_probe": "A3", "inhibitor": "A11", "waker": "A12", "peer_identity": "A7",
     "health_probe": "C8", "signer": "C3", "model_cache": "C6a", "session_gateway": "C9w", "notifier": "C10",
     "legacy_observer": "A9", "release_backend": "B5",
 }

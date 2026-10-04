@@ -65,10 +65,11 @@ each assembly's prerequisites are delivered before that assembly runs.
 | A0c | Sim rig: per-host clock/boot, in-process transport; strict-xfail repros | A | S | A0b | O, L, S6 | - | makes G02/G03/G27/Grok1/Grok7 failing tests |
 | A1 | Clock real twin (/proc boot id) | A | S | A0b | A, Q, L | clock | G27 (boot part) |
 | A2 | CommandRunner (local, ssh, replay, record), selected via adapters.json | A | S | A0b | L, A, Q | command_runner | base of all real twins |
-| A3 | InventoryProbe + OccupancyProbe real twins; aggregate-memory emptiness; golden captures | A | S | A2 | L, S6, A | inventory_probe, occupancy_probe | G05 probe, Grok 3/4, Sol B2 |
-| A3b | Inventory v2 (+device minor) + discovery v2 on the real probe | A | S | A3 | L, A, Q | - | G07, Grok 4 |
+| A3 | Part 1 (Amendment 5): OccupancyProbe real twin; aggregate-memory emptiness, noise by identity | A | S | A2 | L, S6, A | occupancy_probe | G05 probe, Grok 3, Sol B2 |
+| A3i | Part 2 (Amendment 5): InventoryProbe real twin + golden captures per card model + replay-backed probe fakes | A | S | A3 | L, A, Q | inventory_probe | Grok 4, G05 fixtures |
+| A3b | Inventory v2 (+device minor) + discovery v2 on the real probe | A | S | A3i | L, A, Q | - | G07, Grok 4 |
 | A4 | Executor stdio entry point + local-subprocess and ssh forced-command transports | A | M | A1, A2 | O, L, S6 | executor_transport | G04 |
-| A4u | Unit and timer templates, deploy-dir layout, config loader | A | S | A4 | L, A, Q | - | G04 timer, G24 |
+| A4u | Unit and timer templates, deploy-dir layout, config loader | A | S | A4, A3 | L, A, Q | - | G04 timer, G24 |
 | A5a | Executor v2 semantics (executor side), ceiling invariant | A | M | A0c, A4 | O, L, S6 | - | G02, G03 host side, Grok 1/7, Sol N1 |
 | A5b1 | Authority executor client: identity before reserve, definite refusal, cause chain | A | M | A5a | O, L, S6 | - | Grok 1/7 |
 | A5b2 | Authority beat loop + rolling renew within ceiling + max-end margin | A | M | A5b1 | O, L, S6 | - | G03, Grok 2, Sol N1 |
@@ -132,7 +133,7 @@ delivering its ports.
 | A0a, A0b, A0c | S00 |
 | A1 | S01 (boot-id part) |
 | A2 | (new: command seam) |
-| A3, A3b | S03 |
+| A3, A3i, A3b | S03 |
 | A4, A4u | S04 |
 | A5a, A5b1, A5b2 | S01-S02 |
 | A6 | S05 |
@@ -232,16 +233,23 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
 - ACCEPTANCE: command_runner conformance [strict]; `test_ssh_unreachable_is_typed_and_bounded` [realtime]; `test_record_then_replay_roundtrip`.
 - PROOF: G3 local and over ssh to the pilot host (read-only). SEATS: L, A, Q.
 
-### A3: GPU probes with aggregate-memory emptiness
-- GOAL: Real `nvidia-smi` queries filtered by lane UUIDs; emptiness per `gpu-probe.schema.json` `emptiness_rule`. That means no tenants, no lease processes, allow-listed noise within `noise_cap_mib`, and unexplained aggregate memory below `lane_noise_mib`. A process with unknown memory is a tenant (Sol B2). Amendment 2 (Sol 6.1 cold review P1-1): noise is by IDENTITY, never by size: owner uid of `/proc/<pid>`, argv[0] of `/proc/<pid>/cmdline` and the `nvidia-smi -q -d PIDS` context type (G or C+G) must match the lane's `noise_allowlist`; any other process is a tenant whatever its memory (T10's ~300 MiB stray CUDA context blocks admission).
-- SCOPE: `flightctl/gpu.py`; golden captures under `tests/fakes/captures/gpu/`, one per lab card model, recorded read-only by the gauge with the A2 record wrapper; tests.
+### A3: GPU probes part 1: the OccupancyProbe real twin (Amendment 5 split, owner's approval 4 Oct)
+- GOAL: Real `nvidia-smi` queries filtered by lane UUIDs; emptiness per `gpu-probe.schema.json` `emptiness_rule`. That means no tenants, no lease processes, allow-listed noise within `noise_cap_mib`, and unexplained aggregate memory below `lane_noise_mib`. A process with unknown memory is a tenant (Sol B2). Amendment 2 (Sol 6.1 cold review P1-1): noise is by IDENTITY, never by size: owner uid of `/proc/<pid>`, argv[0] of `/proc/<pid>/cmdline` and the `nvidia-smi -q -d PIDS -i <uuid>` context type (G or C+G) must match the lane's `noise_allowlist`; any other process is a tenant whatever its memory (T10's ~300 MiB stray CUDA context blocks admission).
+- SCOPE: `flightctl/gpu.py` (the OccupancyProbe real twin), its real-only conformance registration, tests. Part 2 (A3i) owns the InventoryProbe, the golden captures and the fakes.
 - OBLIGATIONS: Agree case-for-case with the oracle `tests/contracts_v2/validation.py::occupancy_from_capture` on `tests/contracts_v2/captures/gpu-occupancy.json`. Those captures are real, sanitised output from two Turing cards, plus synthetic edge cases.
   - Process rows parse as: first two fields, last field = memory, the name is everything between. Names can contain `, `.
-  - Device minor comes from `/proc/driver/nvidia/gpus/<bus>/information`.
-  - Amendment 2 rev 2 (Sol 6.1 amd2): `test_desktop_user_legacy_jobs_remain_tenants` [onlab, read-only on a held lane]: the desktop user's real legacy GPU jobs (type C, including the multi-card ones) are tenants even though they run as the allow-listed uid. TRUST BOUNDARY: an allow-list entry trusts that uid; no isolation is claimed from arbitrary code running as the trusted uid (it can forge argv[0] and hold a C+G context below the cap).
-  - Amendment 2: process identity comes from `stat /proc/<pid>` (uid), `/proc/<pid>/cmdline` (argv[0]) and `nvidia-smi -q -d PIDS` (Type, per device entry); an unreadable identity is null and never noise. Acceptance adds `test_small_unlisted_cuda_process_is_a_tenant` and `test_noise_needs_allowlisted_identity_and_cap` (the oracle cases in `tests/contracts_v2/test_v2_amendment2.py`).
-- ACCEPTANCE: occupancy and inventory conformance [strict]; `test_expected_uuids_come_from_confirmed_inventory` (round 5, Sol 6 r4 B2: the probe takes expected_uuids from the hash-verified confirmed inventory, never from its own output; a fabricated inventory hash is refused); `test_production_parser_agrees_with_oracle_on_all_captures` (including the process partition: every process is lease, noise or tenant; unknown memory is never noise and never empty; round 4: the observed cards are exactly the lane's `expected_uuids` from the confirmed inventory, none missing, extra or duplicated, and every process is on a lane card); `test_golden_captures_all_card_models`; `test_probe_real_process_timeout` [realtime].
+  - Amendment 2 rev 2 (Sol 6.1 amd2): `test_desktop_user_legacy_jobs_remain_tenants` [onlab, read-only on a held lane; run by the gauge at G3 after A3i]: the desktop user's real legacy GPU jobs (type C, including the multi-card ones) are tenants even though they run as the allow-listed uid. TRUST BOUNDARY: an allow-list entry trusts that uid; no isolation is claimed from arbitrary code running as the trusted uid (it can forge argv[0] and hold a C+G context below the cap).
+  - Amendment 2: process identity comes from `stat /proc/<pid>` (uid), `/proc/<pid>/cmdline` (argv[0] = the text before the first NUL) and `nvidia-smi -q -d PIDS -i <uuid>` (Type, per device entry; Amendment 5: the per-card form, because plain `-q -d PIDS` keys its sections by PCI bus id, which the occupancy query does not carry); an unreadable identity is null and never noise.
+  - Amendment 5: an allow-list entry matches when argv0 equals it OR begins with it followed by a space (`argv0_matches`): a program that rewrites its command line into one string (a browser GPU process, measured) still matches its entry, and an executable path may contain spaces. Values nvidia-smi does not print (fractional, NaN or out-of-range numbers, pid 0) make the observation unknown; a context type outside C, G, C+G is null.
+- ACCEPTANCE (part 1, four named tests): occupancy conformance [strict, real twin; G3 evidence needs a `status: ok` observation from the real host]; `test_production_parser_agrees_with_oracle_on_all_captures` (including the process partition: every process is lease, noise or tenant; unknown memory is never noise and never empty; round 4: the observed cards are exactly the `uuids` the caller passes, none missing, extra or duplicated, and every process is on a lane card; the probe never derives them from its own output); `test_small_unlisted_cuda_process_is_a_tenant`; `test_noise_needs_allowlisted_identity_and_cap`; `test_probe_real_process_timeout` [realtime]. Moved by Amendment 5: `test_golden_captures_all_card_models` to A3i; `test_expected_uuids_come_from_confirmed_inventory` to A4u (it needs the hash-verified confirmed inventory, `flightctl/siteconfig.py`, which A4u delivers).
 - PROOF: G3 on hosts C, P, R and D (read-only). SEATS: L, S6, A.
+
+### A3i: GPU probes part 2: the InventoryProbe real twin, golden captures and the probe fakes (Amendment 5)
+- GOAL: The InventoryProbe real twin (x-real-commands `inventory`, `numa`, `device_minor`) and the replay-backed fakes of BOTH probes, built on golden captures recorded from real cards.
+- SCOPE: the InventoryProbe in `flightctl/gpu.py`; golden captures under `tests/fakes/captures/gpu/`, one per lab card model, RECORDED read-only by the gauge with the A2 record wrapper (Titan RTX and RTX 8000 now; the T4 capture when its host is free, on the owner's word); the replay-backed probe fakes (`script_next`, `golden_captures`, `parse_capture`) and their conformance registration; the migration rows for `tests/fakes/fixtures/*.json`; tests.
+- OBLIGATIONS: Device minor comes from `/proc/driver/nvidia/gpus/<bus>/information`; pci.bus_id is normalised to a 4-digit lowercase domain; NUMA from sysfs. A real capture of all three from host C is in the lab's research notes (2 Oct).
+- ACCEPTANCE: inventory conformance [strict, real twin; G3 evidence needs a `status: ok` observation]; occupancy conformance on the fake (the fake_only cases); `test_golden_captures_all_card_models`; `test_desktop_user_legacy_jobs_remain_tenants` stays with the gauge at G3.
+- PROOF: G3 on hosts C, P, R and D (read-only). SEATS: L, A, Q.
 
 ### A3b: inventory v2 and discovery v2 on the real probe
 - GOAL: Lanes bind to cards by UUID, bus, NUMA node and device minor. Discovery parses real probe output. The AMD path and the private CSV are gone.
@@ -258,7 +266,7 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
 ### A4u: units, timers, deploy-dir layout
 - GOAL: Installable unit templates and a deterministic config loader, so assembly is copying files, not inventing them.
 - SCOPE: `units/host/*` (executor enforcer timer every 60 s; inhibitor unit naming), `units/authority/*` (service plus cert-renewal timer, see A7), `flightctl/siteconfig.py` (hash-verified load from the deploy dir, verified local copy), `docs/v2/DEPLOY-LAYOUT.md`.
-- ACCEPTANCE: `test_templates_render_without_site_strings`; `test_config_loader_rejects_hash_mismatch`; `test_local_copy_used_when_store_host_asleep`; `test_timer_unit_runs_one_shot` [realtime, onlab].
+- ACCEPTANCE: `test_templates_render_without_site_strings`; `test_config_loader_rejects_hash_mismatch`; `test_local_copy_used_when_store_host_asleep`; `test_timer_unit_runs_one_shot` [realtime, onlab]; Amendment 5 (moved from A3): `test_expected_uuids_come_from_confirmed_inventory` (the lane's card UUIDs handed to the occupancy probe come from the hash-verified confirmed inventory this packet loads, never from the probe's own output; a fabricated inventory hash is refused; prerequisite A3: the probe takes `uuids` from its caller).
 - PROOF: G3 on the pilot host. SEATS: L, A, Q.
 
 ### A5a: executor v2 semantics, ceiling invariant

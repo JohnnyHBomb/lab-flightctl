@@ -14,10 +14,10 @@ tests/executor/test_executor.py::test_repeated_reboots_preserve_absolute_deadlin
 tests/executor/test_executor.py::test_deadline_enforcement_calls_before_and_at_boundaries	A5a	rewrite	test_enforcer_real_seconds	absolute deadline helper
 tests/executor/test_executor.py::test_fake_isolation_guard	A6	delete	-	workaround for the frozen fake; replaced by conformance workload_runner
 tests/executor/systemd_adapter.py	A6	delete	-	package-local adapter replaced by the per-unit FakeRunner
-tests/contracts/test_fakes.py::test_fake_interfaces	A6	rewrite	test_fake_runner_per_unit_fail_closed	systemd part pins Grok 5 semantics; GPU part moves to A3 captures
-tests/fakes/fixtures/titan-rtx.json	A3	rewrite	test_golden_captures_all_card_models	private CSV, not real nvidia-smi output (Grok 4)
-tests/fakes/fixtures/rtx-8000.json	A3	rewrite	test_golden_captures_all_card_models	same
-tests/fakes/fixtures/t4.json	A3	rewrite	test_golden_captures_all_card_models	same
+tests/contracts/test_fakes.py::test_fake_interfaces	A6	rewrite	test_fake_runner_per_unit_fail_closed	systemd part pins Grok 5 semantics; GPU part moves to A3i captures
+tests/fakes/fixtures/titan-rtx.json	A3i	rewrite	test_golden_captures_all_card_models	private CSV, not real nvidia-smi output (Grok 4)
+tests/fakes/fixtures/rtx-8000.json	A3i	rewrite	test_golden_captures_all_card_models	same
+tests/fakes/fixtures/t4.json	A3i	rewrite	test_golden_captures_all_card_models	same
 tests/fakes/fixtures/amd.json	A3b	delete	-	AMD path dropped (D-amd-1)
 tests/discovery/test_discovery.py::test_raw_discovery_parsing_and_multidevice_lane	A3b	rewrite	test_discover_against_replayed_real_captures	parses the private CSV
 tests/discovery/test_discovery.py::test_raw_transport_inputs_use_production_parsers_and_projection	A3b	rewrite	test_v2_projection_takes_embedded_inventory	same

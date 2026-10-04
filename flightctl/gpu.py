@@ -20,6 +20,9 @@ _SHORT = _re.compile(r"[a-z][a-z0-9._-]{0,63}")
 _UUID = _re.compile(r"GPU-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _DIGITS = _re.compile(r"[0-9]+")
 _DYNAMIC_USER_UIDS = range(61184, 65520)  # systemd DynamicUser range: never a noise identity
+_BOUNDS = {"memory_used_mib": (True, 0, None), "memory_total_mib": (True, 1, None), "utilization_pct": (True, 0, 100),  # gpu_sample
+           "temperature_c": (True, 0, 130), "power_draw_w": (False, 0, None), "power_limit_w": (False, 0, None),
+           "ecc_uncorrected": (True, 0, None)}
 
 
 class _Unknown(Exception):
@@ -65,9 +68,14 @@ def _parse_gpus(gpus_csv: str, lane: list) -> list:
         used, total = _num(cells[1]), _num(cells[2])
         _require(isinstance(used, int) and isinstance(total, int), _Unknown, f"memory.used unknown on {cells[0]}")
         slow = None if cells[7].startswith("[") else (cells[7] == "Active" or cells[8] == "Active")
-        gpus.append({"uuid": cells[0], "memory_used_mib": used, "memory_total_mib": total, "utilization_pct": _num(cells[3]),
-                     "temperature_c": _num(cells[4]), "power_draw_w": _num(cells[5]), "power_limit_w": _num(cells[6]),
-                     "thermal_slowdown": slow, "ecc_uncorrected": _num(cells[9])})
+        sample = {"uuid": cells[0], "memory_used_mib": used, "memory_total_mib": total, "utilization_pct": _num(cells[3]),
+                  "temperature_c": _num(cells[4]), "power_draw_w": _num(cells[5]), "power_limit_w": _num(cells[6]),
+                  "thermal_slowdown": slow, "ecc_uncorrected": _num(cells[9])}
+        for field, (integer, low, high) in _BOUNDS.items():  # Amendment 5: values nvidia-smi does not print are unknown
+            v = sample[field]
+            _require(v is None or ((not integer or isinstance(v, int)) and _math.isfinite(v) and v >= low and (high is None or v <= high)),
+                     _Unknown, f"out-of-range {field}={v} on {cells[0]}")
+        gpus.append(sample)
     _require(sorted(g["uuid"] for g in gpus) == sorted(lane), _Unknown, "a lane card is missing from nvidia-smi output")
     return gpus
 
@@ -80,9 +88,10 @@ def _parse_procs(procs_csv: str, lane: list, gpus: list) -> list:
         _require(len(head) >= 3, _Unknown, "unparsable process row")
         uuid, pid_text = head[0].strip(), head[1].strip()
         name, _, mem_text = head[2].rpartition(", ")
-        _require(bool(_DIGITS.fullmatch(pid_text)) and bool(name), _Unknown, "unparsable process row")
+        _require(bool(_DIGITS.fullmatch(pid_text)) and int(pid_text) >= 1 and bool(name), _Unknown, "unparsable process row")
         if uuid in lane:
             mem = _num(mem_text)
+            _require(not isinstance(mem, int) or mem >= 0, _Unknown, f"out-of-range used_memory {mem} on {uuid}")
             rows.append((uuid, int(pid_text), name, mem if isinstance(mem, int) else None))
     for g in gpus:  # the two queries are separate samples: inconsistent numbers are unknown, never empty
         listed = sum(mem or 0 for uuid, _, _, mem in rows if uuid == g["uuid"])
@@ -109,7 +118,9 @@ def _noise_ok(row: dict, allowlist: list) -> bool:
     uid = row["uid"]
     if row["context_type"] not in ("G", "C+G") or not isinstance(uid, int) or uid == 0 or uid in _DYNAMIC_USER_UIDS:
         return False
-    return any(e["argv0"] == row["argv0"] and e["uid"] == uid for e in allowlist)
+    argv0 = row["argv0"]  # Amendment 5: equality, or the entry then a space (a command line rewritten into one string)
+    return argv0 is not None and any(e["argv0"] and (argv0 == e["argv0"] or argv0.startswith(e["argv0"] + " ")) and e["uid"] == uid
+                                     for e in allowlist)
 
 
 class NvidiaOccupancyProbe:
