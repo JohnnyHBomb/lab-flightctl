@@ -101,8 +101,9 @@ def _start(runner, n, argv):
 def test_crash_observed_and_cgroup_empty() -> None:
     runner, _ = _onlab()
     a, b = "flightctl-a6test-g1.service", "flightctl-a6test-g2.service"
-    sa, sb = _start(runner, 1, ["sleep", "300"]), _start(runner, 2, ["sleep", "not-a-number"])
+    sa = sb = {"invocation_id": None}
     try:
+        sa, sb = _start(runner, 1, ["sleep", "300"]), _start(runner, 2, ["sleep", "not-a-number"])
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline and runner.inspect(b, "run-a6test02", timeout_s=10)["state"] in {"active", "starting"}:
             time.sleep(0.5)
@@ -110,7 +111,8 @@ def test_crash_observed_and_cgroup_empty() -> None:
         assert ob["state"] in {"failed", "absent"} and ob["cgroup_empty"] is True and ob["cgroup_pids"] == []
         assert sa["ok"] and runner.inspect(a, "run-a6test01", timeout_s=10)["state"] == "active"
     finally:
-        runner.stop(a, sa["invocation_id"], timeout_s=60)
+        if sa.get("invocation_id"):
+            runner.stop(a, sa["invocation_id"], timeout_s=60)
         if sb.get("invocation_id"):
             runner.stop(b, sb["invocation_id"], timeout_s=60)
 
@@ -120,9 +122,12 @@ def test_crash_observed_and_cgroup_empty() -> None:
 @pytest.mark.skipif(TARGET == "host-local", reason="linger probe needs an ssh target: a local test cannot log out")
 def test_unit_and_inhibitor_survive_logout() -> None:
     runner, ssh = _onlab()
-    uid = ssh.run(["id", "-u"], timeout_s=30)["stdout"].strip()
-    shown = dict(line.split("=", 1) for line in ssh.run(["loginctl", "show-user", uid, "--property=Linger,Sessions"],
-                                                         timeout_s=30)["stdout"].splitlines() if "=" in line)
+    ran = ssh.run(["id", "-u"], timeout_s=30)
+    assert ran["returncode"] == 0 and ran["error"] is None, ran
+    uid = ran["stdout"].strip()
+    ran = ssh.run(["loginctl", "show-user", uid, "--property=Linger,Sessions"], timeout_s=30)
+    assert ran["returncode"] == 0 and ran["error"] is None, ran
+    shown = dict(line.split("=", 1) for line in ran["stdout"].splitlines() if "=" in line)
     units = [(3, ["sleep", "120"]), (4, ["systemd-inhibit", "--what=idle", "--mode=block", "--who=flightctl-a6",
                                          "--why=linger probe", "sleep", "120"])]
     started = []

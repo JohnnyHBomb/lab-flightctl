@@ -34,7 +34,11 @@ def _match(value, pattern, name, optional=False):
 def _check_timeout(timeout_s):
     if isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float)):
         raise TypeError("timeout_s must be an int or float")
-    if not _math.isfinite(timeout_s) or timeout_s <= 0:
+    try:
+        finite = _math.isfinite(timeout_s)
+    except OverflowError:
+        finite = False
+    if not finite or timeout_s <= 0:
         raise ValueError("timeout_s must be finite and > 0")
 
 
@@ -97,7 +101,8 @@ class SystemdUserRunner:
             return None, _err("timeout", f"{what} timed out", cause)
         if cause is not None or res.get("returncode") != 0 or not isinstance(res.get("stdout"), str):
             lines = [x for x in str(res.get("stderr", "")).splitlines() if x.strip()]
-            return None, _err(fail_code, f"{what} failed (exit {res.get('returncode')}): {lines[-1] if lines else ''}", cause)
+            detail = f"{what} failed (exit {res.get('returncode')}): {lines[-1] if lines else ''}"
+            return None, _err(fail_code, detail, cause or _err("unknown", detail))
         return res["stdout"], None
 
     def _observation(self, unit, state, **fields):
