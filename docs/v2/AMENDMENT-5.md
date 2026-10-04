@@ -62,16 +62,20 @@
    - A seeded 600-case corpus shows the oracle's output is always schema-valid.
 6. **GATES G3:** the evidence for a probe's real twin must include at least one `status: ok` observation from the real host (schema-valid, and `occupancy_semantics` clean for an occupancy probe), because strict evidence alone can be vacuous without the hardware.
 
-## What the merged A3 part 1 needs
+## A3 part 1 conforms (revision 2: this amendment now sits on the A3 merge, PR #19, c380e5f)
 
-Measured by loading the in-progress merge's `flightctl/gpu.py` read-only. It is not on main yet, so this amendment does not edit it.
-
-- **Item 3, one line in `_noise_ok`:** compare with `row["argv0"] == e["argv0"] or row["argv0"].startswith(e["argv0"] + " ")` (argv0 not None). Today it returns False for the one-string GPU process.
+Revision 1 listed these changes for the then-unmerged `flightctl/gpu.py`. Revision 2 rebases the amendment onto c380e5f and makes them in a second commit, "A3: conform to Amendment 5":
+- **Item 3:** `_noise_ok` matches when argv0 (not None) equals the entry or begins with the entry followed by a space.
 - **Item 5:**
-  - `_parse_gpus` must apply the `gpu_sample` bounds and return unknown on a violation. Today it keeps 3.5, 131, -1.5 and -2.
-  - `_parse_procs` must refuse pid 0 and a negative used memory. Today it keeps pid 0.
-  - `_context_types` already maps an unknown type to `None`: no change.
-- **Its tests (inferred):** the race's hidden corpus skips schema-invalid oracle outputs, so no existing check breaks. Its parser-agreement test should add the new unknown cases once it adopts these rules.
+  - `_parse_gpus` applies the `gpu_sample` bounds (integers where the schema says integer, finite numbers, the schema's limits) and returns unknown on a violation;
+  - `_parse_procs` refuses pid 0 and a negative used memory;
+  - `_context_types` already mapped an unknown type to `None`.
+- **Tests:** `tests/gpu/test_a3_amendment5.py` has 12 cases. 11 fail on c380e5f's `gpu.py` (measured) and agree with the oracle (the 12th is a regression guard: readable uid, unreadable cmdline, a tenant):
+  - the one-string GPU-process command line from the measurement, whose path holds a space;
+  - eight out-of-range or fractional gpu values;
+  - pid 0;
+  - a negative process memory.
+- The merged A3 tests stay green, and the R-A3 hidden set's result is in the hand-back.
 
 ## Checks
 - New tests: `tests/contracts_v2/test_v2_amendment5.py` (27 cases).
