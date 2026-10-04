@@ -73,7 +73,8 @@ each assembly's prerequisites are delivered before that assembly runs.
 | A5a | Executor v2 semantics (executor side), ceiling invariant | A | M | A0c, A4 | O, L, S6 | executor_transport | G02, G03 host side, Grok 1/7, Sol N1 |
 | A5b1 | Authority executor client: identity before reserve, definite refusal, cause chain | A | M | A5a | O, L, S6 | - | Grok 1/7 |
 | A5b2 | Authority beat loop + rolling renew within ceiling + max-end margin | A | M | A5b1 | O, L, S6 | - | G03, Grok 2, Sol N1 |
-| A6 | WorkloadRunner real twin (systemd --user) + dryrun + per-unit fake; linger probe | A | S | A2 | L, S6, A | workload_runner | G05 systemd, Grok 5, D-pow-4 |
+| A6 | Part 1 (Amendment 7): WorkloadRunner real twin (systemd --user) + linger probe | A | S | A2 | L, S6, A | workload_runner | G05 systemd, Grok 5, D-pow-4 |
+| A6b | Part 2 (Amendment 7): WorkloadRunner dryrun twin + per-unit fail-closed FakeRunner + A6 migration rows | A | S | A6 | L, S6, A | - | Grok 5 |
 | A7 | Authority HTTPS listener (TLS terminated in-process) + PeerIdentity real twin | A | M | A5b2 | O, S6, L | peer_identity | G01, Sol B4 |
 | A7b | RPC v2 envelope + /v1 adapter + snapshot + events since cursor | A | M | A7 | L, S6, O | - | G26, Grok 7 (RPC) |
 | A8 | Per-lane reconcile on restart + quarantine-clear | A | M | A5b2, A7b | O, L, S6 | - | G27 |
@@ -136,7 +137,7 @@ delivering its ports.
 | A3, A3i, A3b | S03 |
 | A4, A4u | S04 |
 | A5a, A5b1, A5b2 | S01-S02 |
-| A6 | S05 |
+| A6, A6b | S05 |
 | A7, A7b | S06, S14 |
 | A8 | S07 |
 | A9 | S08 (shadow) |
@@ -292,10 +293,16 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
 - PROOF: G0, G2, G4; the A0c beat/renew repro turns green. SEATS: O, L, S6.
 
 ### A6: WorkloadRunner real twin and the linger probe
-- GOAL: Real transient user units with per-unit identity. The v1 fake's success-by-default semantics are gone. Answer the linger question by experiment before A-ASM goes live (D-pow-4).
-- SCOPE: `flightctl/runner.py`, `tests/fakes/runner.py`, migration rows for A6.
-- ACCEPTANCE: workload_runner conformance [strict]; `test_fake_runner_per_unit_fail_closed`; `test_dryrun_never_starts` [onlab]; `test_crash_observed_and_cgroup_empty` [realtime, onlab]; `test_unit_and_inhibitor_survive_logout` [onlab; the result decides whether the owner enables linger on lane hosts].
-- PROOF: G3 on the pilot host with `sleep` units only. SEATS: L, S6, A.
+- GOAL: Real transient user units with per-unit identity. Answer the linger question by experiment before A-ASM goes live (D-pow-4). Amendment 7: this is PART 1 (the real twin); the dryrun twin, the per-unit FakeRunner and the v1 fake's retirement are A6b.
+- SCOPE: `flightctl/runner.py` (the real twin), its real-only conformance registration, tests in `tests/runner/`.
+- ACCEPTANCE: workload_runner conformance [strict, real twin]; `test_real_twin_reads_systemd_captures`; `test_crash_observed_and_cgroup_empty` [realtime, onlab]; `test_unit_and_inhibitor_survive_logout` [onlab; the result decides whether the owner enables linger on lane hosts].
+- PROOF: G3 on the pilot host with `sleep` units only, plus the one `sh -c "exit 3"` unit of the frozen conformance case `test_units_are_isolated_and_crash_is_observed` (Amendment 7: allowed by the owner, 4 Oct 2026); the named on-lab tests start only `sleep` units and one `systemd-inhibit --what=idle ... sleep` unit (the linger probe). SEATS: L, S6, A.
+
+### A6b: WorkloadRunner part 2: the dryrun twin, the per-unit FakeRunner and the v1 fake's retirement (Amendment 7)
+- GOAL: The v1 fake's success-by-default semantics are gone: a per-unit, fail-closed FakeRunner with `script_next`, and a dryrun twin that never starts anything.
+- SCOPE: the dryrun twin (in `flightctl/runner.py`), `tests/fakes/runner.py`, their conformance registrations, tests, and the A6b migration rows (`tests/executor/test_executor.py::test_fake_isolation_guard` delete; `tests/contracts/test_fakes.py::test_fake_interfaces` rewrite).
+- ACCEPTANCE: workload_runner conformance on the fake (the fake_only cases) and the dryrun twin; `test_fake_runner_per_unit_fail_closed`; `test_dryrun_never_starts` [onlab].
+- PROOF: G0, G2, G4. SEATS: L, S6, A.
 
 ### A7: authority HTTPS listener with peer identity (Sol B4; Amendment 1: private CA)
 - GOAL: A TLS listener bound to the controller's tailnet address only, terminating TLS **in the authority process** with a certificate issued by the site's **private CA** for `adapters.tls.server_name` (Amendment 1, owner Q2). The real socket peer address (`ip:port`) stays visible to the authority, so `tailscale whois` identifies the caller (unchanged). WebAuthn then has a secure origin (C11b), with `rp_id` = `tls.server_name`.
