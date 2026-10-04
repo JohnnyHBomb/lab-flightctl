@@ -50,7 +50,8 @@ def test_garbage_is_unparsable_not_ok(tmp_path):
     garbage = [b"", b"not json", b"[1]", b'{"a": 1, "a": 2}', b'{"a": NaN}', b'{"a": "\xff"}',
                b"{" + b" " * MAX_REQUEST_BYTES + b"}"]
     for payload in garbage:
-        done = subprocess.run(_entry(state), input=payload, capture_output=True, timeout=30)
+        done = subprocess.run(_entry(state), input=payload, capture_output=True, timeout=30, cwd="/",
+                              env={"PATH": os.environ["PATH"], "LC_ALL": "C"})  # DECIDED 2: any cwd, only PATH and LC_ALL
         assert (done.returncode, done.stdout) == (2, b""), (payload[:20], done)
         assert done.stderr.startswith(b"unparsable:") and not state.exists()
         assert not Path(f"{state}.lock").exists()
