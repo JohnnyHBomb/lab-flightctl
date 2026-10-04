@@ -15,9 +15,11 @@ from datetime import timezone as _timezone
 GPU_QUERY = ("--query-gpu=uuid,memory.used,memory.total,utilization.gpu,temperature.gpu,power.draw,enforced.power.limit,"
              "clocks_event_reasons.hw_thermal_slowdown,clocks_event_reasons.sw_thermal_slowdown,ecc.errors.uncorrected.volatile.total")
 APPS_QUERY = "--query-compute-apps=gpu_uuid,pid,process_name,used_memory"
+INVENTORY_QUERY = "--query-gpu=index,uuid,pci.bus_id,name,memory.total,driver_version"
 _FORMAT = "--format=csv,noheader,nounits"
 _SHORT = _re.compile(r"[a-z][a-z0-9._-]{0,63}")
 _UUID = _re.compile(r"GPU-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+_PCI = _re.compile(r"[0-9A-Fa-f]{8}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}\.[0-7]")
 _DIGITS = _re.compile(r"[0-9]+")
 _DYNAMIC_USER_UIDS = range(61184, 65520)  # systemd DynamicUser range: never a noise identity
 _BOUNDS = {"memory_used_mib": (True, 0, None), "memory_total_mib": (True, 1, None), "utilization_pct": (True, 0, 100),  # gpu_sample
@@ -78,6 +80,57 @@ def _parse_gpus(gpus_csv: str, lane: list) -> list:
         gpus.append(sample)
     _require(sorted(g["uuid"] for g in gpus) == sorted(lane), _Unknown, "a lane card is missing from nvidia-smi output")
     return gpus
+
+
+def _digits_int(text: str):
+    if not _DIGITS.fullmatch(text):
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def _parse_inventory(inventory_csv: str) -> list:
+    devices, uuids, buses = [], set(), set()
+    for line in inventory_csv.splitlines():
+        if not line.strip():
+            continue
+        cells = [cell.strip() for cell in line.split(",")]
+        _require(len(cells) == 6, _Unknown, f"unparsable inventory row: expected 6 cells, got {len(cells)}")
+        index, uuid, bus, name, memory, driver = cells
+        index_value, memory_value, card = _digits_int(index), _digits_int(memory), f"for card index {index[:16]!r}"
+        _require(index_value is not None, _Unknown, f"invalid inventory index {card}")
+        _require(bool(_UUID.fullmatch(uuid)), _Unknown, f"invalid inventory uuid {card}")
+        _require(bool(_PCI.fullmatch(bus)), _Unknown, f"invalid inventory pci bus id {card}")
+        _require(bool(name), _Unknown, f"empty inventory name {card}")
+        _require(memory_value is not None and memory_value >= 1, _Unknown, f"invalid inventory memory total {card}")
+        _require(bool(driver), _Unknown, f"empty inventory driver version {card}")
+        parts = bus.split(":")
+        normalized = f"{parts[0][-4:].lower()}:{parts[1].lower()}:{parts[2].lower()}"
+        _require(uuid not in uuids, _Unknown, "duplicate uuid in the inventory query")
+        _require(normalized not in buses, _Unknown, "duplicate pci bus id in the inventory query")
+        uuids.add(uuid)
+        buses.add(normalized)
+        devices.append({"index": index_value, "uuid": uuid, "pci_bus_id": normalized, "name": name,
+                        "memory_total_mib": memory_value, "driver_version": driver, "numa_node": None, "device_minor": None})
+    _require(bool(devices), _Unknown, "the inventory query listed no card")
+    return devices
+
+
+def _parse_numa(text: str | None):
+    if text is None:
+        return None
+    text = text.strip()
+    return None if text == "-1" else _digits_int(text)
+
+
+def _parse_minor(text: str | None):
+    if text is None:
+        return None
+    _, separator, value = text.partition(":")
+    minor = _digits_int(value.strip())
+    return minor if separator and minor is not None and minor <= 255 else None
 
 
 def _parse_procs(procs_csv: str, lane: list, gpus: list) -> list:
@@ -204,3 +257,34 @@ class NvidiaOccupancyProbe:
         return {"status": "ok", "reason": None, "gpus": gpus, "processes": processes, "tenants": tenants, "noise": noise,
                 "lane_memory_used_mib": lane_used, "unexplained_mib": unexplained,
                 "empty": not tenants and unexplained < lane_noise_mib and sum(p["used_memory_mib"] for p in noise) <= noise_cap_mib}
+
+
+class NvidiaInventoryProbe:
+    """InventoryProbe over the same bounded CommandRunner seam as the occupancy real twin."""
+
+    __init__ = NvidiaOccupancyProbe.__init__  # same arguments, same checks, same errors
+    _run = NvidiaOccupancyProbe._run  # the shared deadline
+
+    def inventory(self, host_id, *, timeout_s):
+        _short(host_id, "host_id")
+        _require(isinstance(timeout_s, (int, float)) and not isinstance(timeout_s, bool), TypeError,
+                 "timeout_s must be an int or float")
+        _require(_math.isfinite(timeout_s) and timeout_s > 0, ValueError, "timeout_s must be finite and > 0")
+        deadline = _time.monotonic() + timeout_s
+        obs = {"kind": "gpu-inventory", "host_id": host_id,
+               "observed_at": self._clock.utc().astimezone(_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+               "status": "unknown", "reason": None, "vendor": "unknown", "devices": []}
+        try:
+            return obs | self._inventory(host_id if host_id != self._local else None, deadline)
+        except _Unknown as exc:
+            return obs | {"reason": (str(exc) or "unknown")[:1024]}
+
+    def _inventory(self, host, deadline):
+        devices = _parse_inventory(self._run("inventory query (a)", [self._nvidia_smi, INVENTORY_QUERY, _FORMAT], host, deadline))
+        for device in devices:
+            bus = device["pci_bus_id"]
+            numa = self._run("numa node read (b)", ["cat", f"/sys/bus/pci/devices/{bus}/numa_node"], host, deadline, strict=False)
+            minor = self._run("device minor read (c)", ["grep", "Device Minor", f"/proc/driver/nvidia/gpus/{bus}/information"], host, deadline, strict=False)
+            device["numa_node"] = _parse_numa(numa)
+            device["device_minor"] = _parse_minor(minor)
+        return {"status": "ok", "reason": None, "vendor": "nvidia", "devices": devices}
