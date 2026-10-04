@@ -12,9 +12,9 @@ tests/executor/test_executor.py::test_clock_reboot_and_same_boot_deadline	A5a	re
 tests/executor/test_executor.py::test_reboot_reconcile_rejects_partial_and_reanchors_deadline	A5a	rewrite	test_relative_deadline_anchored_on_host_clock	absolute cross-host deadline (G02)
 tests/executor/test_executor.py::test_repeated_reboots_preserve_absolute_deadline	A5a	rewrite	test_relative_deadline_anchored_on_host_clock	absolute cross-host deadline (G02)
 tests/executor/test_executor.py::test_deadline_enforcement_calls_before_and_at_boundaries	A5a	rewrite	test_enforcer_real_seconds	absolute deadline helper
-tests/executor/test_executor.py::test_fake_isolation_guard	A6	delete	-	workaround for the frozen fake; replaced by conformance workload_runner
-tests/executor/systemd_adapter.py	A6	delete	-	package-local adapter replaced by the per-unit FakeRunner
-tests/contracts/test_fakes.py::test_fake_interfaces	A6	rewrite	test_fake_runner_per_unit_fail_closed	systemd part pins Grok 5 semantics; GPU part moves to A3i captures
+tests/executor/test_executor.py::test_fake_isolation_guard	A6b	delete	-	workaround for the frozen fake; replaced by conformance workload_runner
+tests/executor/systemd_adapter.py	A5a	delete	-	package-local adapter replaced by the per-unit FakeRunner; Amendment 7: moved from A6 (test_executor.py, test_p01.py and test_review3.py import IsolatedSystemd; it goes with A5a's executor-test rewrite)
+tests/contracts/test_fakes.py::test_fake_interfaces	A6b	rewrite	test_fake_runner_per_unit_fail_closed	systemd part pins Grok 5 semantics; GPU part moves to A3i captures
 tests/fakes/fixtures/titan-rtx.json	A3i	rewrite	test_golden_captures_all_card_models	private CSV, not real nvidia-smi output (Grok 4)
 tests/fakes/fixtures/rtx-8000.json	A3i	rewrite	test_golden_captures_all_card_models	same
 tests/fakes/fixtures/t4.json	A3i	rewrite	test_golden_captures_all_card_models	same

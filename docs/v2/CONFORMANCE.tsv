@@ -30,7 +30,7 @@ P0	test_discovery_vectors	tests/contracts	kept	discovery v2; A3b	-
 P0	test_approval_bindings	tests/contracts	kept	approval v2 signing vectors in C3	-
 P0	test_pipeline_policy_vectors	tests/contracts	kept	-	-
 P0	test_security_hook_contracts	tests/contracts	kept	v2 rejects hooks in requests (closed admission)	-
-P0	test_fake_interfaces	tests/contracts/test_fakes.py	amended	tests/conformance/*; A3, A6	systemd part pins Grok 5 semantics
+P0	test_fake_interfaces	tests/contracts/test_fakes.py	amended	tests/conformance/*; A3, A6b	systemd part pins Grok 5 semantics
 P0	test_portability_boundaries	tests/contracts	kept	+ site configs live outside repo	-
 P0.1	pending release 202, owner-release stop authority, content_labels, local-action hash	README P0.1	kept	rpc-envelope pending (release-confirming); executor stop_authority owner-release; admission.content_labels	local-action hash unchanged for v1 actions
 P1	test_atomic_admission	tests/authority	kept	-	-
@@ -44,7 +44,7 @@ P1	test_partition_recovery	tests/authority/test_revision2.py	specified	A8 (per-l
 P1	test_audit_redaction	tests/authority	kept	event v2 token_redacted; lease read_form	-
 P1	test_mutations	tests/authority	kept	-	-
 P1 obligation	shared-device quota	authority.py:867	specified	quota; C5b	Grok 6
-P2	test_fake_isolation_guard	tests/executor	dropped	conformance workload_runner (A6)	replaced: fake is per-unit fail-closed by contract
+P2	test_fake_isolation_guard	tests/executor	dropped	conformance workload_runner (A6b)	replaced: fake is per-unit fail-closed by contract
 P2	test_reserve_start_fence	tests/executor	amended	executor v2 identity fixed at reserve; A5a	Grok 1
 P2	test_idempotent_start_recovery	tests/executor	kept	-	-
 P2	test_pid_reuse_and_invocation	tests/executor	kept	unit invocation_id observed at start	-
