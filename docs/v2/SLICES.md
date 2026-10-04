@@ -296,7 +296,7 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
 - GOAL: Real transient user units with per-unit identity. Answer the linger question by experiment before A-ASM goes live (D-pow-4). Amendment 7: this is PART 1 (the real twin); the dryrun twin, the per-unit FakeRunner and the v1 fake's retirement are A6b.
 - SCOPE: `flightctl/runner.py` (the real twin), its real-only conformance registration, tests in `tests/runner/`.
 - ACCEPTANCE: workload_runner conformance [strict, real twin]; `test_real_twin_reads_systemd_captures`; `test_crash_observed_and_cgroup_empty` [realtime, onlab]; `test_unit_and_inhibitor_survive_logout` [onlab; the result decides whether the owner enables linger on lane hosts].
-- PROOF: G3 on the pilot host with `sleep` units only, plus the one `sh -c "exit 3"` unit of the frozen conformance case `test_units_are_isolated_and_crash_is_observed` (Amendment 7: allowed by the owner, 4 Oct 2026). SEATS: L, S6, A.
+- PROOF: G3 on the pilot host with `sleep` units only, plus the one `sh -c "exit 3"` unit of the frozen conformance case `test_units_are_isolated_and_crash_is_observed` (Amendment 7: allowed by the owner, 4 Oct 2026); the named on-lab tests start only `sleep` units and one `systemd-inhibit --what=idle ... sleep` unit (the linger probe). SEATS: L, S6, A.
 
 ### A6b: WorkloadRunner part 2: the dryrun twin, the per-unit FakeRunner and the v1 fake's retirement (Amendment 7)
 - GOAL: The v1 fake's success-by-default semantics are gone: a per-unit, fail-closed FakeRunner with `script_next`, and a dryrun twin that never starts anything.

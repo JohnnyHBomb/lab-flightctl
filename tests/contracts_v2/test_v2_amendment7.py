@@ -25,3 +25,8 @@ def test_migration_rows_follow_the_split() -> None:
     assert owner["tests/executor/systemd_adapter.py"] == "A5a"
     assert owner["tests/executor/test_executor.py::test_fake_isolation_guard"] == "A6b"
     assert owner["tests/contracts/test_fakes.py::test_fake_interfaces"] == "A6b"
+
+
+def test_a5a_owns_the_files_the_adapter_deletion_touches() -> None:
+    owner = {r[0]: r[1] for r in MAP}
+    assert owner["tests/executor/test_p01.py"] == "A5a" and owner["tests/executor/test_review3.py"] == "A5a"
