@@ -7,7 +7,7 @@
   - the R-A3 harvest log;
   - the R-A2 brief and A2's merged `flightctl/commands.py`;
   - the owner's approval of the A3 split (4 Oct).
-- **Form:** one new commit on `main` (8a7fd34: contracts v2, Amendments 1-4, A0a-A2 merged). It needs review before use, as `FROZEN.md` requires.
+- **Form:** two commits on the A3 merge (PR #19, c380e5f): this amendment, then "A3: conform to Amendment 5" (revision 2, below), plus the review fixes of revision 3. It needs review before use, as `FROZEN.md` requires.
 
 ## Reproduced first (measured on 8a7fd34 unless labelled; scratch `repro_amd5.py`)
 
@@ -51,6 +51,7 @@
    - **Not the suggested "before the first space" rule:** it would break on executable paths with spaces. The measured 912-byte GPU process would be cut at the space inside its directory name.
    - **Not `/proc/<pid>/exe`:** it is unreadable across users, and the probe runs as the executor account, not the desktop user.
    - **Unchanged:** root and DynamicUser uids are never noise, the context must be G or C+G, the cap holds, and the trust boundary stays (only processes of the entry's uid can set this text). A shorter entry that ends at a space (e.g. `<dir>/Some` for `<dir>/Some App/...`) also matches; the operator writes the entries, and the uid is trusted either way.
+   - **Revision 3 (review finding):** an argv0 longer than 4096 characters, or empty, is null and never noise, in the probe AND the oracle. The probe already did this; the oracle took the raw text, so with the prefix rule it could call a very long one-string line noise and return an observation the schema refuses (`argv0` maxLength 4096). Only U+0020 separates: a tab after the entry does not match.
 4. **x-real-commands** names the per-card `nvidia-smi -q -d PIDS -i <uuid>`, one call per lane card, and says why. The A3 brief says the same.
 5. **The oracle now refuses what the schema refuses.**
    - A value nvidia-smi does not print makes the observation `unknown`:
@@ -77,6 +78,13 @@ Revision 1 listed these changes for the then-unmerged `flightctl/gpu.py`. Revisi
   - a negative process memory.
 - The merged A3 tests stay green, and the R-A3 hidden set's result is in the hand-back.
 
+## Revision 3 (review fixes, 4 Oct)
+- The oracle nulls an argv0 that is empty or longer than 4096 (change 3 above); the schema's `process_identity` text says so.
+- The oracle accepts a pid only in ASCII digits, like the probe (a non-ASCII digit such as `٤` made it parse a pid the probe refuses; fail-safe, but a parse gap).
+- `_noise_ok` in `flightctl/gpu.py` refuses an empty entry itself, like `argv0_matches` (it was unreachable through `occupancy()`, which refuses empty entries).
+- Stale "A3" pointers now name A3i, and the round-5 plan test checks A4u's acceptance.
+- **Follow-up, not in this amendment:** a whitespace pattern on the allow-list `argv0` (no leading or trailing space), so a useless entry such as `"browser "` is refused at config time. It needs the same rule in `occupancy()`, or the schema and the probe would disagree.
+
 ## Checks
-- New tests: `tests/contracts_v2/test_v2_amendment5.py` (27 cases).
+- New tests: `tests/contracts_v2/test_v2_amendment5.py` (29 cases; revision 3 added two).
 - The mutation checks, the full suite, lab-ci, the `pr` steps and the scans are reported in the hand-back.

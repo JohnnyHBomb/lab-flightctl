@@ -119,7 +119,7 @@ def _noise_ok(row: dict, allowlist: list) -> bool:
     if row["context_type"] not in ("G", "C+G") or not isinstance(uid, int) or uid == 0 or uid in _DYNAMIC_USER_UIDS:
         return False
     argv0 = row["argv0"]  # Amendment 5: equality, or the entry then a space (a command line rewritten into one string)
-    return argv0 is not None and any((argv0 == e["argv0"] or argv0.startswith(e["argv0"] + " ")) and e["uid"] == uid
+    return argv0 is not None and any(e["argv0"] and (argv0 == e["argv0"] or argv0.startswith(e["argv0"] + " ")) and e["uid"] == uid
                                      for e in allowlist)
 
 

@@ -185,7 +185,9 @@ def test_sudo_audit_requires_named_defaults(drop: str) -> None:
     assert sudoers_audit(HELPER_ONLY.replace(drop, "", 1), "runner")  # Sol 6 r4: missing env_reset returned []
 
 
-# --- B2 note: expected UUIDs from confirmed inventory is an explicit A3 acceptance test
+# --- B2 note: expected UUIDs from confirmed inventory is an explicit acceptance test (A4u since Amendment 5)
 
 def test_a3_names_the_inventory_binding_test() -> None:
-    assert "test_expected_uuids_come_from_confirmed_inventory" in (ROOT / "docs/v2/SLICES.md").read_text(encoding="utf-8")
+    text = (ROOT / "docs/v2/SLICES.md").read_text(encoding="utf-8")
+    a4u = next(line for line in text.splitlines() if line.startswith("- ACCEPTANCE:") and "test_config_loader_rejects_hash_mismatch" in line)
+    assert "test_expected_uuids_come_from_confirmed_inventory" in a4u

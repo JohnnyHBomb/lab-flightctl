@@ -14,7 +14,7 @@ tests/executor/test_executor.py::test_repeated_reboots_preserve_absolute_deadlin
 tests/executor/test_executor.py::test_deadline_enforcement_calls_before_and_at_boundaries	A5a	rewrite	test_enforcer_real_seconds	absolute deadline helper
 tests/executor/test_executor.py::test_fake_isolation_guard	A6	delete	-	workaround for the frozen fake; replaced by conformance workload_runner
 tests/executor/systemd_adapter.py	A6	delete	-	package-local adapter replaced by the per-unit FakeRunner
-tests/contracts/test_fakes.py::test_fake_interfaces	A6	rewrite	test_fake_runner_per_unit_fail_closed	systemd part pins Grok 5 semantics; GPU part moves to A3 captures
+tests/contracts/test_fakes.py::test_fake_interfaces	A6	rewrite	test_fake_runner_per_unit_fail_closed	systemd part pins Grok 5 semantics; GPU part moves to A3i captures
 tests/fakes/fixtures/titan-rtx.json	A3i	rewrite	test_golden_captures_all_card_models	private CSV, not real nvidia-smi output (Grok 4)
 tests/fakes/fixtures/rtx-8000.json	A3i	rewrite	test_golden_captures_all_card_models	same
 tests/fakes/fixtures/t4.json	A3i	rewrite	test_golden_captures_all_card_models	same

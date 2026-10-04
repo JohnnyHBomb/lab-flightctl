@@ -804,7 +804,7 @@ def occupancy_from_capture(gpus_csv: str, procs_csv: str, *, returncode: int, la
             return unknown | {"reason": "unparsable process row"}
         uuid, pid_text = head[0].strip(), head[1].strip()
         name, _, mem_text = head[2].rpartition(", ")
-        if not pid_text.isdigit() or int(pid_text) < 1 or not name:  # Amendment 5: pid 0 is not a process
+        if not (pid_text.isascii() and pid_text.isdigit()) or int(pid_text) < 1 or not name:  # Amendment 5: pid 0 is not a process
             return unknown | {"reason": "unparsable process row"}
         if uuid not in lane_uuids:
             continue
@@ -816,6 +816,8 @@ def occupancy_from_capture(gpus_csv: str, procs_csv: str, *, returncode: int, la
         ctype = context_types.get((uuid, pid))
         ctype = ctype if ctype in ("C", "G", "C+G") else None  # Amendment 5: any other type is null (never noise)
         ident = dict(identities.get(pid) or {}, context_type=ctype)  # rev 2: per card
+        argv0 = ident.get("argv0")  # Amendment 5 rev 3: an argv0 the schema refuses (empty, over 4096) is null, never noise
+        ident["argv0"] = argv0 if isinstance(argv0, str) and 0 < len(argv0) <= 4096 else None
         if pid in attributed_pids:
             kind = "lease"
         elif mem is not None and noise_identity_ok(ident, noise_allowlist):

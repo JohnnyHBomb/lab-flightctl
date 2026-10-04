@@ -96,6 +96,26 @@ def test_one_string_noise_keeps_root_dynamicuser_and_cap_rules() -> None:
     assert errors(obs, "gpu-probe", "occupancy_observation") == []
 
 
+@pytest.mark.parametrize("length,expect", [(4096, "noise"), (4097, "external")])
+def test_oracle_nulls_an_argv0_over_4096_like_the_probe(length, expect) -> None:  # revision 3 (review finding 1)
+    entry = "/usr/lib/browser/browser"
+    long_line = entry + " " + "a" * (length - len(entry) - 1)
+    u = "GPU-11111111-2222-3333-4444-555555555555"
+    obs = occupancy_from_capture(f"{u}, 7, 24576, 0, 40, 25.5, 280.0, Not Active, Not Active, 0", f"{u}, 4242, browser, 7",
+                                 returncode=0, lane_id="lane-t", host_id="host-1", observed_at="2026-10-04T00:00:00Z",
+                                 lane_uuids=[u], noise_allowlist=[{"argv0": entry, "uid": 1000}], noise_cap_mib=64,
+                                 identities={4242: {"uid": 1000, "argv0": long_line}}, context_types={(u, 4242): "C+G"})
+    assert [p["attribution"] for p in obs["processes"]] == [expect]
+    assert errors(obs, "gpu-probe", "occupancy_observation") == []
+
+
+def test_oracle_refuses_a_non_ascii_digit_pid() -> None:  # revision 3 (review finding 3): the probe refuses it too
+    u = "GPU-11111111-2222-3333-4444-555555555555"
+    obs = occupancy_from_capture(f"{u}, 7, 24576, 0, 40, 25.5, 280.0, Not Active, Not Active, 0", f"{u}, \u0664\u0662, browser, 5",
+                                 returncode=0, lane_id="lane-t", host_id="host-1", observed_at="2026-10-04T00:00:00Z", lane_uuids=[u])
+    assert obs["status"] == "unknown"
+
+
 # ---------------------------------------------------------------- 4. per-card PIDS query
 def test_x_real_commands_name_the_per_card_pids_query() -> None:
     x = json.loads((ROOT / "contracts/v2/gpu-probe.schema.json").read_text(encoding="utf-8"))["x-real-commands"]
