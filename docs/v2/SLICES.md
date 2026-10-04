@@ -259,7 +259,7 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
 
 ### A4: executor entry point and transports
 - GOAL: A real executor process answers the authority over a real pipe, both locally and through a forced-command ssh key.
-- SCOPE: `flightctl/executor_stdio.py` (one-shot: JSON in, JSON out, persistent state), `flightctl/transport.py`, tests.
+- SCOPE: `flightctl/executor_stdio.py` (one-shot: JSON in, JSON out, persistent state), `flightctl/transport.py`, tests in `tests/transport/test_a4_transport.py` (Amendment 6: that exact path, so A5a's migration rows have a defined target).
 - ACCEPTANCE: `test_one_shot_invocations_keep_state` [realtime]; `test_wrong_key_denied` [onlab]; `test_garbage_is_unparsable_not_ok`; `test_transport_failures_are_typed_and_bounded` [realtime]. Amendment 6: executor_transport conformance [strict] moved to A5a (the frozen cases assert v2 executor replies, which A5a delivers).
 - PROOF: G3 local plus ssh to the pilot host (inspect only). SEATS: O, L, S6.
 
@@ -276,7 +276,7 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
   - Max-end is set once and never increases. Only `extend` with an approval moves it.
   - A message older than `max_clock_skew_s` is refused as definite `clock_skew`.
   - Reserve takes the inhibitor first, then the fence (D-pow-3).
-- ACCEPTANCE: executor_transport conformance [strict] (Amendment 6, moved from A4: register the transport rig over A4's `LocalSubprocessTransport` and the v2 executor; update A4's `tests/transport/` requests to v2 under migration-map rows for A5a); `test_relative_deadline_anchored_on_host_clock`; `test_beat_extends_expiry_never_max_end`; `test_stop_requires_reserve_identity_and_empty_proof`; `test_definite_refusal_leaves_no_fence_and_no_inhibitor`; `test_enforcer_real_seconds` [realtime].
+- ACCEPTANCE: executor_transport conformance [strict] (Amendment 6, moved from A4: register the transport rig over A4's `LocalSubprocessTransport` and the v2 executor; update the requests in A4's `tests/transport/test_a4_transport.py` to v2 under the migration-map rows the lead's contracts-v2 stream added for A5a in Amendment 6); `test_relative_deadline_anchored_on_host_clock`; `test_beat_extends_expiry_never_max_end`; `test_stop_requires_reserve_identity_and_empty_proof`; `test_definite_refusal_leaves_no_fence_and_no_inhibitor`; `test_enforcer_real_seconds` [realtime].
 - PROOF: G0, G2, G4. SEATS: O, L, S6.
 
 ### A5b1: authority executor client, identity and errors

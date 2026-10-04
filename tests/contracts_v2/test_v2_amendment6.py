@@ -28,3 +28,11 @@ def test_a4_acceptance_names_the_typed_failure_test_not_conformance() -> None:
     a4 = _acceptance("A4:")
     assert "`test_transport_failures_are_typed_and_bounded`" in a4
     assert "executor_transport conformance [strict];" not in a4
+
+
+def test_a5a_owns_the_a4_transport_rows() -> None:
+    rows = [l.split("\t") for l in (ROOT / "docs/v2/migration-map.tsv").read_text(encoding="utf-8").splitlines()
+            if l.startswith("tests/transport/test_a4_transport.py::")]
+    assert {(r[1], r[2], r[3]) for r in rows} == {("A5a", "rewrite", n) for n in (
+        "test_one_shot_invocations_keep_state", "test_garbage_is_unparsable_not_ok",
+        "test_transport_failures_are_typed_and_bounded", "test_wrong_key_denied")}
