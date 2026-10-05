@@ -160,13 +160,41 @@ def test_b7_migration_gate_logic(touched, collected, packet, ok) -> None:
     assert (migration_gate.check(touched, collected, rows, packet, packet_files) == []) is ok
 
 
-def test_b7_migration_gate_on_this_branchs_real_diff() -> None:
+def branch_migration_problems(touched: dict[str, str], collected: set[str], rows: list[dict[str, str]],
+                              branch_test_files: set[str]) -> list[str]:
+    """Amendment 9: each pre-existing test/roster file touched since 59bdd7f must pass the unchanged per-packet check
+    (migration_gate.check, G1b) for at least ONE packet whose rows name it, so a packet that executes its own rows (or
+    the lead's contracts-v2 stream) stays green. A file no row names, a whole-file delete row whose file was only
+    modified, and a rewrite whose replacement is not collected (a bare name only in a test file added or modified since
+    59bdd7f) still fail."""
+    problems = []
+    for path, status in sorted(touched.items()):
+        packets = sorted({r["packet"] for r in rows if path in migration_gate.expand(r["v1_test"])})
+        if not packets:
+            problems.append(f"{path} ({status}) is a pre-existing test/roster file with no migration-map row for any packet")
+            continue
+        per_packet = {p: migration_gate.check({path: status}, collected, rows, p, branch_test_files) for p in packets}
+        if all(per_packet.values()):
+            problems.append(f"{path} ({status}): no packet's rows allow this change: {per_packet}")
+    return problems
+
+
+def test_b7_migration_gate_on_this_branchs_real_diff(monkeypatch: pytest.MonkeyPatch) -> None:
     base = "59bdd7f"
     if subprocess.run(["git", "cat-file", "-e", base], cwd=ROOT, capture_output=True).returncode != 0:
         pytest.skip(f"base commit {base} not in this clone (shallow checkout)")
-    run = subprocess.run([sys.executable, "tools/migration_gate.py", "--base", base, "--head", "HEAD", "--packet", "contracts-v2"],
-                         cwd=ROOT, capture_output=True, text=True, timeout=60)
-    assert run.returncode == 0, run.stdout  # the contracts branch touched no pre-existing test
+    monkeypatch.chdir(ROOT)  # migration_gate.git and migration_gate.collect run in the working directory
+    status = migration_gate.git("diff", "--name-status", "--no-renames", base, "HEAD", "--", *migration_gate.WATCHED)
+    touched, branch_test_files = {}, set()
+    for line in status.splitlines():  # the same reading of the diff as migration_gate.main
+        code, _, path = line.partition("\t")
+        if code[:1] in {"A", "M"} and path.startswith("tests/"):
+            branch_test_files.add(path)
+        if code[:1] in {"M", "D"}:
+            touched[path] = code[:1]
+    rows = migration_gate.load_rows(ROOT / "docs/v2/migration-map.tsv")
+    collected = migration_gate.collect() if touched else set()
+    assert branch_migration_problems(touched, collected, rows, branch_test_files) == []
 
 
 # --- N1: Sol's 30 s skew + 60 s transport case
