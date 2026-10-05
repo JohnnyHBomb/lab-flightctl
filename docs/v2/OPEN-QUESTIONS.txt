@@ -44,4 +44,4 @@ OWNER ACTIONS (not questions; already-decided items that need your hands)
   - Test store-host WoL on its routed link (G23), before A12's gauge run on that host.
   - Provide the SMTP relay credentials and a Slack incoming webhook for the site secrets file (C10).
   - Enrol the FIDO2 key(s) on the approver (C3).
-  - Enable linger on a lane host ONLY if A6's logout probe shows it is needed (decided before A-ASM goes live).
+  - Enable linger on a lane host ONLY if A6b's logout probe (Amendment 8) shows it is needed (decided before A-ASM goes live).

@@ -300,8 +300,8 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
 
 ### A6b: WorkloadRunner part 2: the dryrun twin, the per-unit FakeRunner and the v1 fake's retirement (Amendment 7)
 - GOAL: The v1 fake's success-by-default semantics are gone: a per-unit, fail-closed FakeRunner with `script_next`, and a dryrun twin that never starts anything.
-- SCOPE: the dryrun twin (in `flightctl/runner.py`), `tests/fakes/runner.py`, their conformance registrations, tests, and the A6b migration rows (`tests/executor/test_executor.py::test_fake_isolation_guard` delete; `tests/contracts/test_fakes.py::test_fake_interfaces` rewrite; Amendment 8: `tests/runner/test_a6_runner.py::test_unit_and_inhibitor_survive_logout` rewrite, the linger probe reading `loginctl show-user <uid> -p Linger -p Sessions` and each session's `Class`, not counting `manager` or `background` sessions).
-- ACCEPTANCE: workload_runner conformance on the fake (the fake_only cases) and the dryrun twin; `test_fake_runner_per_unit_fail_closed`; `test_dryrun_never_starts` [onlab]; `test_unit_and_inhibitor_survive_logout` [onlab; Amendment 8: fails as `unreadable` when either property or a session class is missing].
+- SCOPE: the dryrun twin (in `flightctl/runner.py`), `tests/fakes/runner.py`, their conformance registrations, tests, and the A6b migration rows (`tests/executor/test_executor.py::test_fake_isolation_guard` delete; `tests/contracts/test_fakes.py::test_fake_interfaces` rewrite; Amendment 8: `tests/runner/test_a6_runner.py::test_unit_and_inhibitor_survive_logout` rewrite, the linger probe reading `loginctl show-user <uid> -p Linger` and counting every session class except `manager`/`manager-early`, from one `loginctl list-sessions --json=short` snapshot before and one after the wait).
+- ACCEPTANCE: workload_runner conformance on the fake (the fake_only cases) and the dryrun twin; `test_fake_runner_per_unit_fail_closed`; `test_dryrun_never_starts` [onlab]; `test_unit_and_inhibitor_survive_logout` [onlab; Amendment 8: fails as `unreadable` when the Linger value or a snapshot is unreadable, `inconclusive` when sessions change during the wait].
 - PROOF: G0, G2, G4; G3 for the linger probe on a lane host with no other login session (Amendment 8). SEATS: L, S6, A.
 
 ### A7: authority HTTPS listener with peer identity (Sol B4; Amendment 1: private CA)
@@ -365,12 +365,12 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
      - Legacy `lanes.sh` remains authoritative throughout. The lead holds the legacy lease, and mirrored decisions now take and release a real idle inhibitor on the pilot host.
      - Evidence: `systemd-inhibit --list` before, during and after; the sleep guard status shows the inhibitor as protected work; the host suspends after the quiet grace once it is released.
      - Then remove `shadow_real` (back to all-dryrun), take the `adapter-config` event hash, and go to step 5. The exception never coexists with mode `live`.
-  5. Answer the linger probe (A6) and apply the owner's action if needed.
+  5. Answer the linger probe (A6b, Amendment 8) and apply the owner's action if needed.
   6. Rollback rehearsal.
   7. Flip: `adapters.json` lane to `live`, shim to `v2`, and the legacy writer disabled for the lane.
 - ACCEPTANCE (G6): T01, T02, T03, T04a (holder variant), T05 (current rule), T06a, T06b, T07, T08, live on the pilot lane.
 - SPLIT NOTE (G6, Amendment 2, Sol 6.1 P1-5): T04 is SPLIT by name. T04a (holder variant) runs here; the managed-unit variant T04b runs at C7b1 and C-ASM because managed execution arrives with C7b1. This is a named split, not a silent substitution. Also the shadow coverage report and the strict conformance evidence set for every port in the A-ASM prerequisite row.
-- OWNER: the lead. Owner actions: the forced-command key line; the private CA's certificate, key, chain and trust anchor for A7 (Amendment 1); linger only if A6 shows it is needed.
+- OWNER: the lead. Owner actions: the forced-command key line; the private CA's certificate, key, chain and trust anchor for A7 (Amendment 1); linger only if A6b's probe shows it is needed (Amendment 8).
 
 ### B2: holder liveness
 - GOAL: A crashed holder frees the lane within two heartbeats if its GPU is empty, and quarantines it otherwise.

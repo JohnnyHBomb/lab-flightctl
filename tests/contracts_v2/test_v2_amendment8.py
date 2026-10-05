@@ -19,9 +19,14 @@ def test_a6b_owns_the_probe_rewrite() -> None:
 
 def test_a6b_specifies_the_working_reads() -> None:
     a6b = _section("A6b:")
-    assert "-p Linger -p Sessions" in a6b and "`Class`" in a6b and "`manager`" in a6b
-    assert "`unreadable`" in a6b and "no other login session" in a6b
-    assert "--property=Linger,Sessions" not in SLICES
+    assert "-p Linger`" in a6b and "list-sessions --json=short" in a6b and "`manager`" in a6b
+    assert "background" not in a6b
+    assert "`unreadable`" in a6b and "`inconclusive`" in a6b and "no other login session" in a6b
+
+
+def test_linger_owner_actions_name_a6b() -> None:
+    assert "A6's logout probe" not in (ROOT / "docs/v2/OPEN-QUESTIONS.txt").read_text(encoding="utf-8")
+    assert "Answer the linger probe (A6b, Amendment 8)" in SLICES and "linger only if A6 shows" not in SLICES
 
 
 def test_a6_defers_the_linger_decision_to_a6b() -> None:
