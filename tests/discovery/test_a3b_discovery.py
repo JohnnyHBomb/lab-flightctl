@@ -185,8 +185,9 @@ def test_discover_against_replayed_real_captures():
             assert again["inventory"]["hosts"] == same["inventory"]["hosts"] and again["lane_review"]["lane-gpu1"] == "retain"
             assert again["inventory"]["lanes"][0]["enabled"] is False  # discovery never enables a lane
 
-    record = device_from_probe("gpu-x", dict(cards[0], numa_node=None, device_minor=None), False)
-    assert (record["numa_node"], record["device_minor"], sorted(record["unknown_reasons"])) == (None, None, ["device_minor", "numa_node"])
+    for numa_node in (None, 64):  # 64 is a valid observation but above the inventory's NUMA range: recorded unknown
+        record = device_from_probe("gpu-x", dict(cards[0], numa_node=numa_node, device_minor=None), False)
+        assert (record["numa_node"], record["device_minor"], sorted(record["unknown_reasons"])) == (None, None, ["device_minor", "numa_node"])
     spy = _Recording(ReplayGPUProbe())
     for timeout_s in (0, -1.5, float("nan"), float("inf"), True, "10", None, 10**400):
         with pytest.raises(DiscoveryError):
