@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from flightctl.inventory import device_from_probe
+
 
 class DiscoveryError(ValueError):
     """The requested discovery cannot safely produce a proposal."""
@@ -1460,6 +1462,89 @@ def discover(
     return DiscoveryHandler(transport, clock, gpu_probe, current_inventory=current_inventory).discover(options)
 
 
+# Discovery v2 (A3b): the GPU hosts of a current inventory v2 re-observed through the InventoryProbe and proposed as
+# a draft of the next revision (contracts/v2/discovery.schema.json). Review-only: the probe reads are its only I/O.
+
+_CARD_BINDING = ("pci_bus_id", "numa_node", "device_minor")
+
+
+def _timeout_ok(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value) and value > 0
+    except OverflowError:  # an int too large for a float is refused, as flightctl/runner.py refuses it
+        return False
+
+
+def _observe_host(host: dict[str, Any], observation: Mapping[str, Any]) -> tuple[str, set[str]]:
+    """Apply one inventory observation to a host of the draft; return its host_review and its bound device ids."""
+
+    host["observed_at"] = observation["observed_at"]
+    if observation["status"] != "ok":
+        reason = observation["reason"]
+        host.update(reachability="unknown", observation_error=reason, gpu_count=None, gpu_count_reason=reason)
+        return "unknown", set()
+    known = {device["uuid"]: device for device in host["devices"]}
+    records: list[dict[str, Any]] = []
+    bound: list[str] = []
+    for card in observation["devices"]:
+        old = known.get(card["uuid"])
+        if old is None:
+            records.append(device_from_probe("gpu-" + card["uuid"].removeprefix("GPU-"), card))
+            continue
+        records.append(device_from_probe(old["device_id"], card, old["drives_display"]))
+        if all(old[key] == card[key] for key in _CARD_BINDING):
+            bound.append(old["device_id"])
+    observed = {record["device_id"] for record in records}
+    kept = [device for device in host["devices"] if device["device_id"] not in observed]
+    host.update(reachability="confirmed", observation_error=None, gpu_count=len(records), gpu_count_reason=None,
+                devices=sorted(records + kept, key=lambda device: device["device_id"]))
+    return ("admissible" if len(bound) == len(records) and not kept else "review"), set(bound)
+
+
+def propose_v2(current: Mapping[str, Any], probe: Any, *, clock: Any, timeout_s: float = 10.0) -> dict[str, Any]:
+    """Probe every GPU host of `current` once and propose the observations as a draft of the next revision.
+
+    A card is bound when a device of its host has its uuid and the same bus, NUMA node and minor; a lane on a probed
+    host stays enabled only while every card it names is bound. Discovery never enables, adds or removes a lane.
+    """
+
+    if not _timeout_ok(timeout_s):
+        raise DiscoveryError("timeout_s must be an int or float, finite and > 0")
+    inventory = deepcopy(dict(current))
+    inventory.update(revision=current["revision"] + 1, stage="draft")
+    observations: list[dict[str, Any]] = []
+    host_review: dict[str, str] = {}
+    bound: dict[str, set[str]] = {}
+    for host in inventory["hosts"]:
+        if "gpu" in host["roles"]:
+            observation = deepcopy(probe.inventory(host["host_id"], timeout_s=timeout_s))
+            observations.append(observation)
+            host_review[host["host_id"]], bound[host["host_id"]] = _observe_host(host, observation)
+    lane_review: dict[str, str] = {}
+    for lane in inventory["lanes"]:
+        retain = lane["host_id"] not in bound or set(lane["device_ids"]) <= bound[lane["host_id"]]
+        if not retain:
+            lane["enabled"] = False
+        lane_review[lane["lane_id"]] = "retain" if retain else "review"
+    clean = set(host_review.values()) <= {"admissible"} and set(lane_review.values()) <= {"retain"}
+    return {"schema_version": 2, "generated_at": _iso_utc(clock.utc()), "current_revision": current["revision"],
+            "inventory": inventory, "observations": observations, "host_review": host_review,
+            "lane_review": lane_review, "diff": [], "status": "proposed" if clean else "needs_review"}
+
+
+def project_v2(proposal: Mapping[str, Any]) -> dict[str, Any]:
+    """The x-inventory-projection of a discovery v2 proposal: a copy of its embedded draft inventory."""
+
+    if not isinstance(proposal, Mapping) or proposal.get("schema_version") != 2:
+        raise ProjectionError("not a discovery v2 proposal (a mapping with schema_version 2)")
+    inventory = proposal.get("inventory")
+    if not isinstance(inventory, Mapping) or inventory.get("stage") != "draft":
+        raise ProjectionError("a discovery v2 proposal must embed an inventory mapping with stage draft")
+    return deepcopy(dict(inventory))
+
+
 Discovery = DiscoveryHandler
 proposal_to_inventory = project_proposal
 parse_tailscale_status = parse_tailnet_status
@@ -1477,4 +1562,6 @@ __all__ = [
     "parse_tailscale_status",
     "project_proposal",
     "proposal_to_inventory",
+    "propose_v2",
+    "project_v2",
 ]
