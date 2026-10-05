@@ -117,6 +117,59 @@ def test_crash_observed_and_cgroup_empty() -> None:
             runner.stop(b, sb["invocation_id"], timeout_s=60)
 
 
+class _ProbeFailure(Exception):
+    def __init__(self, report):
+        super().__init__(report)
+        self.report = report
+
+
+class Unreadable(_ProbeFailure):
+    """The Linger value or a session snapshot could not be read (Amendment 8): the linger answer is unknown."""
+
+
+class Inconclusive(_ProbeFailure):
+    """Sessions changed during the wait, or linger is off while another session keeps the user manager up."""
+
+
+def _entries(snapshot, uid):
+    """The uid's (session, class) entries of `loginctl list-sessions --json=short` stdout, or None when not readable."""
+    try:
+        rows = json.loads(snapshot)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(rows, list) or not all(isinstance(r, dict) and isinstance(r.get("session"), str)
+                                             and type(r.get("uid")) is int and isinstance(r.get("class"), str) for r in rows):
+        return None
+    return [(r["session"], r["class"]) for r in rows if r["uid"] == uid]
+
+
+def linger_report(uid, linger_stdout, snapshot_a, snapshot_b):
+    """Amendment 8: the report from `loginctl show-user <uid> -p Linger` and the list-sessions snapshots taken before (A)
+    and after (B) the wait, each its stdout or None for a failed read; raises Unreadable or Inconclusive with it."""
+    value = next((line[len("Linger="):] for line in (linger_stdout or "").splitlines() if line.startswith("Linger=")), None)
+    a, b = _entries(snapshot_a, uid), _entries(snapshot_b, uid)
+    report = {"linger": value if value in ("yes", "no") else "unreadable", "other_sessions": "unreadable",
+              "sessions": "unreadable" if a is None else [{"id": session, "class": cls} for session, cls in a]}
+    if a is None or b is None:
+        raise Unreadable(report)
+    counted_a, counted_b = ({session for session, cls in entries if not cls.startswith("manager")} for entries in (a, b))
+    report["other_sessions"] = len(counted_a & counted_b)
+    own_a, own_b = counted_a - counted_b, counted_b - counted_a  # each snapshot's own ssh login session
+    if report["linger"] == "unreadable" or not own_a or not own_b:
+        raise Unreadable(report)
+    if len(own_a) > 1 or len(own_b) > 1 or (report["linger"] == "no" and report["other_sessions"] >= 1):
+        raise Inconclusive(report)
+    return report
+
+
+_SESSIONS = ["loginctl", "list-sessions", "--json=short"]
+
+
+def _read(ssh, argv):  # one ssh call, so its own login session: the stdout, or None when the read failed
+    ran = ssh.run(argv, timeout_s=30)
+    return ran["stdout"] if ran["returncode"] == 0 and ran["error"] is None else None
+
+
 @pytest.mark.onlab
 @ONLAB
 @pytest.mark.skipif(TARGET == "host-local", reason="linger probe needs an ssh target: a local test cannot log out")
@@ -125,9 +178,10 @@ def test_unit_and_inhibitor_survive_logout() -> None:
     ran = ssh.run(["id", "-u"], timeout_s=30)
     assert ran["returncode"] == 0 and ran["error"] is None, ran
     uid = ran["stdout"].strip()
-    ran = ssh.run(["loginctl", "show-user", uid, "--property=Linger,Sessions"], timeout_s=30)
-    assert ran["returncode"] == 0 and ran["error"] is None, ran
-    shown = dict(line.split("=", 1) for line in ran["stdout"].splitlines() if "=" in line)
+    assert uid.isascii() and uid.isdecimal(), ran
+    version = _read(ssh, ["loginctl", "--version"])
+    linger = _read(ssh, ["loginctl", "show-user", uid, "-p", "Linger"])
+    before = _read(ssh, _SESSIONS)
     units = [(3, ["sleep", "120"]), (4, ["systemd-inhibit", "--what=idle", "--mode=block", "--who=flightctl-a6",
                                          "--why=linger probe", "sleep", "120"])]
     started = []
@@ -135,12 +189,17 @@ def test_unit_and_inhibitor_survive_logout() -> None:
         for n, argv in units:
             started.append((f"flightctl-a6test-g{n}.service", _start(runner, n, argv)))
         time.sleep(20)
+        after = _read(ssh, _SESSIONS)
         survived = [runner.inspect(unit, None, timeout_s=10)["state"] == "active" for unit, _ in started]
     finally:
         for unit, result in started:
             runner.stop(unit, result["invocation_id"], timeout_s=60)
-    report = {"target": TARGET, "linger": shown.get("Linger"), "other_sessions": len(shown.get("Sessions", "").split()) - 1,
-              "wait_s": 20, "unit_survived": survived[0], "inhibitor_survived": survived[1]}
+    try:
+        found, failure = linger_report(int(uid), linger, before, after), ""
+    except (Unreadable, Inconclusive) as exc:
+        found, failure = exc.report, "unreadable: " if isinstance(exc, Unreadable) else "inconclusive: "
+    report = dict(found, target=TARGET, systemd=(version or "").partition("\n")[0] or "unreadable", wait_s=20,
+                  unit_survived=survived[0], inhibitor_survived=survived[1])
     print("LINGER-PROBE " + json.dumps(report, sort_keys=True))
-    assert report["linger"] == "yes" or report["other_sessions"] == 0, "inconclusive: " + json.dumps(report)
+    assert not failure, failure + json.dumps(report, sort_keys=True)
     assert survived == [True, True]

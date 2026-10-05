@@ -26,8 +26,9 @@ def test_fake_runner_per_unit_fail_closed() -> None:
     never = runner.inspect(UNIT.format(9), None, timeout_s=10)
     assert never["state"] == "absent" and never["cgroup_pids"] == [] and never["cgroup_empty"] is True
     a, b = _start(runner, 1), _start(runner, 2)
+    assert a["ok"] is True and b["ok"] is True and a["invocation_id"] != b["invocation_id"]
     pids = [r["observation"]["cgroup_pids"] for r in (a, b)]
-    assert a["ok"] and b["ok"] and a["invocation_id"] != b["invocation_id"] and pids[0] != pids[1] and [] not in pids
+    assert pids[0] != pids[1] and [] not in pids
     stopped = runner.stop(UNIT.format(1), a["invocation_id"], timeout_s=30)
     other = runner.inspect(UNIT.format(2), "run-a6btest02", timeout_s=10)
     assert stopped["ok"] is True and other["state"] == "active" and other["cgroup_pids"] == pids[1]
