@@ -13,7 +13,7 @@
    cap. Part 1 alone (loader, local copy, lane binding, `DEPLOY-LAYOUT.md`, three named tests) measured 248. The timer runs
    "the executor enforcer every 60 s", but A4's entry point takes only `--state` and `--controller`, nothing runs the
    enforcer from a process, and A5a's scope owned the enforcer's semantics, not a command. The full reference's on-lab timer
-   test passed host-local on a lab host's systemd 261 (a `true` one shot, 1.59 s).
+   test passed host-local on a lab host's systemd 261 (1.59 s).
 2. **A3b cannot retire v1 discovery in one race.** Removing the AMD path, `tests/fakes/fixtures/amd.json` and the two A3b-row
    tests measured 196 changed lines (+10 -186). Removing the private-CSV parser on top measured 71 more (-71), and then three
    frozen tests fail (`test_new_device_preserves_existing_identity_lane_and_exact_diff`,
