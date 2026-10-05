@@ -4,10 +4,13 @@ The site configuration (`adapters.json`, `inventory.json`, ...) lives outside th
 directory on the store host (the site role of that name in `SLICES.md`) holding the site files and their manifest `SHA256SUMS`
 in `sha256sum` text format: one line per file, `<64 lowercase hex digits>`, two spaces, `<name>`. A name has 1-128 characters of
 `A-Za-z0-9._-`, starts with a letter or digit, appears once and is never `SHA256SUMS`. Any other line makes the manifest malformed.
+Nothing is read from a subdirectory. Site files are UTF-8 text: the command runner decodes what `cat` prints as UTF-8, so other
+bytes never match their sha256.
 
 ## Publish
 
-After the owner's review, write the files first and the manifest last, in the deploy directory:
+After the owner's review, write the files first and the manifest straight after them, in the deploy directory (a load that runs
+while a file and the manifest disagree is refused and does not fall back):
 
     sha256sum <files> > SHA256SUMS.new && mv SHA256SUMS.new SHA256SUMS
 

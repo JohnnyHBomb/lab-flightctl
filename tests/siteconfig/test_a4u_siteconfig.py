@@ -9,13 +9,14 @@ from pathlib import Path
 import pytest
 
 from flightctl.commands import LocalCommandRunner
-from flightctl.gpu import GPU_QUERY, NvidiaOccupancyProbe
+from flightctl.gpu import APPS_QUERY, GPU_QUERY, NvidiaOccupancyProbe
 from tests.fakes.clock import FakeClock
 
 INVENTORY = (Path(__file__).resolve().parents[2] / "config" / "inventory-v2.json.example").read_text(encoding="utf-8")
 CARD, OTHER = "GPU-00000000-0000-0000-0000-000000000002", "GPU-00000000-0000-0000-0000-0000000000ff"
 SSH_DOWN = {"code": "transport_failed", "message": "ssh: connect: no route to host", "layer": "transport", "cause": None}
 ROW = "{}, 10, 16384, 0, 40, 30.00, 200.00, Not Active, Not Active, 0\n"
+FMT = "--format=csv,noheader,nounits"
 TEXTS = {"adapters.json": '{"profile": "sim"}\n', "inventory.json": INVENTORY}
 FILES = {name: text.encode() for name, text in TEXTS.items()}
 
@@ -91,7 +92,8 @@ def test_config_loader_rejects_hash_mismatch(tmp_path):
     site = load_site(LocalCommandRunner(), str(deploy), str(local), timeout_s=10)
     assert site["source"] == "deploy" and site["files"] == FILES
     kept = snapshot(local)
-    assert kept.keys() == {"SHA256SUMS", *FILES} and kept["SHA256SUMS"] == published.stdout
+    assert kept == {**FILES, "SHA256SUMS": published.stdout}
+    assert published.stdout.decode() == publish(TEXTS)["/deploy/SHA256SUMS"]  # the scripted store's manifest is what sha256sum prints
     (deploy / "adapters.json").write_bytes(b'{"profile": "live"}\n')  # changed, not republished
     with pytest.raises(SiteConfigRefused) as refused:
         load_site(LocalCommandRunner(), str(deploy), str(local), timeout_s=10)
@@ -120,7 +122,7 @@ def test_local_copy_used_when_store_host_asleep(tmp_path):
     assert site["source"] == "deploy" and site["files"] == FILES and set(store.hosts) == {"store-1"}
     assert site["sha256"] == {name: sha(text) for name, text in TEXTS.items()}
     kept = snapshot(local)
-    assert kept.keys() == {"SHA256SUMS", *FILES}
+    assert kept == {**FILES, "SHA256SUMS": store.files["/deploy/SHA256SUMS"].encode()}
     absent = Store({path: text for path, text in store.files.items() if not path.endswith("inventory.json")})
     assert "inventory.json" in refused(absent)  # a failed read never falls back to the local copy
     page = "x\n"  # nor does a malformed manifest, although every file it could name is there with the right hash
@@ -161,15 +163,15 @@ def test_expected_uuids_come_from_confirmed_inventory(tmp_path):
     site = load(INVENTORY)
     obs = occupancy(site)
     assert obs["status"] == "ok" and obs["expected_uuids"] == [CARD] and [g["uuid"] for g in obs["gpus"]] == [CARD]
-    assert set(smi.hosts) == {"host-1"}
-    assert [argv[-1] for argv in smi.calls if argv[1:5] == ["-q", "-d", "PIDS", "-i"]] == [CARD]
+    assert list(zip(smi.calls, smi.hosts)) == [(["nvidia-smi", GPU_QUERY, FMT], "host-1"), (["nvidia-smi", APPS_QUERY, FMT], "host-1"),
+                                               (["nvidia-smi", "-q", "-d", "PIDS", "-i", CARD], "host-1")]
     assert obs["thresholds"] == {"lane_noise_mib": 1024, "noise_cap_mib": 64, "noise_allowlist": [{"argv0": "browser", "uid": 1000}]}
     assert occupancy(site_of(json.loads(INVENTORY)))["status"] == "ok"
     cards[:] = [OTHER]
     assert (unknown := occupancy(site))["status"] == "unknown" and unknown["expected_uuids"] == [CARD]
 
     smi.calls.clear()  # from here on no command may reach the probe's runner
-    lying = {**publish({"inventory.json": INVENTORY}), "/deploy/SHA256SUMS": f"{sha('another inventory')}  inventory.json\n"}
+    lying = {**publish({"inventory.json": INVENTORY}), "/deploy/SHA256SUMS": f"{sha(INVENTORY.replace(CARD, OTHER))}  inventory.json\n"}
     with pytest.raises(SiteConfigRefused, match="inventory.json"):
         load_site(Store(lying), "/deploy", str(tmp_path), timeout_s=5)
     replaced = {**site, "files": {"inventory.json": INVENTORY.replace(CARD, OTHER).encode()}}  # replaced after loading
