@@ -500,8 +500,8 @@ def test_ci_security_configuration() -> None:
     assert "semgrep --version" in workflow
     assert "pip-audit --version" in workflow
     assert "deploy/ci-tools.lock" in workflow
-    assert any(line.startswith("- uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683") for line in active_lines)
-    assert any(line.startswith("- uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38") for line in active_lines)
+    assert any(line.startswith("- uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1") for line in active_lines)
+    assert any(line.startswith("- uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97") for line in active_lines)
     for command in (
         "run: shellcheck -x deploy/pre-commit-denylist deploy/provision-ci-tools",
         "run: gitleaks detect --source . --no-banner --redact --exit-code 1",
@@ -535,8 +535,8 @@ def test_ci_security_configuration() -> None:
     assert "--no-deps" in parser_workflow
     assert "python -m pip check" in parser_active_lines
     assert "run: python -m pytest -q tests/integration/test_parser_properties.py" in parser_active_lines
-    assert any(line.startswith("- uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683") for line in parser_active_lines)
-    assert any(line.startswith("- uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38") for line in parser_active_lines)
+    assert any(line.startswith("- uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1") for line in parser_active_lines)
+    assert any(line.startswith("- uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97") for line in parser_active_lines)
 
 
 def test_p0_injected_boundaries() -> None:
