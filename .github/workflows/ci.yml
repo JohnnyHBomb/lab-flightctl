@@ -34,6 +34,9 @@ jobs:
           semgrep --version
           pip-audit --version
       - name: Require the external denylist
+        # Fork PRs get no secrets once the repo is public: skip the external denylist there (the in-tree portability
+        # check still runs). Same-repo PRs, pushes and manual runs still require it.
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           FLIGHTCTL_DENYLIST_CONTENT: ${{ secrets.FLIGHTCTL_DENYLIST }}
         run: |
@@ -86,6 +89,9 @@ jobs:
       - name: Portability
         run: python tools/check_portability.py .
       - name: External denylist
+        # Fork PRs get no secrets once the repo is public: skip the external denylist there (the in-tree portability
+        # check still runs). Same-repo PRs, pushes and manual runs still require it.
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           FLIGHTCTL_DENYLIST_CONTENT: ${{ secrets.FLIGHTCTL_DENYLIST }}
         run: |
