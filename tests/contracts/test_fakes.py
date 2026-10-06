@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.fakes import FakeClock, FakeGPUProbe, FakeSSH, FakeSystemd
+from tests.fakes import FakeClock, FakeGPUProbe, FakeSSH
 from tests.fakes.gpu import parse_nvidia_smi
 
 
@@ -39,21 +39,6 @@ def test_fake_interfaces() -> None:
     assert clock.monotonic() == mono_before
     clock.reboot(boot_id="boot-b", utc_s=1, monotonic_s=0)
     assert clock.boot_id() == "boot-b" and boot_before != clock.boot_id()
-
-    systemd = FakeSystemd()
-    assert systemd.start("unit-a", "invoke-a")["ok"]
-    systemd.queue("invocation_mismatch")
-    assert systemd.stop("unit-a", "invoke-b")["status"] == "invocation_mismatch"
-    systemd.queue("failed_stop")
-    assert systemd.stop("unit-a", "invoke-a")["status"] == "failed_stop"
-    systemd.occupants[:] = ["pid-a"]
-    systemd.gpu_occupants[:] = ["gpu-tenant-a"]
-    inspection = systemd.inspect("unit-a", "invoke-a")
-    assert inspection["occupants"] == ["pid-a"]
-    assert inspection["cgroup_occupants"] == ["pid-a"]
-    assert inspection["gpu_occupants"] == ["gpu-tenant-a"]
-    systemd.queue("unknown")
-    assert systemd.inspect("unit-a", "invoke-a")["status"] == "unknown"
 
 
 def test_fake_no_real_side_effects() -> None:

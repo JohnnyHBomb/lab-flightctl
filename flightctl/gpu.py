@@ -121,8 +121,8 @@ def _parse_inventory(inventory_csv: str) -> list:
 def _parse_numa(text: str | None):
     if text is None:
         return None
-    text = text.strip()
-    return None if text == "-1" else _digits_int(text)
+    node = _digits_int(text.strip())
+    return node if node is not None and node <= 1023 else None  # -1 and ids past MAX_NUMNODES (1024) are null
 
 
 def _parse_minor(text: str | None):

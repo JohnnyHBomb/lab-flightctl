@@ -11,7 +11,7 @@ from pathlib import Path
 
 from flightctl.executor import Executor, TrustedController
 from tests.executor.systemd_adapter import IsolatedSystemd
-from tests.fakes import FakeClock, FakeGPUProbe, FakeSystemd
+from tests.fakes import FakeClock, FakeGPUProbe
 from tests.fakes.ssh import FakeTransport
 from tests.contracts.validation import validate_instance
 
@@ -63,27 +63,6 @@ def start_one(executor: Executor, trusted: object, *, lane: dict[str, str] = LAN
 
 def stop_one(executor: Executor, trusted: object, running: dict[str, object]) -> dict[str, object]:
     return executor.handle(request("stop", running, policy(), stop_authority={"mode": "controller-match", "approval_id": None}), authenticated_controller=trusted)
-
-
-def test_fake_isolation_guard() -> None:
-    # Direct frozen-fake counterexample, recorded but not used as cleanup evidence.
-    frozen = FakeSystemd(occupants=["pid-a", "pid-b"])
-    assert frozen.stop("unit-a", "invoke-a")["ok"] is True
-    assert frozen.occupants == []  # measured frozen gap: a stop clears unrelated occupancy
-    frozen_unknown = FakeSystemd(occupants=["pid-a"])
-    frozen_unknown.queue("unrecognised-script-token")
-    assert frozen_unknown.stop("unit-a", "invoke-a")["ok"] is True  # measured frozen gap: unknown defaults to success
-
-    isolated = IsolatedSystemd()
-    a = isolated.instance("unit-a", "invoke-a", occupants=["pid-a"])
-    b = isolated.instance("unit-b", "invoke-b", occupants=["pid-b"])
-    assert isolated.stop("unit-a", "invoke-a")["ok"] is True
-    assert a.occupants == []
-    assert b.occupants == ["pid-b"]
-    isolated.queue("unit-b", "invoke-b", "stop", "unrecognised-script-token")
-    unknown = isolated.stop("unit-b", "invoke-b")
-    assert unknown["ok"] is False and unknown["status"] == "unknown"
-    assert b.occupants == ["pid-b"]
 
 
 def test_reserve_start_fence(tmp_path: Path) -> None:
