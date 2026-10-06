@@ -5,7 +5,7 @@ import json
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -26,13 +26,15 @@ EVIDENCE = {"lane_id": "lane-gpu1", "host_id": "host-1"}
 
 class ScriptedInhibitor:  # the Inhibitor port answering its scripted results in order (an exception is raised); records every call
     def __init__(self, *results):
-        self.results, self.calls = list(results), []
+        self.results, self.calls, self.held = list(results), [], set()  # held: the units its own answers report held
 
     def _answer(self, *record):
         self.calls.append(record)
         result = self.results.pop(0)
         if isinstance(result, Exception):
             raise result
+        if isinstance(result, dict):
+            (self.held.add if result["held"] else self.held.discard)(result["unit"])
         return result
 
     def hold(self, lane_id, generation, *, why, timeout_s):
@@ -45,6 +47,14 @@ class ScriptedInhibitor:  # the Inhibitor port answering its scripted results in
 class FailingStore(MemoryStateStore):
     def save(self, state):
         raise OSError("disk full")
+
+
+class CountingStore(MemoryStateStore):
+    saves = 0
+
+    def save(self, state):
+        super().save(state)
+        self.saves += 1
 
 
 def executor(clock, store, probe=None, port=None):
@@ -85,6 +95,7 @@ def test_definite_refusal_leaves_no_fence_and_no_inhibitor():
     reserved = call(host, reserve())  # the refusal kept nothing, not even generation 7
     assert (reserved["ok"], reserved["fences"][0]["inhibitor_held"], reserved["inhibitor"]) == (True, True, {"held": True, "unit": AWAKE, "what": "idle"})
     assert fence_evidence_ok(reserved, EVIDENCE)
+    assert (call(host, reserve()), port.calls) == (reserved, [HOLD, RELEASE, HOLD])  # a retried reserve: the identical reply, no port called
     other = call(host, reserve(generation=8))
     assert (other["ok"], other["definite"], other["error"]["code"], other["inhibitor"], len(port.calls)) == (False, False, "fenced", reserved["inhibitor"], 3)
     stuck = call(host, request("stop", SENT))  # the lane is empty but its inhibitor's release is unconfirmed: the fence stays
@@ -100,6 +111,8 @@ def test_definite_refusal_leaves_no_fence_and_no_inhibitor():
             assert (failed["ok"], failed["definite"], failed["error"]["code"], failed["observed_state"], failed["fences"], failed["inhibitor"]) == \
                 (False, definite, code, "free" if definite else "unknown", [], None)
             assert port.calls == [HOLD, RELEASE]
+            if new_store is FailingStore:  # the save raised after a confirmed hold: the inhibitor stays held unless its release is confirmed
+                assert port.held == (set() if definite else {AWAKE})
     store = MemoryStateStore()  # no inhibitor port: a reserve that asks for one is refused and nothing is saved
     nothing = call(executor(clock, store), reserve())
     assert (nothing["ok"], nothing["definite"], nothing["error"]["code"], nothing["observed_state"], store.value) == (False, True, "unavailable", "free", None)
@@ -117,12 +130,14 @@ def test_ceiling_shortens_only_and_extend_needs_approval(tmp_path):
     reserved = call(host, reserve(now()))  # lease 1: the inhibitor held and a 14400 s max-end
     approved = time.monotonic() + 3600  # the approval ends within the hour, the host's max-end is 4 hours out
     assert (reserved["ok"], grant_after_reserve(seen(reserved), approved, expect)) == (True, "pending ceiling-unconfirmed")
+    saved = path.read_text()
     for bad in (ask("extend", now(), valid=False, max_end=max_end(now(), 99999)), ask("extend", now(), valid=False, approval_id=None, max_end=max_end(now(), 99999)),
                 request("beat", now(), (("max-end", 99999),))):
         refused = call(host, bad)
         assert (refused["ok"], refused["definite"], refused["error"]["code"], refused["fences"]) == (False, True, "invalid", reserved["fences"])
     unfenced = call(host, ask("extend", now(), {"lane": LANE3}, valid=False, max_end=max_end(now(), 99999)))  # invalid comes before not_found
     assert (unfenced["ok"], unfenced["error"]["code"]) == (False, "invalid")
+    assert path.read_text() == saved  # the invalid refusals left the stored document as it was
     second = call(host, request("reserve", now(), (("expiry", 1800), ("max-end", 1), ("heartbeat-stale", 600)), lane=LANE2))  # lease 2: a 1 s max-end
     extended = call(host, ask("extend", now(), {"lane": LANE2}, approval_id="apr-0000001", max_end=max_end(now(), 3600)))
     assert extended["ok"] and 3599 < extended["max_end_remaining_s"] <= 3600
@@ -130,9 +145,11 @@ def test_ceiling_shortens_only_and_extend_needs_approval(tmp_path):
     assert others[0] == others[1]  # only the max-end moved
     ceiling = call(host, ask("ceiling", now(), max_end=max_end(now(), 1)))
     capped = time.monotonic()
+    saved = path.read_text()
     later = call(host, ask("ceiling", now(), max_end=max_end(now(), 9000)))  # never later
     assert ceiling["ok"] and later["ok"] and ceiling["max_end_remaining_s"] <= 1 and later["max_end_remaining_s"] <= ceiling["max_end_remaining_s"]
     assert later["fences"][0]["local_deadlines"] == ceiling["fences"][0]["local_deadlines"]
+    assert path.read_text() == saved  # the 9000 s ceiling left the stored document as it was
     assert grant_after_reserve(seen(reserved, ceiling), approved, expect) == "grant"  # the ceiling reply confirms what the reserve reply could not
     time.sleep(max(0.0, 1.5 - (time.monotonic() - capped)))
     ran = time.monotonic()
@@ -146,9 +163,9 @@ def test_ceiling_shortens_only_and_extend_needs_approval(tmp_path):
 
 
 def test_inspect_reports_holder_unit_absent():
-    clock = SimClock(boot_id="sim-host-1", utc_start=SENT)
-    store, empty, port = MemoryStateStore(), observation(), ScriptedInhibitor(HELD)
-    probe = ScriptedProbe(empty, empty)
+    clock = SimClock(boot_id="sim-host-1", utc_start=SENT + timedelta(seconds=7))  # this host's UTC is 7 s ahead of the sender's
+    store, empty, tenant, port = CountingStore(), observation(), observation(f"{CARD}, 77, python, 300"), ScriptedInhibitor(HELD)
+    probe = ScriptedProbe(empty, tenant)  # the quarantined lane's inspect finds a tenant
     host = executor(clock, store, probe, port)
     call(host, reserve())
     saved = copy.deepcopy(store.value)
@@ -157,14 +174,16 @@ def test_inspect_reports_holder_unit_absent():
     assert [(fence["state"], fence["inhibitor_held"]) for fence in leased["fences"]] == [("reserved", True)] and fence_evidence_ok(leased, EVIDENCE)
     assert leased["unit"] == {"kind": "unit-observation", "unit": UNIT, "run_id": "run-0000007a", "invocation_id": None,
                               "state": "absent", "load_state": "not-found", "active_state": None, "sub_state": None, "result": None, "main_pid": None,
-                              "exit_status": None, "cgroup": None, "cgroup_pids": [], "cgroup_empty": True, "observed_at": "2026-10-02T10:00:00Z", "error": None}
+                              "exit_status": None, "cgroup": None, "cgroup_pids": [], "cgroup_empty": True, "observed_at": "2026-10-02T10:00:07Z", "error": None}
     assert call(host, ask("inspect", SENT, scope="host", identity=None))["error"]["code"] == "unavailable"  # not served yet
+    assert call(host, ask("inspect", SENT, scope="lane", identity=None, lane=dict(LANE, lane_id="lane-gpu9")))["error"]["code"] == "not_found"
     free = call(host, ask("inspect", SENT, scope="lane", identity=None, lane=LANE2))
     assert (free["ok"], free["definite"], free["observed_state"], free["fences"], free["unit"], free["occupancy"]) == (True, True, "free", [], None, None)
-    assert (store.value, len(probe.calls), port.calls) == (saved, 1, [HOLD])  # nothing saved, the free lane not probed, the inhibitor not touched
+    assert (store.value, store.saves, len(probe.calls), port.calls) == (saved, 1, 1, [HOLD])  # nothing saved, the free lane not probed, the inhibitor not touched
     clock.advance(600)  # the protected lease's heartbeat goes stale: the enforcer quarantines it without a probe or a release
     assert [acted["state"] for acted in host.enforce_deadlines()] == ["quarantined"]
     quarantined = call(host, ask("inspect", clock.utc(), scope="lane", identity=None, lane=LANE))
-    assert (quarantined["ok"], quarantined["definite"], quarantined["error"]["code"], quarantined["observed_state"]) == (False, True, "conflict", "quarantined")
-    assert (quarantined["unit"]["unit"], quarantined["unit"]["state"], quarantined["inhibitor"]["held"], port.calls) == (UNIT, "absent", True, [HOLD])
+    assert (quarantined["ok"], quarantined["definite"], quarantined["error"]["code"], quarantined["observed_state"], quarantined["occupancy"]) == \
+        (False, True, "conflict", "quarantined", tenant)
+    assert (quarantined["unit"], quarantined["inhibitor"]["held"], port.calls, store.saves) == ({**leased["unit"], "observed_at": "2026-10-02T10:10:07Z"}, True, [HOLD], 2)
     assert probe.calls == [("host-1", "lane-gpu1", [CARD], [{"argv0": "browser", "uid": 1000}], 64, 1024, 10.0)] * 2
