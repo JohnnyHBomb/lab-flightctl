@@ -92,7 +92,7 @@ def test_v2_projection_takes_embedded_inventory():
     assert proposal == unchanged
     confirmed = copy.deepcopy(proposal)
     confirmed["inventory"]["stage"] = "confirmed"
-    for refused in (dict(proposal, schema_version=1), confirmed, current, [proposal]):
+    for refused in (dict(proposal, schema_version=1), confirmed, current, [proposal], dict(proposal, inventory=None), None, "proposal"):
         with pytest.raises(ProjectionError):
             project_v2(refused)
 
@@ -119,10 +119,11 @@ def test_enabled_lane_requires_uuid():
         assert_valid(broken, "inventory")
         assert inventory_problems(broken) and inventory_semantics(broken)
 
-    probe = ReplayGPUProbe("quadro-rtx-8000")
+    probe = ReplayGPUProbe("tesla-t4")  # lane-gpu1 names both cards: the bound gpu-1 alone does not keep it (DECIDED 11)
     current = _current(probe, probe.inventory(probe.test_host, timeout_s=10)["devices"])
     device = current["hosts"][1]["devices"][0]
     device["uuid"], device["unknown_reasons"]["uuid"] = None, "probe returned no uuid"
+    assert inventory_problems(current)
     proposal = _propose(current, probe)
     assert proposal["inventory"]["lanes"][0]["enabled"] is False
     assert proposal["lane_review"] == {"lane-gpu1": "review", "lane-gpu0": "retain"} and proposal["status"] == "needs_review"
@@ -193,6 +194,9 @@ def test_discover_against_replayed_real_captures():
         with pytest.raises(DiscoveryError):
             propose_v2(current, spy, clock=FakeClock(), timeout_s=timeout_s)
     assert spy.calls == []
+    current = copy.deepcopy(EXAMPLE)  # two GPU hosts, each probed once in host order (_propose); a storage host is not probed
+    current["hosts"].append(dict(current["hosts"][0], host_id="host-2", roles=["storage"], devices=[]))
+    assert _propose(current, ReplayGPUProbe())["host_review"] == {"host-0": "unknown", "host-1": "unknown"}
 
 
 @pytest.mark.realtime
@@ -202,8 +206,10 @@ def test_discover_live_readonly():
     runner = LocalCommandRunner() if TARGET == "host-local" else SshCommandRunner({TARGET: TARGET})
     probe = NvidiaInventoryProbe(runner, clock=RealClock(), local_host_id="host-local")
     current = copy.deepcopy(EXAMPLE)
-    host = dict(current["hosts"][0], host_id=TARGET, roles=["gpu"], ssh_endpoint=TARGET, devices=[], gpu_count=0)
-    current.update(hosts=[host], lanes=[], endpoint_lane_order=[])
+    host = dict(current["hosts"][0], host_id=TARGET, roles=["gpu"], ssh_endpoint=TARGET, devices=[], reachability="unknown",
+                observed_at=None, observation_error="not observed yet", gpu_count=None, gpu_count_reason="not observed yet")
+    current.update(stage="draft", hosts=[host], lanes=[], endpoint_lane_order=[])
+    # no recorded device to bind, so a real run proposes status needs_review with host_review review (DECIDED 10)
     proposal = propose_v2(current, probe, clock=RealClock(), timeout_s=30)
     print("DISCOVERY-PROPOSAL " + json.dumps(proposal))
     if os.environ.get("FLIGHTCTL_CONFORMANCE_EVIDENCE"):

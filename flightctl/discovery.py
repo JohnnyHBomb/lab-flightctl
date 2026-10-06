@@ -1485,7 +1485,9 @@ def _observe_host(host: dict[str, Any], observation: Mapping[str, Any]) -> tuple
         reason = observation["reason"]
         host.update(reachability="unknown", observation_error=reason, gpu_count=None, gpu_count_reason=reason)
         return "unknown", set()
-    known = {device["uuid"]: device for device in host["devices"]}
+    known: dict[str | None, dict[str, Any]] = {}  # a uuid two devices of the host share matches the first in list order
+    for device in host["devices"]:
+        known.setdefault(device["uuid"], device)
     records: list[dict[str, Any]] = []
     bound: list[str] = []
     for card in observation["devices"]:
