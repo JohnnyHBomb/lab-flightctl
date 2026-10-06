@@ -749,8 +749,10 @@ def argv0_matches(argv0: str, entry: Any) -> bool:
     then the executable followed by its arguments. An entry matches when argv0 equals it OR begins with it followed by
     a space. 'Text before the first space' would be wrong, because executable paths may contain spaces (measured: a GPU
     process whose executable directory name contains a space). The trust boundary is unchanged: only processes of the entry's
-    uid can set this text."""
-    return isinstance(entry, str) and bool(entry) and (argv0 == entry or argv0.startswith(entry + " "))
+    uid can set this text. Amendment 10: an entry that begins or ends with ASCII whitespace (U+0020, U+0009-U+000D) never
+    matches; the schemas and the probe refuse it."""
+    return (isinstance(entry, str) and bool(entry) and entry[0] not in " \t\n\v\f\r" and entry[-1] not in " \t\n\v\f\r"
+            and (argv0 == entry or argv0.startswith(entry + " ")))
 
 
 def occupancy_from_capture(gpus_csv: str, procs_csv: str, *, returncode: int, lane_id: str, host_id: str, observed_at: str,

@@ -21,6 +21,7 @@ _SHORT = _re.compile(r"[a-z][a-z0-9._-]{0,63}")
 _UUID = _re.compile(r"GPU-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _PCI = _re.compile(r"[0-9A-Fa-f]{8}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}\.[0-7]")
 _DIGITS = _re.compile(r"[0-9]+")
+ARGV0_EDGE_WHITESPACE = " \t\n\v\f\r"  # Amendment 10: an allow-list argv0 may not begin or end with one (ASCII only)
 _DYNAMIC_USER_UIDS = range(61184, 65520)  # systemd DynamicUser range: never a noise identity
 _BOUNDS = {"memory_used_mib": (True, 0, None), "memory_total_mib": (True, 1, None), "utilization_pct": (True, 0, 100),  # gpu_sample
            "temperature_c": (True, 0, 130), "power_draw_w": (False, 0, None), "power_limit_w": (False, 0, None),
@@ -200,6 +201,8 @@ class NvidiaOccupancyProbe:
             _require(set(entry) == {"argv0", "uid"}, ValueError, "a noise_allowlist entry has exactly the keys argv0 and uid")
             _require(isinstance(entry["argv0"], str), TypeError, "argv0 must be a str")
             _require(1 <= len(entry["argv0"]) <= 4096, ValueError, "argv0 must be 1-4096 characters")
+            _require(entry["argv0"][0] not in ARGV0_EDGE_WHITESPACE and entry["argv0"][-1] not in ARGV0_EDGE_WHITESPACE, ValueError,
+                     "argv0 must not start or end with whitespace")
             _int(entry["uid"], "uid", 1)
         _require(len({(e["argv0"], e["uid"]) for e in noise_allowlist}) == len(noise_allowlist), ValueError, "noise_allowlist entries must be distinct")
         _int(noise_cap_mib, "noise_cap_mib", 0)
