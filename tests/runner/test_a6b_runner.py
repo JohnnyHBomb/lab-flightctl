@@ -24,7 +24,7 @@ def test_fake_runner_per_unit_fail_closed() -> None:
     from tests.fakes.runner import FakeRunner
     runner = FakeRunner(crashing=[["false"]])
     never = runner.inspect(UNIT.format(9), None, timeout_s=10)
-    assert never["state"] == "absent" and never["cgroup_pids"] == [] and never["cgroup_empty"] is True
+    assert (never["state"], never["main_pid"], never["cgroup_pids"], never["cgroup_empty"]) == ("absent", 0, [], True)
     a, b = _start(runner, 1), _start(runner, 2)
     assert a["ok"] is True and b["ok"] is True and a["invocation_id"] != b["invocation_id"]
     pids = [r["observation"]["cgroup_pids"] for r in (a, b)]
@@ -32,6 +32,10 @@ def test_fake_runner_per_unit_fail_closed() -> None:
     stopped = runner.stop(UNIT.format(1), a["invocation_id"], timeout_s=30)
     other = runner.inspect(UNIT.format(2), "run-a6btest02", timeout_s=10)
     assert stopped["ok"] is True and other["state"] == "active" and other["cgroup_pids"] == pids[1]
+    mixed = runner.inspect(UNIT.format(2), "run-a6btest01", timeout_s=10)  # unit 2 runs run-a6btest02
+    unnamed = runner.stop(UNIT.format(2), None, timeout_s=30)  # the identity check refuses a stop with no invocation id
+    assert mixed["state"] == "unknown" and mixed["error"]["code"] == "identity_mismatch"
+    assert unnamed["ok"] is False and unnamed["error"]["code"] == "identity_mismatch"
     runner.script_next("stop", "garbage")
     refused = runner.stop(UNIT.format(2), b["invocation_id"], timeout_s=30)
     still = runner.inspect(UNIT.format(2), "run-a6btest02", timeout_s=10)
@@ -41,10 +45,12 @@ def test_fake_runner_per_unit_fail_closed() -> None:
     assert failed["ok"] is False and failed["error"]["code"] == "unit_failed"
     assert crashed["ok"] is False and crashed["error"]["code"] == "unit_absent"
     runner.script_next("inspect", "timeout")
-    timed = runner.inspect(UNIT.format(2), None, timeout_s=10)
+    runner.script_next("inspect", "garbage")
+    timed, failing = (runner.inspect(UNIT.format(2), None, timeout_s=10) for _ in range(2))
     assert timed["state"] == "unknown" and timed["cgroup_empty"] is None and timed["error"]["code"] == "timeout"
-    for definition, results in (("observation", [never, other, still, timed]), ("start_result", [a, b, failed, crashed]),
-                                ("stop_result", [stopped, refused])):
+    assert failing["state"] == "unknown" and failing["error"]["code"] == "probe_failed"
+    for definition, results in (("observation", [never, other, mixed, still, timed, failing]),
+                                ("start_result", [a, b, failed, crashed]), ("stop_result", [stopped, unnamed, refused])):
         for result in results:
             assert_valid(result, "unit", definition)
 
@@ -65,9 +71,11 @@ def test_linger_report_reads_captures() -> None:
             linger_report(1000, "Linger=no\n", _sessions(manager, other, ("5", "user", None)),
                           _sessions(manager, other, ("9", "user", None)))
         assert caught.value.report["other_sessions"] == 1
-    for linger, snapshot_a, snapshot_b in (("", a, b), ("Linger=no\n", a, a), ("Linger=no\n", _sessions(manager), b)):
-        with pytest.raises(Unreadable):
+    for linger, snapshot_a, snapshot_b, others in (("", a, b, 0), ("Linger=no\n", a, a, 1),
+                                                   ("Linger=no\n", _sessions(manager), b, 0)):
+        with pytest.raises(Unreadable) as caught:
             linger_report(1000, linger, snapshot_a, snapshot_b)
+        assert caught.value.report["other_sessions"] == others
 
 
 class _Recording:  # the target's CommandRunner, recording every argv the dryrun twin gives it
@@ -101,7 +109,10 @@ def test_dryrun_never_starts() -> None:
         assert started["ok"] is True
         stopped = dry.stop(unit, started["invocation_id"], timeout_s=30)
         assert stopped["ok"] is True and stopped["dry_run"] is True
-        assert _start(dry, 1)["ok"] is False and real.inspect(unit, "run-a6btest01", timeout_s=10)["state"] == "active"
+        again = _start(dry, 1)
+        assert again["ok"] is False and again["dry_run"] is True
+        assert [_bare(argv) for argv in dry.recorded[1:]] == [["systemctl", "--user", "stop", unit]]
+        assert real.inspect(unit, "run-a6btest01", timeout_s=10)["state"] == "active"
         assert commands.sent and all(_bare(argv)[:3] == ["systemctl", "--user", "show"] or argv[0] == "cat"
                                      for argv in commands.sent)
     finally:

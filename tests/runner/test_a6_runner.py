@@ -198,7 +198,7 @@ def test_unit_and_inhibitor_survive_logout() -> None:
         found, failure = linger_report(int(uid), linger, before, after), ""
     except (Unreadable, Inconclusive) as exc:
         found, failure = exc.report, "unreadable: " if isinstance(exc, Unreadable) else "inconclusive: "
-    report = dict(found, target=TARGET, systemd=(version or "").partition("\n")[0] or "unreadable", wait_s=20,
+    report = dict(found, target=TARGET, systemd="".join((version or "").splitlines()[:1]) or "unreadable", wait_s=20,
                   unit_survived=survived[0], inhibitor_survived=survived[1])
     print("LINGER-PROBE " + json.dumps(report, sort_keys=True))
     assert not failure, failure + json.dumps(report, sort_keys=True)
