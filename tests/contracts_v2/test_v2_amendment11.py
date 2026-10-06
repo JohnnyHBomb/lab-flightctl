@@ -56,7 +56,7 @@ def test_a5a3_is_split_and_a5a4_owns_conformance() -> None:
         assert f"`{name}` [realtime]" in a5a3, name
     assert "impl_executor_transport.py" in _field("A5a4:", "SCOPE") and "impl_executor_transport" not in _field("A5a3:", "SCOPE")
     assert "G3" in _field("A5a4:", "PROOF") and "G3" not in _field("A5a3:", "PROOF")
-    assert _row("A5b1")[4] == "A5a3" and _row("A4ub")[4] == "A4u, A5a3"  # they need the wire, not the rig
+    assert _row("A5b1")[4] == "A5a3, A5a2b" and _row("A4ub")[4] == "A4u, A5a3"  # the wire, not the rig (Amendment 12: + A5a2b)
 
 
 def test_a4_transport_rows_go_to_a5r() -> None:
@@ -69,7 +69,7 @@ def test_a4_transport_rows_go_to_a5r() -> None:
 
 
 def test_a5b1_is_split_in_three_with_renamed_tests() -> None:
-    assert [_row(p)[4] for p in ("A5b1", "A5b1s", "A5b1c")] == ["A5a3", "A5b1", "A5b2, A5b1s, A5a2"]
+    assert [_row(p)[4] for p in ("A5b1", "A5b1s", "A5b1c")] == ["A5a3, A5a2b", "A5b1", "A5b2, A5b1s, A5a2"]  # Amendment 12: A5a2b
     assert all(_row(p)[2] == "A" and _row(p)[6] == "-" for p in ("A5b1", "A5b1s", "A5b1c"))
     expected = {
         "A5b1:": ["test_release_identity_matches_reserve", "test_definite_refusal_cancels_lease_lane_stays_free",

@@ -431,8 +431,9 @@ def plan_problems(text: str) -> list[str]:
 def test_self_plan_checker_accepts_the_real_plan_and_catches_swaps() -> None:
     slices = (ROOT / "docs/v2/SLICES.md").read_text(encoding="utf-8")
     assert plan_problems(slices) == []
-    swapped = slices.replace("| A11, A12 | S09 (now delivered before the A-ASM assembly) |\n| A-ASM | S08 (live flip) |",
-                             "| A-ASM | S08 (live flip) |\n| A11, A12 | S09 (now delivered before the A-ASM assembly) |")
+    # Amendment 12: the row lists A11b between A11 and A12 (index order)
+    swapped = slices.replace("| A11, A11b, A12 | S09 (now delivered before the A-ASM assembly) |\n| A-ASM | S08 (live flip) |",
+                             "| A-ASM | S08 (live flip) |\n| A11, A11b, A12 | S09 (now delivered before the A-ASM assembly) |")
     assert swapped != slices and "crosswalk order" in plan_problems(swapped)
     duplicated = slices.replace("| A8 | S07 |", "| A8, A8 | S07 |")
     assert "crosswalk coverage" in plan_problems(duplicated)
