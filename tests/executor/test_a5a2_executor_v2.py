@@ -13,7 +13,7 @@ import flightctl.executor
 from flightctl.clock import RealClock
 from flightctl.executor import JsonStateStore, MemoryStateStore
 from tests.contracts_v2.validation import assert_invalid, assert_valid, fence_evidence_ok, grant_after_reserve
-from tests.executor.test_a5a_executor_v2 import CARD, CARDS, ENFORCE, LANE, LANE2, ROOT, SENT, UTC, ScriptedProbe, call, observation, request
+from tests.executor.test_a5a_executor_v2 import CARD, CARDS, ENFORCE, LANE, LANE2, LANE3, ROOT, SENT, UTC, ScriptedProbe, call, observation, request
 from tests.sim.rig import SimClock
 
 UNIT, AWAKE = "flightctl-lane-gpu1-g7.service", "flightctl-awake-lane-gpu1-g7.service"  # the lease identity's unit; its inhibitor's unit
@@ -71,6 +71,10 @@ def max_end(sent_at, in_s):
     return {"kind": "max-end", "in_s": in_s, "sender_utc": sent_at.strftime(UTC)}
 
 
+def now():
+    return datetime.now(timezone.utc)
+
+
 def test_definite_refusal_leaves_no_fence_and_no_inhibitor():
     clock = SimClock(boot_id="sim-host-1", utc_start=SENT)
     store, empty, port = MemoryStateStore(), observation(), ScriptedInhibitor(REFUSED, FREED, HELD, STUCK, FREED)
@@ -88,11 +92,14 @@ def test_definite_refusal_leaves_no_fence_and_no_inhibitor():
     assert (stuck["fences"][0]["inhibitor_held"], stuck["inhibitor"]) == (True, reserved["inhibitor"])
     freed = call(host, request("stop", SENT))
     assert (freed["ok"], freed["observed_state"], freed["fences"], freed["inhibitor"], port.calls[3:]) == (True, "free", [], None, [RELEASE, RELEASE])
-    for release, definite, state in ((FREED, True, "free"), (STUCK, False, "unknown"), (None, False, "unknown"), (OSError("bus"), False, "unknown")):
-        port = ScriptedInhibitor(HELD, release)  # a save that raises after a confirmed hold: released first; definite only when confirmed
-        failed = call(executor(clock, FailingStore(), None, port), reserve())
-        assert (failed["ok"], failed["definite"], failed["error"]["code"], failed["observed_state"], failed["fences"], failed["inhibitor"]) == (False, definite, "unavailable", state, [], None)
-        assert port.calls == [HOLD, RELEASE]
+    for hold, new_store, code in ((REFUSED, MemoryStateStore, "inhibitor_failed"), (STUCK, MemoryStateStore, "inhibitor_failed"),
+                                  (RuntimeError("polkit"), MemoryStateStore, "inhibitor_failed"), (HELD, FailingStore, "unavailable")):  # no hold; a save that raises after one
+        for release, definite in ((FREED, True), (STUCK, False), (None, False), (OSError("bus"), False)):  # released once; definite only when that is confirmed
+            port = ScriptedInhibitor(hold, release)
+            failed = call(executor(clock, new_store(), None, port), reserve())
+            assert (failed["ok"], failed["definite"], failed["error"]["code"], failed["observed_state"], failed["fences"], failed["inhibitor"]) == \
+                (False, definite, code, "free" if definite else "unknown", [], None)
+            assert port.calls == [HOLD, RELEASE]
     store = MemoryStateStore()  # no inhibitor port: a reserve that asks for one is refused and nothing is saved
     nothing = call(executor(clock, store), reserve())
     assert (nothing["ok"], nothing["definite"], nothing["error"]["code"], nothing["observed_state"], store.value) == (False, True, "unavailable", "free", None)
@@ -100,10 +107,13 @@ def test_definite_refusal_leaves_no_fence_and_no_inhibitor():
 
 @pytest.mark.realtime
 def test_ceiling_shortens_only_and_extend_needs_approval(tmp_path):
-    path, port, now = tmp_path / "executor-v2.json", ScriptedInhibitor(HELD), lambda: datetime.now(timezone.utc)
+    path, port = tmp_path / "executor-v2.json", ScriptedInhibitor(HELD)
     host, begun = executor(RealClock(), JsonStateStore(path), port=port), time.monotonic()
     expect = {"lease_id": "lse-0000100", "generation": 7, "host_id": "host-1", "lane_id": "lane-gpu1", "request_ids": {"creq-reserve", "creq-ceiling"}}
-    seen = lambda *replies: [{"received_t": time.monotonic(), "reply": reply} for reply in replies]
+
+    def seen(*replies):  # what the authority has received so far, on its monotonic clock
+        return [{"received_t": time.monotonic(), "reply": reply} for reply in replies]
+
     reserved = call(host, reserve(now()))  # lease 1: the inhibitor held and a 14400 s max-end
     approved = time.monotonic() + 3600  # the approval ends within the hour, the host's max-end is 4 hours out
     assert (reserved["ok"], grant_after_reserve(seen(reserved), approved, expect)) == (True, "pending ceiling-unconfirmed")
@@ -111,15 +121,17 @@ def test_ceiling_shortens_only_and_extend_needs_approval(tmp_path):
                 request("beat", now(), (("max-end", 99999),))):
         refused = call(host, bad)
         assert (refused["ok"], refused["definite"], refused["error"]["code"], refused["fences"]) == (False, True, "invalid", reserved["fences"])
+    unfenced = call(host, ask("extend", now(), {"lane": LANE3}, valid=False, max_end=max_end(now(), 99999)))  # invalid comes before not_found
+    assert (unfenced["ok"], unfenced["error"]["code"]) == (False, "invalid")
     second = call(host, request("reserve", now(), (("expiry", 1800), ("max-end", 1), ("heartbeat-stale", 600)), lane=LANE2))  # lease 2: a 1 s max-end
     extended = call(host, ask("extend", now(), {"lane": LANE2}, approval_id="apr-0000001", max_end=max_end(now(), 3600)))
     assert extended["ok"] and 3599 < extended["max_end_remaining_s"] <= 3600
-    others = lambda reply: [d for d in reply["fences"][0]["local_deadlines"] if d["kind"] != "max-end"]
-    assert others(extended) == others(second)  # only the max-end moved
+    others = [[d for d in reply["fences"][0]["local_deadlines"] if d["kind"] != "max-end"] for reply in (extended, second)]
+    assert others[0] == others[1]  # only the max-end moved
     ceiling = call(host, ask("ceiling", now(), max_end=max_end(now(), 1)))
     capped = time.monotonic()
     later = call(host, ask("ceiling", now(), max_end=max_end(now(), 9000)))  # never later
-    assert (ceiling["ok"], later["ok"], ceiling["max_end_remaining_s"] <= 1, later["max_end_remaining_s"] <= ceiling["max_end_remaining_s"]) == (True,) * 4
+    assert ceiling["ok"] and later["ok"] and ceiling["max_end_remaining_s"] <= 1 and later["max_end_remaining_s"] <= ceiling["max_end_remaining_s"]
     assert later["fences"][0]["local_deadlines"] == ceiling["fences"][0]["local_deadlines"]
     assert grant_after_reserve(seen(reserved, ceiling), approved, expect) == "grant"  # the ceiling reply confirms what the reserve reply could not
     time.sleep(max(0.0, 1.5 - (time.monotonic() - capped)))
@@ -146,6 +158,7 @@ def test_inspect_reports_holder_unit_absent():
     assert leased["unit"] == {"kind": "unit-observation", "unit": UNIT, "run_id": "run-0000007a", "invocation_id": None,
                               "state": "absent", "load_state": "not-found", "active_state": None, "sub_state": None, "result": None, "main_pid": None,
                               "exit_status": None, "cgroup": None, "cgroup_pids": [], "cgroup_empty": True, "observed_at": "2026-10-02T10:00:00Z", "error": None}
+    assert call(host, ask("inspect", SENT, scope="host", identity=None))["error"]["code"] == "unavailable"  # not served yet
     free = call(host, ask("inspect", SENT, scope="lane", identity=None, lane=LANE2))
     assert (free["ok"], free["definite"], free["observed_state"], free["fences"], free["unit"], free["occupancy"]) == (True, True, "free", [], None, None)
     assert (store.value, len(probe.calls), port.calls) == (saved, 1, [HOLD])  # nothing saved, the free lane not probed, the inhibitor not touched
