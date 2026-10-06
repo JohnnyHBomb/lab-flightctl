@@ -27,9 +27,16 @@ def _payload(host_id, request, timeout_s) -> bytes:
         raise TypeError("request must be a Mapping")
     if isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float)):
         raise TypeError("timeout_s must be an int or float")
-    if not _math.isfinite(timeout_s) or timeout_s <= 0:
+    try:
+        finite = _math.isfinite(timeout_s)
+    except OverflowError:  # an int too large for a float
+        finite = False
+    if not finite or timeout_s <= 0:
         raise ValueError("timeout_s must be finite and > 0")
-    return _json.dumps(dict(request), allow_nan=False).encode("utf-8")
+    try:
+        return _json.dumps(dict(request), allow_nan=False).encode("utf-8")
+    except RecursionError as exc:
+        raise ValueError("request is nested too deeply to serialise") from exc
 
 
 def _failure(status, message, cause=None) -> dict:
@@ -53,7 +60,7 @@ def _classify(result) -> dict:
         return _failure("failed", detail or f"executor exited with returncode {returncode}", cause)
     try:
         reply = _json.loads(result["stdout"])
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:  # deeply nested garbage raises RecursionError
         return _failure("unparsable", f"executor reply is not JSON: {exc}", cause)
     if not isinstance(reply, dict):
         return _failure("unparsable", "executor reply is not a JSON object", cause)
@@ -66,6 +73,8 @@ class LocalSubprocessTransport:
     def __init__(self, command, *, host_id):
         if not isinstance(command, (list, tuple)) or not command or not all(isinstance(a, str) and a for a in command):
             raise TypeError("command must be a non-empty list or tuple of non-empty str")
+        if any("\x00" in a for a in command):
+            raise ValueError("command elements must not contain NUL")
         if not isinstance(host_id, str) or not _HOST_ID.fullmatch(host_id):
             raise ValueError("host_id must match ^[a-z][a-z0-9._-]{0,63}$")
         self._command, self._host_id = list(command), host_id

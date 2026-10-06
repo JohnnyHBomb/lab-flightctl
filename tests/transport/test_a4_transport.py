@@ -1,5 +1,6 @@
 """A4: the executor stdio entry point and its two transports, over real child processes."""
 
+import json
 import os
 import subprocess
 import sys
@@ -48,7 +49,7 @@ def test_one_shot_invocations_keep_state(tmp_path):
 def test_garbage_is_unparsable_not_ok(tmp_path):
     state = tmp_path / "state.json"
     garbage = [b"", b"not json", b"[1]", b'{"a": 1, "a": 2}', b'{"a": NaN}', b'{"a": "\xff"}',
-               b"{" + b" " * MAX_REQUEST_BYTES + b"}"]
+               b"{" + b" " * MAX_REQUEST_BYTES + b"}", b"{}" + b" " * (MAX_REQUEST_BYTES - 1)]  # valid, one byte too long
     for payload in garbage:
         done = subprocess.run(_entry(state), input=payload, capture_output=True, timeout=30, cwd="/",
                               env={"PATH": os.environ["PATH"], "LC_ALL": "C"})  # DECIDED 2: any cwd, only PATH and LC_ALL
@@ -63,16 +64,38 @@ def test_garbage_is_unparsable_not_ok(tmp_path):
 @pytest.mark.realtime
 def test_transport_failures_are_typed_and_bounded():
     cases = {
-        "timeout": "import time; time.sleep(30)",
-        "failed": "raise SystemExit(1)",
-        "denied": "import sys; sys.stderr.write('Permission denied (publickey).\\n'); sys.exit(255)",
-        "lost": "import sys; sys.stderr.write('Connection closed by remote host\\n'); sys.exit(255)",
+        "timeout": ("import time; time.sleep(30)", "timeout"),
+        "failed": ("raise SystemExit(1)", "transport_failed"),
+        "unparsable": ("raise SystemExit(2)", "reply_unparsable"),
+        "denied": ("import sys; sys.stderr.write('Permission denied (publickey).\\n'); sys.exit(255)", "denied"),
+        "lost": ("import sys; sys.stderr.write('Connection closed by remote host\\n'); sys.exit(255)", "reply_lost"),
     }
-    for status, script in cases.items():
+    for status, (script, code) in cases.items():
         started = time.monotonic()
         result = _local(sys.executable, "-c", script).call("host-1", {"kind": "inspect"}, timeout_s=1)
         assert time.monotonic() - started < 3, status
-        assert (result["status"], result["reply"], result["error"]["layer"]) == (status, None, "transport"), result
+        assert (result["status"], result["reply"], result["error"]["layer"], result["error"]["code"]) == (
+            status, None, "transport", code), result
+
+
+def test_entry_point_and_argument_edges(tmp_path):
+    closed = subprocess.run(["bash", "-c", 'exec 0<&- "$@"', "-", *_entry(tmp_path / "state.json")],
+                            capture_output=True, timeout=30)
+    assert closed.returncode == 1 and closed.stderr.count(b"\n") == 1, closed
+    gone = subprocess.Popen(_entry(tmp_path / "state.json"), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE)
+    gone.stdout.close()
+    _, err = gone.communicate(json.dumps(_reserve(1, "token-generation-one")).encode(), timeout=30)
+    assert gone.returncode == 1 and err.count(b"\n") == 1, (gone.returncode, err)
+    with pytest.raises(ValueError):
+        _local(sys.executable, "-c", "pass", "a\x00b")
+    with pytest.raises(ValueError):
+        _local(sys.executable, "-c", "pass").call("host-1", {}, timeout_s=10**400)
+    nested = _local(sys.executable, "-c", "print('[' * 200000)").call("host-1", {}, timeout_s=10)  # RecursionError
+    assert (nested["status"], nested["error"]["code"]) == ("unparsable", "reply_unparsable"), nested
+    marker = tmp_path / "ran"
+    mismatch = _local(sys.executable, "-c", f"open({str(marker)!r}, 'w')").call("host-2", {}, timeout_s=5)
+    assert (mismatch["status"], mismatch["error"]["code"]) == ("failed", "transport_failed") and not marker.exists()
 
 
 @pytest.mark.onlab

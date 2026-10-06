@@ -74,7 +74,12 @@ def main(argv=None) -> int:
         _sys.stderr.write(_USAGE + "\n")
         return 64
     try:
-        request = _parse_request(_sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1))
+        raw = _sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
+    except Exception as exc:  # stdin closed or unreadable: one line, exit 1
+        _sys.stderr.write(_one_line("failed", exc))
+        return 1
+    try:
+        request = _parse_request(raw)
     except (ValueError, UnicodeDecodeError, RecursionError) as exc:
         _sys.stderr.write(_one_line("unparsable", exc))
         return 2
@@ -101,4 +106,9 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    _sys.exit(main())
+    _status = main()
+    try:
+        _sys.stdout.flush()
+    except Exception:  # the reader has gone: send what is left to nowhere, or the exit-time flush fails and exits 120
+        _os.dup2(_os.open(_os.devnull, _os.O_WRONLY), 1)
+    _sys.exit(_status)
