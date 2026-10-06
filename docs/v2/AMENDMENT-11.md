@@ -4,8 +4,10 @@
   for A5a3, A4ub, A5b1 and A5b2. It needs review before use, as `FROZEN.md` requires.
 - **Basis:** the brief-prep stagings of A5a3, A4ub, A5b1 and A5b2 on provisional stacks over main `5aefe88` (A5a2 stand-in
   `89bca81`, A5a3 part 1 `8486622`, A5b1 part 1 `97ebd15`, A5b2 `0eeac41`), with A5a3 also checked on the real A5a2 part 1
-  reference `3109395`. Written on main `336ed32`. Amendment 10 (argv0 whitespace) is a separate change; the next free
-  number, Amendment 12, is kept for the wave-3 A5a2 and A11 splits.
+  reference `3109395`. Written on main `336ed32` and rebased onto `15782b3` (after Amendment 10, the argv0 whitespace rule). The
+  next number, Amendment 12, holds the wave-3 A5a2 and A11 splits. Revision 2: blind Fable review (REQUEST CHANGES:
+  the A7b rows' bare replacement cannot pass G1b for A7b; A7 needs a row to edit A4ub's exact-list test; CONFORMANCE
+  owners; an undecided rounding clause), all findings taken except two nits (listed in the PR).
 
 ## Reproduced first (measured in the stagings unless marked)
 1. **A5a3 does not fit one race.** The packet as planned, as a compact lead reference, measured 371 changed lines before
@@ -68,23 +70,29 @@
 5. **A5b2 rolls renew only under executor protocol 2**; the protocol-1 /v1 renew keeps its v1 behaviour until A7b. The
    three renew rows move from A5b2 to **A7b**, whose /v1 adapter retires the v1 renew semantics, with a new A7b row for
    `tests/authority/test_review3.py (renew vector index 3 expecting 409 'already at booking bound')`. All four name A5b2's
-   `test_renew_rolls_within_ceiling_and_refuses_past_it`; A7b's brief names it as the exact merged node, because A7b adds
-   none of A5b2's tests. A5b2 keeps only its A0c repro row (rewritten onto protocol 2: the v1 wire cannot beat, measured
+   exact node `tests/authority/test_a5b2_beat_renew.py::test_renew_rolls_within_ceiling_and_refuses_past_it` (the file the
+   A5b2 brief decides), because A7b adds none of A5b2's tests and G1b counts a bare name only in a test file the same
+   packet adds or modifies (measured by the review: the bare name gave "4 problems" for A7b, the exact node "0 problems").
+   If A5b2's merged file differs, an amendment re-pins the node before A7b races. A5b2 keeps only its A0c repro row (rewritten onto protocol 2: the v1 wire cannot beat, measured
    15/15 "heartbeat identity mismatch").
 6. **The max-end margin is a contract constant:** `policy.schema.json` `timing.max_end_margin_s`, `const` 30, required
    (the decided-constant pattern of `max_clock_skew_s`), in both schema examples and `config/policy-v2.json.example`.
    `common.schema.json` `relative_deadline` names it as its `margin_s`. A5b2's GOAL names it.
 7. **A4ub's authority units move to A7.** A4ub's SCOPE drops `units/authority/*`; its index row now reads "enforcer
    one-shot service". A7's SCOPE gains `units/authority/flightctl-authority.service.template` (rendered with A4ub's
-   `render_unit`; A7's brief extends the expected list of `test_templates_render_without_site_strings`) and the authority
-   row of the `DEPLOY-LAYOUT.md` unit table; the certificate renewer is documented as a site process and templated only if
-   it is a flightctl command. A7 gains no named test.
+   `render_unit`) and the authority row of the `DEPLOY-LAYOUT.md` unit table; the certificate renewer is documented as a
+   site process and templated only if it is a flightctl command. A7 gains no named test. A4ub's
+   `test_templates_render_without_site_strings` asserts the template list is exactly the executor's two (A4ub brief), so
+   a new A7 row (`tests/siteconfig/test_a4ub_units.py::test_templates_render_without_site_strings`, rewrite, same name)
+   lets A7 append its template to that list; without it A7 would fail G1 FROZEN.
 8. **Traceability.** New CONFORMANCE.tsv rows `amd11-1` to `amd11-5`. The G04, `grok-plan-gap` and plan-r4 host-deadline
-   rows add A5a4 (and `grok-plan-gap` A7's unit template); the plan-r4 idempotency row names A5b1s instead of A5b1. The
+   rows add A5a4 (and `grok-plan-gap` A7's unit template); the plan-r4 idempotency row names A5b1s instead of A5b1; the
+   renew rows (plan-r4 renew, P0 and P3 vectors, P1, grok-new-2, G03) add A7b; `sol6r6-new` and `sol6r8-new` name A5b1s
+   and `sol6r7-N1` A5b1c in their notes. The
    frozen plan tests that pinned the old owners are updated in place: `test_v2_amendment6.py` (A5a4, A5r) and
    `test_v2_amendment9.py` (A5a4, A5a3's new dependency, the A4 rows). `contracts/v2/MIGRATION.md` still names A5b1 and
    A5b2 for the renew rows and A5a for the executor rows: superseded by the tsv files and left unchanged, as in
-   Amendments 7 and 9. The `sol6r6-new`, `sol6r7-N1` and `RESPONSE-TO-SOL6.tsv` history rows are left as they are.
+   Amendments 7 and 9. The `RESPONSE-TO-SOL6.tsv` history rows are left as they are.
 
 ## Not in this amendment
 The wave-3 sub-lead's A5a2b and A11b split proposals are Amendment 12.

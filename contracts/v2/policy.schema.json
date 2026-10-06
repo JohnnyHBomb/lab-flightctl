@@ -121,7 +121,7 @@
         },
         "max_end_margin_s": {
           "const": 30,
-          "description": "Amendment 11 (A5b2 staging, owner's approval 6 Oct 2026): the margin_s of the round-3 ceiling bound (common.schema.json relative_deadline). The authority sends max-end as in_s = approved_max_end - sent_at - max_end_margin_s, in whole seconds rounded down, on reserve and on every shorten-only ceiling. A round trip longer than this margin triggers a ceiling message; without the margin the round-4 grant rule (ceiling_confirmed) never confirms over a wire slower than the rounding slack (measured in A5b2 staging: margin 0 with a 1.5 s delay never confirmed, margin 30 confirmed on the reserve)."
+          "description": "Amendment 11 (A5b2 staging, owner's approval 6 Oct 2026): the margin_s of the round-3 ceiling bound (common.schema.json relative_deadline). The authority sends max-end as in_s = approved_max_end - sent_at - max_end_margin_s, on reserve and on every shorten-only ceiling. A round trip longer than this margin triggers a ceiling message; without the margin the round-4 grant rule (ceiling_confirmed) never confirms over a wire slower than the rounding slack (measured in A5b2 staging: margin 0 with a 1.5 s delay never confirmed, margin 30 confirmed on the reserve)."
         }
       }
     },

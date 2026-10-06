@@ -19,6 +19,7 @@ MAP = migration_gate.load_rows(ROOT / "docs/v2/migration-map.tsv")
 A4_ROWS = ("test_one_shot_invocations_keep_state", "test_garbage_is_unparsable_not_ok",
            "test_transport_failures_are_typed_and_bounded", "test_wrong_key_denied")
 RENEW = "test_renew_rolls_within_ceiling_and_refuses_past_it"
+RENEW_NODE = "tests/authority/test_a5b2_beat_renew.py::" + RENEW  # the A5b2 brief's file; A7b adds none of its tests
 
 
 def _row(packet: str) -> list[str]:
@@ -105,9 +106,9 @@ def test_renew_rows_go_to_a7b() -> None:
     a7b = _rows("A7b")
     assert {k.split(" (", 1)[0] for k in a7b} == {"tests/authority/test_revision2.py", "tests/client/test_vectors.py",
                                                   "tests/contracts/vectors/cli.json", "tests/authority/test_review3.py"}
-    assert set(a7b.values()) == {("rewrite", RENEW)} and f"`{RENEW}`" in _field("A5b2:", "ACCEPTANCE")
+    assert set(a7b.values()) == {("rewrite", RENEW_NODE)} and f"`{RENEW}`" in _field("A5b2:", "ACCEPTANCE")
     assert "protocol-2" in _field("A5b2:", "GOAL") and "A7b" in _field("A5b2:", "SCOPE")
-    assert RENEW in _field("A7b:", "SCOPE") and "exact merged node" in _field("A7b:", "SCOPE")
+    assert f"`{RENEW_NODE}`" in _field("A7b:", "SCOPE")
 
 
 def test_max_end_margin_is_a_contract_constant() -> None:
@@ -132,4 +133,8 @@ def test_authority_units_move_to_a7() -> None:
     assert "authority service" not in _row("A4ub")[1] and _row("A4ub")[7] == "G04 timer"
     assert "units/authority/flightctl-authority.service.template" in _field("A7:", "SCOPE")
     assert "test_templates_render_without_site_strings" in _field("A7:", "SCOPE")
+    # A7 edits A4ub's exact-list test under its own row (G1 FROZEN / G1b), same name in a file A7 modifies
+    assert _rows("A7") == {"tests/siteconfig/test_a4ub_units.py::test_templates_render_without_site_strings":
+                           ("rewrite", "test_templates_render_without_site_strings")}
+    assert "`test_templates_render_without_site_strings`" in _field("A4ub:", "ACCEPTANCE")
 
