@@ -45,9 +45,9 @@
 1. **A4u splits** (A4u staging report, section 7). **A4u** (part 1): `flightctl/siteconfig.py` (hash-verified load from the
    deploy dir, verified local copy, the confirmed-inventory lane binding), `docs/v2/DEPLOY-LAYOUT.md`, tests in
    `tests/siteconfig/`; `test_config_loader_rejects_hash_mismatch` [realtime], `test_local_copy_used_when_store_host_asleep`,
-   `test_expected_uuids_come_from_confirmed_inventory`; closes G24; PROOF G0-G2, G4 (A4u delivers no port, so it has no
-   G3). New **A4ub** (part 2): the unit and timer templates and a renderer; `test_templates_render_without_site_strings`,
-   `test_timer_unit_runs_one_shot` [realtime, onlab]; closes the G04 timer; G3 on the pilot host. **A4ub depends on A4u
+   `test_expected_uuids_come_from_confirmed_inventory`; closes G24; PROOF G0-G2, G4 (its on-lab test moved to
+   A4ub). New **A4ub** (part 2): the unit and timer templates and a renderer; `test_templates_render_without_site_strings`,
+   `test_timer_unit_runs_one_shot` [realtime, onlab]; closes the G04 timer; G0-G2, G4, the on-lab test on the pilot host. **A4ub depends on A4u
    and A5a3**, because A5a3 delivers the enforcer one-shot that A4ub's timer runs (point 1). A4ub therefore comes after
    A5a3 in the packet index, and the crosswalk lists S04 and S01-S02 twice to stay in index order (S10 and S22 already
    appear twice). B5 keeps its dependency on A4u: it needs the deploy-dir layout, not the unit templates.
@@ -81,15 +81,20 @@
    `tests/` and `roster/`, as `migration_gate.main` does). It passes when every pre-existing file the diff touches passes
    the unchanged per-packet check `migration_gate.check` (G1b) for at least ONE packet whose rows name that file. A file
    that no row names still fails. So do a whole-file delete row whose file was only modified, and a rewrite whose
-   replacement is not a collected node (a bare name counts only in a test file added or modified since `59bdd7f`).
+   replacement is not a collected node (a bare name counts only in a test file added or modified since `59bdd7f`),
+   but only when no other packet's rows pass on that file. Two limits, inherited from G1b and accepted here: a file
+   passes on the rows of ANY packet that names it, and a node-level (`path::name`) delete row passes
+   `migration_gate.check` unconditionally, so a file that carries one (today `tests/executor/test_executor.py`, A6b's
+   `::test_fake_isolation_guard`) accepts any change in this test. Race entries are still gated per packet (G1b in the
+   race gate). A later G1b amendment may count a `::` delete row only when its node is absent from the collection.
    `tools/migration_gate.py` and `test_b7_migration_gate_logic` are unchanged, and G1b stays per packet.
 5. **A6b keeps its two v1 rows** (`tests/executor/test_executor.py::test_fake_isolation_guard` delete;
    `tests/contracts/test_fakes.py::test_fake_interfaces` rewrite, replacement `test_fake_runner_per_unit_fail_closed`). The A6b
    race leaves them out, and A6b's lead merge executes them once this amendment is on main. The SLICES.md A6b entry says
    so.
 6. **Traceability.** New CONFORMANCE.tsv rows `amd9-1` to `amd9-5`. The G04, `grok-plan-gap` and plan-r4 host-deadline rows
-   name A4ub and A5a3; `grok-new-4` names A3c; P7 `test_discovery_mutations` and P2 `test_executor_mutations` name their
-   v2 homes (their v1 tests are deleted by A3c and A5r). The frozen plan tests that pinned the old owners are updated in
+   name A4ub and A5a3; `grok-new-4` names A3c; P7 `test_discovery_mutations` and P2 `test_executor_mutations` are `dropped`
+   with the reason (A3c and A5r delete their v1 tests; no packet owes a v2 mutation matrix). The frozen plan tests that pinned the old owners are updated in
    place: `test_v2_amendment5.py` (the `amd.json` row is A3c's), `test_v2_amendment6.py` (A5a3) and
    `test_v2_amendment7.py` (A5r). `contracts/v2/MIGRATION.md` still names A5a, A6 and A3b for these rows: superseded by the
    tsv files and left unchanged, as in Amendment 7.

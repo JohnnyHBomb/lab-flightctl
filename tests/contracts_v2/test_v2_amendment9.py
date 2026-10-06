@@ -46,7 +46,7 @@ def test_a4u_is_split_and_a4ub_follows_a5a3() -> None:
     for name in ("test_templates_render_without_site_strings", "test_timer_unit_runs_one_shot"):
         assert f"`{name}`" in a4ub and name not in a4u, name
     assert "units/host/*" in _field("A4ub:", "SCOPE") and "units/" not in _field("A4u:", "SCOPE")
-    assert "G3" not in _field("A4u:", "PROOF") and "G3 on the pilot host" in _field("A4ub:", "PROOF")
+    assert "G3" not in _field("A4u:", "PROOF") and "G4; the on-lab timer test on the pilot host" in _field("A4ub:", "PROOF")
     assert "A5a3" in _field("A4ub:", "GOAL") and "A4ub's timer" in _field("A5a3:", "GOAL")
     assert _row("B5")[4] == "A4u"  # B5 needs the deploy-dir layout, not the unit templates
 
@@ -140,6 +140,8 @@ def test_a6b_keeps_its_v1_rows() -> None:
                              "tests/executor/test_review4.py": "D", "tests/executor/test_mutations.py": "D"},
      {A5A + n for n in ("test_stop_requires_reserve_identity_and_empty_proof", "test_relative_deadline_anchored_on_host_clock",
                         "test_enforcer_real_seconds")}, set(), True),
+    ("inherited from G1b: a path::name delete row on the file passes any change (A5r's rewrites, nothing collected)",
+     {"tests/executor/test_executor.py": "M"}, set(), set(), True),
     ("A5r's whole-file delete row, file only modified", {"tests/executor/test_mutations.py": "M"}, set(), set(), False),
     ("the base's contracts-v2 rows", {"tests/integration/test_p6_scaffold.py": "M", "tests/roster/shims.py": "M"},
      {"tests/integration/test_p6_scaffold.py::test_ci_security_configuration",
