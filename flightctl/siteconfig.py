@@ -11,6 +11,8 @@ import sys as _sys
 import tempfile as _tempfile
 import time as _time
 
+from flightctl.gpu import ARGV0_EDGE_WHITESPACE as _EDGE
+
 _MANIFEST = "SHA256SUMS"
 _LINE = _re.compile(r"([0-9a-f]{64})  ([A-Za-z0-9][A-Za-z0-9._-]{0,127})")
 _GPU = _re.compile(r"GPU-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
@@ -160,6 +162,8 @@ def _bind_lane(site, lane_id) -> tuple:
     tenant = _get(_get(lane, "rules", dict, "lane"), "external_tenant", dict, "lane rules")
     allow = [{"argv0": _get(entry, "argv0", str, "noise_allowlist entry"), "uid": _get(entry, "uid", int, "noise_allowlist entry")}
              for entry in _get(tenant, "noise_allowlist", list, "external_tenant")]
+    if any(e["argv0"][:1] in _EDGE or e["argv0"][-1:] in _EDGE for e in allow):  # Amendment 10 ("" is in every str)
+        raise SiteConfigRefused(f"lane {repr(lane_id)[:80]} has a noise_allowlist argv0 that is empty or starts or ends with whitespace")
     cap, noise = _get(tenant, "noise_cap_mib", int, "external_tenant"), _get(tenant, "lane_noise_mib", int, "external_tenant")
     return host_id, uuids, allow, cap, noise
 

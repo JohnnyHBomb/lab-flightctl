@@ -847,7 +847,9 @@
                   "argv0": {
                     "type": "string",
                     "minLength": 1,
-                    "maxLength": 4096
+                    "maxLength": 4096,
+                    "pattern": "^[^ \\t-\\r]([\\s\\S]*[^ \\t-\\r])?(?![\\s\\S])",
+                    "description": "Amendment 10: no leading or trailing ASCII whitespace (U+0020, U+0009-U+000D); whitespace inside stays legal. The end anchor is (?![\\s\\S]), not $, because Python's $ also matches before a final newline."
                   },
                   "uid": {
                     "type": "integer",
