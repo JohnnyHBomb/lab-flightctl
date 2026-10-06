@@ -7,9 +7,8 @@ Nothing is cached and no argument is mutated.
 """
 
 _MIB = 1048576
-_MAX_NUMA_NODE = 63  # inventory.schema.json caps numa_node; the probe's inventory_device does not
 _UNKNOWN_REASONS = {
-    "numa_node": "the inventory probe read no NUMA node in the inventory range 0-63 for this card",
+    "numa_node": "the inventory probe read no NUMA node for this card",
     "device_minor": "the inventory probe read no device minor for this card",
     "drives_display": "the inventory probe does not observe display use",
 }
@@ -17,14 +16,10 @@ _UNKNOWN_REASONS = {
 
 def device_from_probe(device_id, card, drives_display=None):
     """A new device record for `card`, with one unknown reason for each of numa_node, device_minor and
-    drives_display that is None. A NUMA node above the inventory's range is recorded as None, so the record stays
-    a valid inventory device."""
-    numa_node = card["numa_node"]
-    if numa_node is not None and numa_node > _MAX_NUMA_NODE:
-        numa_node = None
+    drives_display that is None."""
     record = {"device_id": device_id, "vendor": "nvidia", "model": card["name"],
               "vram_bytes": card["memory_total_mib"] * _MIB, "driver": card["driver_version"], "uuid": card["uuid"],
-              "pci_bus_id": card["pci_bus_id"], "numa_node": numa_node, "device_minor": card["device_minor"],
+              "pci_bus_id": card["pci_bus_id"], "numa_node": card["numa_node"], "device_minor": card["device_minor"],
               "drives_display": drives_display}
     record["unknown_reasons"] = {key: reason for key, reason in _UNKNOWN_REASONS.items() if record[key] is None}
     return record

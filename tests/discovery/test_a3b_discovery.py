@@ -12,7 +12,7 @@ from flightctl.commands import LocalCommandRunner, SshCommandRunner
 from flightctl.discovery import DiscoveryError, ProjectionError, project_v2, propose_v2
 from flightctl.gpu import NvidiaInventoryProbe
 from flightctl.inventory import device_from_probe, inventory_problems
-from tests.contracts_v2.validation import assert_valid, inventory_semantics
+from tests.contracts_v2.validation import assert_invalid, assert_valid, inventory_semantics
 from tests.fakes.clock import FakeClock
 from tests.fakes.gpu_replay import CAPTURE_DIR, ReplayGPUProbe
 
@@ -186,9 +186,16 @@ def test_discover_against_replayed_real_captures():
             assert again["inventory"]["hosts"] == same["inventory"]["hosts"] and again["lane_review"]["lane-gpu1"] == "retain"
             assert again["inventory"]["lanes"][0]["enabled"] is False  # discovery never enables a lane
 
-    for numa_node in (None, 64):  # 64 is a valid observation but above the inventory's NUMA range: recorded unknown
-        record = device_from_probe("gpu-x", dict(cards[0], numa_node=numa_node, device_minor=None), False)
-        assert (record["numa_node"], record["device_minor"], sorted(record["unknown_reasons"])) == (None, None, ["device_minor", "numa_node"])
+    record = device_from_probe("gpu-x", dict(cards[0], numa_node=None, device_minor=None), False)
+    assert (record["numa_node"], record["device_minor"], sorted(record["unknown_reasons"])) == (None, None, ["device_minor", "numa_node"])
+    observation = copy.deepcopy(observation)  # NUMA node 200 is kept as observed, binds and round-trips (DECIDED 3)
+    for card in observation["devices"]:
+        card["numa_node"] = 200
+    probe.inventory = lambda host_id, *, timeout_s: copy.deepcopy(observation)
+    proposal = _propose(_current(probe, observation["devices"]), probe)
+    assert proposal["status"] == "proposed" and {d["numa_node"] for d in project_v2(proposal)["hosts"][1]["devices"]} == {200}
+    for numa_node in (1024, -1, "200", 2.5, True):  # above the kernel's MAX_NUMNODES (1024 nodes) or not a node id
+        assert_invalid(dict(project_v2(proposal)["hosts"][1]["devices"][0], numa_node=numa_node), "inventory", "device")
     spy = _Recording(ReplayGPUProbe())
     for timeout_s in (0, -1.5, float("nan"), float("inf"), True, "10", None, 10**400):
         with pytest.raises(DiscoveryError):

@@ -632,12 +632,12 @@
           ]
         },
         "numa_node": {
-          "description": "From /sys/bus/pci/devices/<pci_bus_id>/numa_node. A sysfs value of -1 maps to null with reason 'no numa affinity reported'.",
+          "description": "From /sys/bus/pci/devices/<pci_bus_id>/numa_node. A sysfs value of -1 maps to null with reason 'no numa affinity reported'. Linux has at most 1024 nodes (MAX_NUMNODES = 1 << CONFIG_NODES_SHIFT, NODES_SHIFT at most 10), so a node id is 0-1023.",
           "anyOf": [
             {
               "type": "integer",
               "minimum": 0,
-              "maximum": 63
+              "maximum": 1023
             },
             {
               "type": "null"
