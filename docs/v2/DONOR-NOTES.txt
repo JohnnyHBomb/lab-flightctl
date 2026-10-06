@@ -1,7 +1,7 @@
 DONOR NOTES: what lab-flightctl v2 borrows from other projects, under which licence, and how it is attributed
 (2 Oct 2026). Licences were read from each project's own repository on 2 Oct 2026 (LICENSE/COPYING files fetched
-raw; quoted lines below). lab-flightctl itself declares no licence yet (pyproject has none): the owner's call when the
-repo is shared; nothing below forces one.
+raw; quoted lines below). lab-flightctl itself is licensed MIT OR Apache-2.0 (LICENSE-MIT, LICENSE-APACHE; the
+owner's choice of 6 Oct 2026); the rules below are unchanged by it.
 
 RULE APPLIED
 - GPL code (Slurm, runpodctl) is NEVER copied, translated or closely paraphrased into this repo. We borrow published
