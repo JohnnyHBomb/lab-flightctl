@@ -8,7 +8,6 @@ code can be exercised without a network or a host GPU.
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import json
 import math
@@ -49,12 +48,7 @@ _SAFE_REASON_TEXT = frozenset(
         "missing VRAM measurement",
         "invalid VRAM measurement",
         "invalid VRAM unit",
-        "nvidia-smi returned no output",
-        "nvidia-smi returned no devices",
-        "unparsable nvidia-smi row",
         "incomplete GPU observation",
-        "AMD/sysfs returned no output",
-        "incomplete AMD/sysfs observation",
         "GPU probe returned no mapping",
         "GPU probe returned no devices",
         "empty GPU observation",
@@ -156,55 +150,6 @@ def _safe_positive_int(value: object) -> int | None:
     return number if number > 0 else None
 
 
-def _parse_memory_bytes(value: object) -> tuple[int | None, str | None]:
-    """Parse the common nvidia-smi/sysfs memory forms without coercing bad data."""
-
-    if isinstance(value, bool) or value is None:
-        return None, "missing VRAM measurement"
-    text = str(value).strip().replace(",", "")
-    if not text:
-        return None, "missing VRAM measurement"
-    match = re.fullmatch(r"([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*([A-Za-z]+)?", text)
-    if not match:
-        return None, "invalid VRAM measurement"
-    try:
-        number = float(match.group(1))
-    except ValueError:
-        return None, "invalid VRAM measurement"
-    if not math.isfinite(number) or number <= 0:
-        return None, "invalid VRAM measurement"
-    unit = (match.group(2) or "mib").lower()
-    multipliers = {
-        "b": 1,
-        "byte": 1,
-        "bytes": 1,
-        "kib": 1024,
-        "kb": 1000,
-        "mib": 1024**2,
-        "mb": 1000**2,
-        "gib": 1024**3,
-        "gb": 1000**3,
-        "tib": 1024**4,
-        "tb": 1000**4,
-    }
-    multiplier = multipliers.get(unit)
-    if multiplier is None:
-        return None, "invalid VRAM unit"
-    result = number * multiplier
-    if not result.is_integer() or result <= 0:
-        return None, "invalid VRAM measurement"
-    return int(result), None
-
-
-def _parse_sysfs_bytes(value: object) -> tuple[int | None, str | None]:
-    """Sysfs ``vram_bytes`` is already bytes unless it explicitly has a unit."""
-
-    if isinstance(value, str) and re.fullmatch(r"\s*\+?\d+\s*", value):
-        number = int(value.strip())
-        return (number, None) if number > 0 else (None, "invalid VRAM measurement")
-    return _parse_memory_bytes(value)
-
-
 def _device(
     device_id: object,
     *,
@@ -257,148 +202,17 @@ def _unknown_gpu(reason: str) -> dict[str, Any]:
     }
 
 
-def parse_nvidia_smi(raw: str) -> dict[str, Any]:
-    """Parse nvidia-smi CSV output, preserving partial fields as unknown.
-
-    The parser accepts both the three-column query form
-    ``name,memory.total,driver_version`` and the four-column test form with a
-    vendor column.  An empty, malformed, or negative measurement is never
-    interpreted as zero GPUs.
-    """
-
-    if not isinstance(raw, str) or not raw.strip():
-        return _unknown_gpu("nvidia-smi returned no output")
-    rows = list(csv.reader(raw.strip().splitlines()))
-    devices: list[dict[str, Any]] = []
-    errors: list[str] = []
-    for index, row in enumerate(rows):
-        row = [part.strip() for part in row]
-        if not row or all(not part for part in row):
-            continue
-        # A header is harmless when the command was run without noheader.
-        if row[0].lower() in {"name", "gpu_name", "model"}:
-            continue
-        if len(row) < 3:
-            errors.append("unparsable nvidia-smi row")
-            continue
-        model = row[0] or None
-        vram, vram_error = _parse_memory_bytes(row[1])
-        driver = row[2] or None
-        vendor = (row[3] if len(row) >= 4 else "nvidia") or None
-        reasons: dict[str, str] = {}
-        if model is None:
-            reasons["model"] = "model not reported"
-        if vram_error:
-            reasons["vram_bytes"] = vram_error
-        if driver is None:
-            reasons["driver"] = "driver not reported"
-        if vendor is None:
-            reasons["vendor"] = "vendor not reported"
-        devices.append(_device(f"gpu{index}", vendor=vendor, model=model, vram_bytes=vram, driver=driver, reasons=reasons))
-    if not devices:
-        return _unknown_gpu(errors[0] if errors else "nvidia-smi returned no devices")
-    reason = errors[0] if errors else None
-    if any(device["unknown_reasons"] for device in devices):
-        reason = reason or "incomplete GPU observation"
-    complete = not errors and all(not device["unknown_reasons"] for device in devices)
-    first = devices[0]
-    return {
-        "vendor": first["vendor"],
-        "model": first["model"],
-        "vram_bytes": first["vram_bytes"],
-        "driver": first["driver"],
-        "count": len(devices) if complete else None,
-        "reason": reason,
-        "devices": devices,
-    }
-
-
-def _sysfs_groups(raw: str) -> list[dict[str, str]]:
-    groups: list[dict[str, str]] = []
-    current: dict[str, str] = {}
-    for line in str(raw).splitlines():
-        stripped = line.strip()
-        if not stripped:
-            if current:
-                groups.append(current)
-                current = {}
-            continue
-        if "=" not in stripped:
-            continue
-        key, value = (part.strip() for part in stripped.split("=", 1))
-        key = key.rsplit(".", 1)[-1]
-        if key in {"vendor", "model", "vram_bytes", "driver"}:
-            current[key] = value
-    if current:
-        groups.append(current)
-    return groups
-
-
-def parse_amd_sysfs(raw: str) -> dict[str, Any]:
-    """Parse the small key/value representation used for AMD sysfs probes."""
-
-    groups = _sysfs_groups(raw)
-    if not groups:
-        return _unknown_gpu("AMD/sysfs returned no output")
-    devices: list[dict[str, Any]] = []
-    for index, fields in enumerate(groups):
-        vram, vram_error = _parse_sysfs_bytes(fields.get("vram_bytes"))
-        reasons: dict[str, str] = {}
-        for field in ("vendor", "model", "driver"):
-            if not fields.get(field):
-                reasons[field] = f"{field} not reported"
-        if vram_error:
-            reasons["vram_bytes"] = vram_error
-        devices.append(
-            _device(
-                f"gpu{index}",
-                vendor=fields.get("vendor"),
-                model=fields.get("model"),
-                vram_bytes=vram,
-                driver=fields.get("driver"),
-                reasons=reasons,
-            )
-        )
-    complete = all(not item["unknown_reasons"] for item in devices)
-    first = devices[0]
-    return {
-        "vendor": first["vendor"],
-        "model": first["model"],
-        "vram_bytes": first["vram_bytes"],
-        "driver": first["driver"],
-        "count": len(devices) if complete else None,
-        "reason": None if complete else "incomplete AMD/sysfs observation",
-        "devices": devices,
-    }
-
-
 def _normalise_gpu_result(result: object) -> dict[str, Any]:
     """Normalise a fake or transport GPU result without importing fake code."""
 
-    if isinstance(result, str):
-        return parse_nvidia_smi(result)
     if not isinstance(result, Mapping):
         return _unknown_gpu("GPU probe returned no mapping")
     data: Mapping[str, Any] = result
     for key in ("gpu", "gpu_probe", "probe", "response"):
         nested = data.get(key)
-        if isinstance(nested, Mapping) and (key != "response" or any(k in nested for k in ("devices", "count", "raw", "nvidia_smi", "sysfs"))):
+        if isinstance(nested, Mapping) and (key != "response" or any(k in nested for k in ("devices", "count", "raw", "nvidia_smi"))):
             data = nested
             break
-    if isinstance(data.get("nvidia_smi"), str):
-        return parse_nvidia_smi(data["nvidia_smi"])
-    if isinstance(data.get("nvidia_smi_output"), str):
-        return parse_nvidia_smi(data["nvidia_smi_output"])
-    if isinstance(data.get("amd_sysfs"), str) or isinstance(data.get("sysfs"), str):
-        return parse_amd_sysfs(str(data.get("amd_sysfs", data.get("sysfs", ""))))
-    if isinstance(data.get("sysfs_output"), str):
-        return parse_amd_sysfs(data["sysfs_output"])
-    if isinstance(data.get("stdout"), str):
-        family = str(data.get("family", "nvidia")).lower()
-        return parse_amd_sysfs(data["stdout"]) if family in {"amd", "sysfs"} else parse_nvidia_smi(data["stdout"])
-    if isinstance(data.get("raw"), str):
-        family = str(data.get("family", "nvidia")).lower()
-        return parse_amd_sysfs(data["raw"]) if family in {"amd", "sysfs"} else parse_nvidia_smi(data["raw"])
     status = str(data.get("status", "")).lower()
     if status in {"missing", "unavailable", "timeout", "denied", "unknown", "failure", "failed"}:
         return _unknown_gpu(_safe_reason(data.get("reason", data.get("error", f"GPU probe {status}")), default="GPU probe failed"))
@@ -1001,7 +815,7 @@ class DiscoveryHandler:
         user = str(spec.get("ssh_user") or (current_host or {}).get("ssh_user") or "runner")
         base = {"host_id": host_id, "ssh_endpoint": endpoint, "ssh_user": user}
         observations: list[dict[str, Any]] = []
-        result = self._request(endpoint, {"kind": "discovery", "ssh_user": user, "commands": ["nvidia-smi", "amd-sysfs"]}, timeout_s)
+        result = self._request(endpoint, {"kind": "discovery", "ssh_user": user, "commands": ["nvidia-smi"]}, timeout_s)
         ok, payload, reason = self._transport_payload(result)
         if not ok:
             failure = self._failure_reason(reason)
@@ -1019,12 +833,12 @@ class DiscoveryHandler:
         old = current_host
         host, meta = self._merge_host(base, old, gpu, now, used_device_ids)
         gpu_status = "confirmed" if gpu["count"] is not None else "unknown"
-        observations.append(self._observation("gpu", host_id, now, gpu_status, {"count": gpu["count"]}, gpu.get("reason"), self._gpu_source(payload, gpu_payload)))
+        observations.append(self._observation("gpu", host_id, now, gpu_status, {"count": gpu["count"]}, gpu.get("reason"), "nvidia-smi"))
         for device in host["devices"]:
             status = "confirmed" if not device["unknown_reasons"] else "unknown"
-            observations.append(self._observation("device", host_id, now, status, {key: device[key] for key in ("device_id", "vendor", "model", "vram_bytes")}, next(iter(device["unknown_reasons"].values()), None), "nvidia-smi" if device.get("vendor") == "nvidia" else "sysfs"))
+            observations.append(self._observation("device", host_id, now, status, {key: device[key] for key in ("device_id", "vendor", "model", "vram_bytes")}, next(iter(device["unknown_reasons"].values()), None), "nvidia-smi"))
             if device.get("driver") is not None:
-                observations.append(self._observation("driver", host_id, now, "confirmed", {"device_id": device["device_id"], "driver": device["driver"]}, None, "nvidia-smi" if device.get("vendor") == "nvidia" else "sysfs"))
+                observations.append(self._observation("driver", host_id, now, "confirmed", {"device_id": device["device_id"], "driver": device["driver"]}, None, "nvidia-smi"))
         meta["failed"] = False
         return host, observations, meta
 
@@ -1034,23 +848,12 @@ class DiscoveryHandler:
             return payload
         if not isinstance(payload, Mapping):
             return None
-        for key in ("gpu", "gpu_probe", "nvidia_smi", "nvidia_smi_output", "amd_sysfs", "sysfs", "sysfs_output", "stdout", "raw", "devices", "count", "no_gpu"):
+        for key in ("gpu", "gpu_probe", "nvidia_smi", "nvidia_smi_output", "stdout", "raw", "devices", "count", "no_gpu"):
             if key in payload:
-                if key in {"nvidia_smi", "nvidia_smi_output", "amd_sysfs", "sysfs", "sysfs_output", "stdout", "raw"} and isinstance(payload.get(key), str):
-                    family = payload.get("family", "amd" if key in {"amd_sysfs", "sysfs", "sysfs_output"} else "nvidia")
-                    return {key: payload[key], "family": family}
+                if key in {"nvidia_smi", "nvidia_smi_output", "stdout", "raw"} and isinstance(payload.get(key), str):
+                    return {key: payload[key]}
                 return payload
         return None
-
-    @staticmethod
-    def _gpu_source(payload: object, gpu_payload: object) -> str:
-        if isinstance(gpu_payload, Mapping) and any(key in gpu_payload for key in ("amd_sysfs", "sysfs")):
-            return "sysfs"
-        if isinstance(gpu_payload, Mapping) and gpu_payload.get("family") in {"amd", "sysfs"}:
-            return "sysfs"
-        if isinstance(payload, Mapping) and payload.get("family") in {"amd", "sysfs"}:
-            return "sysfs"
-        return "nvidia-smi"
 
     @staticmethod
     def _failure_reason(reason: str | None) -> str:
@@ -1558,8 +1361,6 @@ __all__ = [
     "DiscoveryHandler",
     "Discovery",
     "discover",
-    "parse_amd_sysfs",
-    "parse_nvidia_smi",
     "parse_tailnet_status",
     "parse_tailscale_status",
     "project_proposal",
