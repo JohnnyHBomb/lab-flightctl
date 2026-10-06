@@ -1,13 +1,6 @@
-import pytest
-
 from tests.sim.rig import SimSite
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="A5a: the reserve deadline carries the controller's boot id, so a lane whose executor runs on another host refuses it",
-)
 def test_repro_cross_host_reserve(tmp_path):
     site = SimSite(
         tmp_path,

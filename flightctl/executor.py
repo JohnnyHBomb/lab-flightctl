@@ -481,8 +481,6 @@ class Executor:
         with self._lock:
             if self._clock_frozen_locked():
                 return self._reply(request, "rejected", False, self._lane_state(key), False, "clock uncertainty freezes admission")
-            if identity.get("deadline", {}).get("boot_id") != self._read_clock()[2]:
-                return self._reply(request, "rejected", False, "unknown", False, "deadline belongs to another boot")
             record = self._state["lanes"].get(key)
             if isinstance(record, dict) and record.get("state") in _ACTIVE_STATES:
                 if self._same_reservation(record, identity, policy):
@@ -2278,3 +2276,186 @@ def _reply_acknowledgement(kind: str, requested: str, ok: bool) -> str:
 # Names used by the host package and by small embedding callers.
 HostExecutor = Executor
 ControllerTrust = TrustedController
+
+
+# ----------------------------------------------------------------------
+# Executor protocol v2 (contracts/v2/executor.schema.json), holder mode
+
+_V2_DUE = ("expiry", "max-end", "heartbeat-stale")  # the deadline kinds that act, in report order; grace never acts
+_V2_PROTECTED_STOP_MODES = frozenset({"owner-release", "operator-stop", "approved-forced-preemption", "holder-lost"})
+_V2_UTC = "%Y-%m-%dT%H:%M:%SZ"
+
+
+class ExecutorV2:
+    """Executor protocol v2 for holder-mode leases: reserve, beat and stop, and the deadline enforcer.
+
+    A received relative deadline is anchored on this host's own monotonic clock and boot when the
+    request is handled (G02): the sender's clocks never set one and no boot id is compared across
+    hosts. Each record in the store document's ``lanes`` holds the lane's highest generation and its
+    fence; every change is saved before the reply is built. A lane is freed only on an occupancy
+    observation that proves it empty.
+    """
+
+    def __init__(self, clock: Clock, *, host_id: str, store: Any, lane_cards: Mapping[str, Iterable[str]],
+                 occupancy: Any | None = None, max_clock_skew_s: float = 30.0, timeout_s: float = 10.0) -> None:
+        self.clock = clock
+        self.host_id = host_id
+        self._store = store
+        self._lane_cards = lane_cards
+        self._occupancy = occupancy
+        self._max_clock_skew_s = max_clock_skew_s
+        self._timeout_s = timeout_s
+        self._state = store.load()
+
+    def handle(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        """Answer one v2 request with one v2 reply; every expected failure is a returned refusal."""
+
+        now = (self.clock.utc().astimezone(timezone.utc), self.clock.monotonic(), self.clock.boot_id())
+        handler = {"reserve": self._reserve, "beat": self._beat, "stop": self._stop}.get(request["kind"])
+        if (now[0] - _parse_utc(request["sent_at"])).total_seconds() > self._max_clock_skew_s:
+            return self._reply(request, now, "clock_skew", f"the request is more than {self._max_clock_skew_s} s old on this host's clock")
+        if handler is None:
+            return self._reply(request, now, "unavailable", f"this executor does not serve {request['kind']} requests yet")
+        lane = request["identity"]["lane"]
+        if lane["host_id"] != self.host_id or lane["lane_id"] not in self._lane_cards:
+            return self._reply(request, now, "not_found", "this host does not serve the lane")
+        return handler(request, now, _lane_key(lane))
+
+    def enforce_deadlines(self) -> list[dict[str, Any]]:
+        """The host timer's one-shot: act on each reserved fence of this boot with a passed deadline."""
+
+        monotonic, boot = self.clock.monotonic(), self.clock.boot_id()
+        acted = []
+        for key in sorted(self._state["lanes"], key=lambda lane_key: lane_key.split("/")):
+            lane = self._state["lanes"][key]
+            fence = lane.get("fence")
+            due = _v2_due(fence, monotonic) if fence and fence["state"] == "reserved" and fence["boot_id"] == boot else []
+            if not due:
+                continue
+            if fence["execution_policy"]["protected"]:  # a protected lease is quarantined, never probed or stopped
+                self._save(key, {**lane, "fence": {**fence, "state": "quarantined"}})
+                state = "quarantined"
+            else:
+                state = "quarantined" if self._release(key, "quarantined")[0] else "free"
+            acted.append({"lane": fence["identity"]["lane"], "generation": fence["identity"]["generation"], "due": due, "state": state})
+        return copy.deepcopy(acted)
+
+    def _reserve(self, request: Mapping[str, Any], now: tuple[datetime, float, str], key: str) -> dict[str, Any]:
+        identity, policy = request["identity"], request["execution_policy"]
+        lane = self._state["lanes"].get(key, {})
+        fence, highest = lane.get("fence"), lane.get("generation", 0)
+        if not any(deadline["kind"] == "max-end" for deadline in request["deadlines"]):
+            return self._reply(request, now, "invalid", "a reserve must carry a max-end deadline")
+        if policy["work_mode"] == "unit" or request["awake"]["hold_inhibitor"]:
+            return self._reply(request, now, "unavailable", "unit work and the awake inhibitor are not served yet")
+        if fence and fence["identity"] == identity and fence["state"] == "reserved":
+            return self._reply(request, now)  # a retried reserve: the fence stays exactly as it was anchored
+        if fence:
+            return self._reply(request, now, "fenced", f"the lane is fenced ({fence['state']})")
+        if identity["generation"] <= highest:
+            return self._reply(request, now, "stale_generation", f"generation {identity['generation']} is not above the lane's highest, {highest}")
+        fence = {"identity": copy.deepcopy(identity), "execution_policy": copy.deepcopy(policy), "state": "reserved", "boot_id": now[2],
+                 "local_deadlines": [_v2_anchor(deadline, now) for deadline in request["deadlines"]]}
+        try:
+            self._save(key, {"generation": identity["generation"], "fence": fence})
+        except Exception as exc:  # nothing was kept: a definite non-reservation
+            return self._reply(request, now, "unavailable", f"the fence could not be saved: {exc}"[:1024])
+        return self._reply(request, now)
+
+    def _beat(self, request: Mapping[str, Any], now: tuple[datetime, float, str], key: str) -> dict[str, Any]:
+        lane = self._state["lanes"].get(key, {})
+        fence = lane.get("fence")
+        if any(deadline["kind"] == "max-end" for deadline in request["deadlines"]):
+            return self._reply(request, now, "invalid", "a beat never moves max-end; only an approved extend does")
+        if not fence:
+            return self._reply(request, now, "not_found", "the lane holds no fence")
+        if fence["identity"] != request["identity"]:
+            return self._reply(request, now, "identity_mismatch", "the identity differs from the reserved one")
+        if fence["boot_id"] != now[2]:
+            return self._reply(request, now, "reconcile_required", "the fence was reserved before this host's current boot")
+        due = _v2_due(fence, now[1])
+        if fence["state"] != "reserved" or due:
+            return self._reply(request, now, "conflict", f"the fence is {fence['state']}; passed deadlines: {', '.join(due) or 'none'}")
+        kinds = {deadline["kind"]: deadline for deadline in fence["local_deadlines"]}
+        kinds.update((deadline["kind"], _v2_anchor(deadline, now)) for deadline in request["deadlines"])
+        self._save(key, {**lane, "fence": {**fence, "local_deadlines": list(kinds.values())}})
+        return self._reply(request, now)
+
+    def _stop(self, request: Mapping[str, Any], now: tuple[datetime, float, str], key: str) -> dict[str, Any]:
+        fence = self._state["lanes"].get(key, {}).get("fence")
+        mode = request["stop_authority"]["mode"]
+        if not fence:
+            return self._reply(request, now, "not_found", "the lane holds no fence")
+        if fence["identity"] != request["identity"]:
+            return self._reply(request, now, "identity_mismatch", "the identity differs from the reserved one")
+        if fence["execution_policy"]["protected"] and mode not in _V2_PROTECTED_STOP_MODES:
+            return self._reply(request, now, "denied", f"a {mode} stop cannot end a lease reserved protected")
+        code, observation = self._release(key, "stopping")
+        return self._reply(request, now, code, f"the lane is not proven empty ({code})", definite=code is None, occupancy=observation)
+
+    def _release(self, key: str, failed_state: str) -> tuple[str | None, Mapping[str, Any] | None]:
+        """Probe the lane once; remove the fence only on an emptiness proof, else keep it in failed_state."""
+
+        lane = self._state["lanes"][key]
+        fence = lane["fence"]
+        lane_id = fence["identity"]["lane"]["lane_id"]
+        try:
+            tenant = fence["execution_policy"]["external_tenant"]
+            observation = None if self._occupancy is None else self._occupancy.occupancy(
+                self.host_id, lane_id, list(self._lane_cards[lane_id]), noise_allowlist=tenant["noise_allowlist"],
+                noise_cap_mib=tenant["noise_cap_mib"], lane_noise_mib=tenant["lane_noise_mib"], timeout_s=self._timeout_s)
+        except Exception:  # a probe that raised proves nothing
+            observation = None
+        if not isinstance(observation, Mapping):
+            observation, code = None, "probe_unknown"
+        elif observation.get("status") != "ok" or "empty" not in observation or "tenants" not in observation:
+            code = "probe_unknown"
+        else:
+            code = None if observation["empty"] is True and observation["tenants"] == [] else "gpu_tenant"
+        self._save(key, {**lane, "fence": None if code is None else {**fence, "state": failed_state}})
+        return code, observation
+
+    def _save(self, key: str, lane: Mapping[str, Any]) -> None:
+        document = {**self._state, "lanes": {**self._state["lanes"], key: lane}}
+        self._store.save(document)
+        self._state = document  # only a saved document becomes the executor's state
+
+    def _reply(self, request: Mapping[str, Any], now: tuple[datetime, float, str], code: str | None = None, message: str = "", *,
+               definite: bool = True, occupancy: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        utc, monotonic, boot = now
+        identity = request.get("identity")
+        fence = self._state["lanes"].get(_lane_key(identity["lane"]), {}).get("fence") if identity else None
+        if code is not None and request["kind"] == "reserve" and fence:
+            definite = False  # a reserve refusal is definite only while the lane holds no fence
+        remaining = None
+        if fence and fence["identity"] == identity and fence["boot_id"] == boot:
+            max_end = next(deadline["monotonic_deadline_s"] for deadline in fence["local_deadlines"] if deadline["kind"] == "max-end")
+            remaining = max(0.0, max_end - monotonic)
+        stamp = utc.strftime(_V2_UTC)
+        reply = {
+            "schema_version": 2, "kind": request["kind"], "controller_request_id": request["controller_request_id"],
+            "echoed_identity": identity, "ok": code is None, "definite": definite,
+            "observed_state": fence["state"] if fence else "free" if definite else "unknown",
+            "host_boot": {"host_id": self.host_id, "boot_id": boot, "observed_at": stamp}, "host_utc": stamp,
+            "fences": [{"identity": fence["identity"], "state": fence["state"], "local_deadlines": fence["local_deadlines"],
+                        "inhibitor_held": False, "rebooted_since_reserve": fence["boot_id"] != boot}] if fence else [],
+            "unit": None, "occupancy": occupancy, "inhibitor": None, "stage": None, "log_lines": [], "next_cursor": None,
+            "error": None if code is None else {"code": code, "message": message, "layer": "executor", "cause": None},
+            "dry_run": False, "output": None, "max_end_remaining_s": remaining,
+        }
+        if request["kind"] == "session":
+            reply["sessions"] = []
+        return copy.deepcopy(reply)
+
+
+def _v2_anchor(deadline: Mapping[str, Any], now: tuple[datetime, float, str]) -> dict[str, Any]:
+    """G02: a received duration becomes a deadline on this host's own monotonic clock and boot."""
+
+    return {"kind": deadline["kind"], "boot_id": now[2], "monotonic_deadline_s": now[1] + deadline["in_s"],
+            "utc_estimate": (now[0] + timedelta(seconds=deadline["in_s"])).strftime(_V2_UTC)}
+
+
+def _v2_due(fence: Mapping[str, Any], monotonic: float) -> list[str]:
+    """The fence's passed expiry, max-end and heartbeat-stale deadlines, in that order."""
+
+    return [kind for kind in _V2_DUE if any(d["kind"] == kind and monotonic >= d["monotonic_deadline_s"] for d in fence["local_deadlines"])]
