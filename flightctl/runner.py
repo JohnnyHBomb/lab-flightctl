@@ -1,4 +1,4 @@
-"""WorkloadRunner real twin (A6): transient `systemd --user` units over a CommandRunner (unit.schema.json).
+"""WorkloadRunner real twin (A6) and dryrun twin (A6b): transient `systemd --user` units over a CommandRunner (unit.schema.json).
 run_id travels in the unit environment (FLIGHTCTL_RUN_ID); invocation_id is systemd's InvocationID. One deadline per call;
 failures, timeouts and unparsable output are `unknown` or ok=False with a typed error; only invalid arguments raise."""
 
@@ -91,8 +91,8 @@ class SystemdUserRunner:
         left = deadline - _time.monotonic()
         if left <= 0:
             return None, _err("timeout", f"no time left to run {argv[0]}")
-        if prefix and self._runtime_dir is not None:
-            argv = ["env", "XDG_RUNTIME_DIR=" + self._runtime_dir] + argv
+        if prefix:
+            argv = self._prefixed(argv)
         res = self._runner.run(argv, timeout_s=left)
         res = res if isinstance(res, _Mapping) else {}
         cause = res.get("error") if isinstance(res.get("error"), _Mapping) else None
@@ -104,6 +104,9 @@ class SystemdUserRunner:
             detail = f"{what} failed (exit {res.get('returncode')}): {lines[-1] if lines else ''}"
             return None, _err(fail_code, detail, cause or _err("unknown", detail))
         return res["stdout"], None
+
+    def _prefixed(self, argv):
+        return argv if self._runtime_dir is None else ["env", "XDG_RUNTIME_DIR=" + self._runtime_dir] + argv
 
     def _observation(self, unit, state, **fields):
         obs = {"kind": "unit-observation", "unit": unit, "run_id": None, "invocation_id": None, "state": state,
@@ -180,6 +183,10 @@ class SystemdUserRunner:
                    f"--property=TimeoutStopSec={grace_s}", f"--setenv=FLIGHTCTL_RUN_ID={run_id}",
                    "--setenv=CUDA_VISIBLE_DEVICES=" + ",".join(cards)]
         command += [f"--setenv={key}={env[key]}" for key in sorted(env)] + ["--"] + list(argv)
+        return self._start(unit, run_id, command, deadline)
+
+    def _start(self, unit, run_id, command, deadline):
+        """Run systemd-run, then inspect the unit it started (the dryrun twin overrides this)."""
         _, error = self._run(command, deadline, "unit_failed")
         result = {"kind": "unit-start", "ok": False, "unit": unit, "run_id": run_id, "invocation_id": None,
                   "observation": None, "error": error, "dry_run": False}
@@ -211,6 +218,10 @@ class SystemdUserRunner:
             return dict(result, ok=True)
         if invocation_id is None or invocation_id != first["invocation_id"]:
             return dict(result, error=_err("identity_mismatch", f"{unit} runs invocation {first['invocation_id']!r}, not {invocation_id!r}"))
+        return self._stop(unit, deadline, result)
+
+    def _stop(self, unit, deadline, result):
+        """The identity matched: run systemctl stop, then inspect the unit (the dryrun twin overrides this)."""
         _, error = self._run(["systemctl", "--user", "stop", unit], deadline, "unit_failed")
         if error is not None and error["code"] == "timeout":
             return dict(result, observation=None, error=error)
@@ -224,3 +235,30 @@ class SystemdUserRunner:
         else:
             error = _err("unit_failed", f"{unit} is {second['state']} after stop")
         return dict(result, observation=second, error=error)
+
+
+class DryRunSystemdUserRunner(SystemdUserRunner):
+    """WorkloadRunner dryrun twin: the real twin's checks and reads (start and stop make one inspect each), never a start
+    or a stop. `recorded` gets the argv the real twin would pass to runner.run next: systemd-run when the unit is absent,
+    systemctl stop when the identity check passes."""
+
+    def __init__(self, runner, *, clock, runtime_dir=None):
+        super().__init__(runner, clock=clock, runtime_dir=runtime_dir)
+        self.recorded = []
+
+    def _start(self, unit, run_id, command, deadline):
+        obs = self._inspect(unit, None, deadline)
+        result = {"kind": "unit-start", "ok": obs["state"] == "absent", "unit": unit, "run_id": run_id,
+                  "invocation_id": None, "observation": obs, "error": obs["error"], "dry_run": True}
+        if result["ok"]:
+            self.recorded.append(self._prefixed(command))
+        elif obs["state"] != "unknown":
+            result["error"] = _err("unit_failed", f"{unit} is loaded ({obs['state']}): systemd-run would refuse it")
+        return result
+
+    def stop(self, unit, invocation_id, *, timeout_s):
+        return dict(super().stop(unit, invocation_id, timeout_s=timeout_s), dry_run=True)
+
+    def _stop(self, unit, deadline, result):
+        self.recorded.append(self._prefixed(["systemctl", "--user", "stop", unit]))
+        return dict(result, ok=True)
