@@ -67,12 +67,17 @@ each assembly's prerequisites are delivered before that assembly runs.
 | A2 | CommandRunner (local, ssh, replay, record), selected via adapters.json | A | S | A0b | L, A, Q | command_runner | base of all real twins |
 | A3 | Part 1 (Amendment 5): OccupancyProbe real twin; aggregate-memory emptiness, noise by identity | A | S | A2 | L, S6, A | occupancy_probe | G05 probe, Grok 3, Sol B2 |
 | A3i | Part 2 (Amendment 5): InventoryProbe real twin + golden captures per card model + replay-backed probe fakes | A | S | A3 | L, A, Q | inventory_probe | Grok 4, G05 fixtures |
-| A3b | Inventory v2 (+device minor) + discovery v2 on the real probe | A | S | A3i | L, A, Q | - | G07, Grok 4 |
+| A3b | Part 1 (Amendment 9): inventory v2 (+device minor) + discovery v2 on the real probe, added beside v1 | A | S | A3i | L, A, Q | - | G07 |
+| A3c | Part 2 (Amendment 9): retire v1 discovery (AMD path, private CSV, v1 proposal) | A | S | A3b | lead | - | Grok 4, D-amd-1 |
 | A4 | Executor stdio entry point + local-subprocess and ssh forced-command transports | A | M | A1, A2 | O, L, S6 | - | G04 |
-| A4u | Unit and timer templates, deploy-dir layout, config loader | A | S | A4, A3 | L, A, Q | - | G04 timer, G24 |
-| A5a | Executor v2 semantics (executor side), ceiling invariant | A | M | A0c, A4 | O, L, S6 | executor_transport | G02, G03 host side, Grok 1/7, Sol N1 |
-| A5b1 | Authority executor client: identity before reserve, definite refusal, cause chain | A | M | A5a | O, L, S6 | - | Grok 1/7 |
+| A4u | Part 1 (Amendment 9): hash-verified site config loader + verified local copy + confirmed-inventory lane binding; deploy-dir layout | A | S | A4, A3 | L, A, Q | - | G24 |
+| A5a | Part 1 (Amendment 9): executor v2 semantics in holder mode, in process (ExecutorV2: relative deadlines on the host clock, identity fixed at reserve, beat never moves max-end, emptiness proof before free, host enforcer); the v1 cross-host reserve fix | A | M | A0c, A4 | O, L, S6 | - | G02, G03 host side, Grok 1 |
+| A5a2 | Part 2 (Amendment 9): inhibitor-first reserve and its definite/uncertain refusal (D-pow-3), request validation, inspect / ceiling / extend | A | S | A5a | O, L, S6 | - | Grok 7, Sol N1, D-pow-3 |
+| A5a3 | Part 3 (Amendment 9): the v2 executor on the wire: the stdio entry point serves v2 through ExecutorV2, the enforcer one-shot, executor_transport conformance, the A4 test rows | A | S | A5a2 | O, L, S6 | executor_transport | G04 (v2 wire) |
+| A4ub | Part 2 of A4u (Amendment 9): unit and timer templates (executor enforcer timer every 60 s; authority service and cert-renewal timer) + renderer | A | S | A4u, A5a3 | L, A, Q | - | G04 timer |
+| A5b1 | Authority executor client: identity before reserve, definite refusal, cause chain | A | M | A5a3 | O, L, S6 | - | Grok 1/7 |
 | A5b2 | Authority beat loop + rolling renew within ceiling + max-end margin | A | M | A5b1 | O, L, S6 | - | G03, Grok 2, Sol N1 |
+| A5r | Retire executor v1 (Amendment 9): the v1 executor tests, their package-local systemd adapter and the v1 executor path | A | S | A5b2 | lead | - | MIGRATION (executor v1 rows) |
 | A6 | Part 1 (Amendment 7): WorkloadRunner real twin (systemd --user) + linger probe | A | S | A2 | L, S6, A | workload_runner | G05 systemd, Grok 5, D-pow-4 |
 | A6b | Part 2 (Amendment 7): WorkloadRunner dryrun twin + per-unit fail-closed FakeRunner + A6 migration rows | A | S | A6 | L, S6, A | - | Grok 5 |
 | A7 | Authority HTTPS listener (TLS terminated in-process) + PeerIdentity real twin | A | M | A5b2 | O, S6, L | peer_identity | G01, Sol B4 |
@@ -80,7 +85,7 @@ each assembly's prerequisites are delivered before that assembly runs.
 | A8 | Per-lane reconcile on restart + quarantine-clear | A | M | A5b2, A7b | O, L, S6 | - | G27 |
 | A9 | Shadow mode: evaluation, LegacyObserver, divergence + coverage report | A | M | A7b, A3 | O, S6, L | legacy_observer | shadow (owner 2 Oct), Sol N4 |
 | A10 | Legacy shim core (v2 and tee modes) + hex16 tokens | A | S | A7b | L, A, Q | - | G06 (core) |
-| A11 | Inhibitor real twin, held from reserve to verified release (was B1a) | A | S | A5a, A6 | L, S6, A | inhibitor | G13 (inhibitor), G14, Sol B1 |
+| A11 | Inhibitor real twin, held from reserve to verified release (was B1a) | A | S | A5a2, A6 | L, S6, A | inhibitor | G13 (inhibitor), G14, Sol B1 |
 | A12 | Waker real twin + wake-on-acquire (202 waking) + client and shim retry (was B1b) | A | M | A11, A7b, A10 | O, L, S6 | waker | G13, G22, Sol B1 |
 | **A-ASM** | Assembly A: pilot lane shadow (coverage + 3 clean days), inhibitor proven under the legacy fence, then live | A | M | A0a-A12 | **lead** | - | milestone A |
 | B2 | Holder liveness: heartbeat op, client heartbeat, stale-holder handling | B | S | A-ASM | L, S6, A | - | G28 |
@@ -134,9 +139,11 @@ delivering its ports.
 | A0a, A0b, A0c | S00 |
 | A1 | S01 (boot-id part) |
 | A2 | (new: command seam) |
-| A3, A3i, A3b | S03 |
+| A3, A3i, A3b, A3c | S03 |
 | A4, A4u | S04 |
-| A5a, A5b1, A5b2 | S01-S02 |
+| A5a, A5a2, A5a3 | S01-S02 |
+| A4ub | S04 (units and timers; after A5a3, Amendment 9) |
+| A5b1, A5b2, A5r | S01-S02 |
 | A6, A6b | S05 |
 | A7, A7b | S06, S14 |
 | A8 | S07 |
@@ -252,33 +259,54 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
 - ACCEPTANCE: inventory conformance [strict, real twin; G3 evidence needs a `status: ok` observation]; occupancy conformance on the fake (the fake_only cases); `test_golden_captures_all_card_models`; `test_desktop_user_legacy_jobs_remain_tenants` stays with the gauge at G3.
 - PROOF: G3 on hosts C, P, R and D (read-only). SEATS: L, A, Q.
 
-### A3b: inventory v2 and discovery v2 on the real probe
-- GOAL: Lanes bind to cards by UUID, bus, NUMA node and device minor. Discovery parses real probe output. The AMD path and the private CSV are gone.
-- SCOPE: `flightctl/discovery.py`, `flightctl/inventory.py`; the migration rows for A3b.
+### A3b: inventory v2 and discovery v2 on the real probe (Amendment 9: part 1, measured in R-A3b staging; retiring v1 discovery is A3c)
+- GOAL: Lanes bind to cards by UUID, bus, NUMA node and device minor. Discovery v2 builds a draft inventory v2 proposal from the A3i InventoryProbe's real observations and keeps a lane enabled only while every card it names is observed again with the same binding. v1 discovery stays until A3c.
+- SCOPE: `flightctl/inventory.py` (new), additions to `flightctl/discovery.py` (no v1 line changes), `tests/discovery/conftest.py`, `tests/discovery/test_a3b_discovery.py`. No migration row.
 - ACCEPTANCE: `test_v2_projection_takes_embedded_inventory`; `test_enabled_lane_requires_uuid`; `test_discover_against_replayed_real_captures`; `test_discover_live_readonly` [realtime, onlab].
-- PROOF: G3 on the four hosts, read-only; the proposal file is the evidence. SEATS: L, A, Q.
+- PROOF: G0-G2; the on-lab test read-only on every host type a lane can be held for; the proposal file is the evidence. SEATS: L, A, Q.
+
+### A3c: retire v1 discovery: the AMD path, the private CSV and the v1 proposal (Amendment 9: part 2 of A3b; owned by the lead, not raced)
+- GOAL: The AMD path and the private CSV are gone; the only discovery is v2 (A3b).
+- SCOPE: `flightctl/discovery.py` (delete the v1 code), `tests/discovery/test_discovery.py`, `tests/fakes/fixtures/amd.json`; the migration rows for A3c. Its two rewrite rows name their replacements as the exact nodes `tests/discovery/test_a3b_discovery.py::test_discover_against_replayed_real_captures` and `tests/discovery/test_a3b_discovery.py::test_v2_projection_takes_embedded_inventory`, because a bare name counts only in a test file the same packet adds or modifies (`tools/migration_gate.py`, round 5). Production wiring of `flightctl discover` to `propose_v2` if the lead wants it here.
+- PRECONDITION: Amendment 9, change 4 (`tests/contracts_v2/test_v2_round3.py::test_b7_migration_gate_on_this_branchs_real_diff` rescoped); before it, no packet could use its own rows on a test file that existed at `59bdd7f`.
+- PROOF: G0-G2. SEATS: the lead (deletions dictated by the migration map: no design freedom to race, and LINES counts deletions: 196 + 71 + up to 333 removed test lines, measured).
 
 ### A4: executor entry point and transports
 - GOAL: A real executor process answers the authority over a real pipe, both locally and through a forced-command ssh key.
 - SCOPE: `flightctl/executor_stdio.py` (one-shot: JSON in, JSON out, persistent state), `flightctl/transport.py`, tests in `tests/transport/test_a4_transport.py` (Amendment 6: that exact path, so A5a's migration rows have a defined target).
-- ACCEPTANCE: `test_one_shot_invocations_keep_state` [realtime]; `test_wrong_key_denied` [onlab]; `test_garbage_is_unparsable_not_ok`; `test_transport_failures_are_typed_and_bounded` [realtime]. Amendment 6: executor_transport conformance [strict] moved to A5a (the frozen cases assert v2 executor replies, which A5a delivers).
+- ACCEPTANCE: `test_one_shot_invocations_keep_state` [realtime]; `test_wrong_key_denied` [onlab]; `test_garbage_is_unparsable_not_ok`; `test_transport_failures_are_typed_and_bounded` [realtime]. Amendment 6: executor_transport conformance [strict] moved to A5a (the frozen cases assert v2 executor replies, which A5a delivers); Amendment 9: to its part 3, A5a3.
 - PROOF: G3 local plus ssh to the pilot host (inspect only). SEATS: O, L, S6.
 
-### A4u: units, timers, deploy-dir layout
-- GOAL: Installable unit templates and a deterministic config loader, so assembly is copying files, not inventing them.
-- SCOPE: `units/host/*` (executor enforcer timer every 60 s; inhibitor unit naming), `units/authority/*` (service plus cert-renewal timer, see A7), `flightctl/siteconfig.py` (hash-verified load from the deploy dir, verified local copy), `docs/v2/DEPLOY-LAYOUT.md`.
-- ACCEPTANCE: `test_templates_render_without_site_strings`; `test_config_loader_rejects_hash_mismatch`; `test_local_copy_used_when_store_host_asleep`; `test_timer_unit_runs_one_shot` [realtime, onlab]; Amendment 5 (moved from A3): `test_expected_uuids_come_from_confirmed_inventory` (the lane's card UUIDs handed to the occupancy probe come from the hash-verified confirmed inventory this packet loads, never from the probe's own output; a fabricated inventory hash is refused; prerequisite A3: the probe takes `uuids` from its caller).
-- PROOF: G3 on the pilot host. SEATS: L, A, Q.
+### A4u: site deploy directory and config loader (Amendment 9: part 1; the unit and timer templates are A4ub)
+- GOAL: A deterministic config loader, so assembly is copying files, not inventing them: a host uses the site files only when their sha256 matches the published manifest, and keeps a verified local copy so it starts while the store host is asleep.
+- SCOPE: `flightctl/siteconfig.py` (hash-verified load from the deploy dir, verified local copy, the confirmed-inventory lane binding), `docs/v2/DEPLOY-LAYOUT.md`, tests in `tests/siteconfig/`.
+- ACCEPTANCE: `test_config_loader_rejects_hash_mismatch` [realtime]; `test_local_copy_used_when_store_host_asleep`; Amendment 5 (moved from A3): `test_expected_uuids_come_from_confirmed_inventory` (the lane's card UUIDs handed to the occupancy probe come from the hash-verified confirmed inventory this packet loads, never from the probe's own output; a fabricated inventory hash is refused; prerequisite A3: the probe takes `uuids` from its caller).
+- PROOF: G0-G2, G4. SEATS: L, A, Q.
 
-### A5a: executor v2 semantics, ceiling invariant
-- GOAL: The executor anchors relative deadlines on its own clock, keeps the identity fixed at reserve, extends on beat, refuses definitely or uncertainly, and returns typed errors.
-- SCOPE: `flightctl/executor.py`, `tests/executor/**` (migration rows for A5a). CONTRACTS: `executor.schema.json`, `unit.schema.json`, `gpu-probe.schema.json`, `common#/$defs/relative_deadline` invariant.
-- OBLIGATIONS: Holder mode reports the unit as `absent` and relies on the occupancy emptiness rule. An own-boot change means reconcile. The rest follow the contract invariant:
-  - Max-end is set once and never increases. Only `extend` with an approval moves it.
-  - A message older than `max_clock_skew_s` is refused as definite `clock_skew`.
-  - Reserve takes the inhibitor first, then the fence (D-pow-3).
-- ACCEPTANCE: executor_transport conformance [strict] (Amendment 6, moved from A4: register the transport rig over A4's `LocalSubprocessTransport` and the v2 executor; update the requests in A4's `tests/transport/test_a4_transport.py` to v2 under the migration-map rows the lead's contracts-v2 stream added for A5a in Amendment 6); `test_relative_deadline_anchored_on_host_clock`; `test_beat_extends_expiry_never_max_end`; `test_stop_requires_reserve_identity_and_empty_proof`; `test_definite_refusal_leaves_no_fence_and_no_inhibitor`; `test_enforcer_real_seconds` [realtime].
+### A5a: executor v2 semantics, ceiling invariant (part 1 of 3, Amendment 9)
+- GOAL: The executor anchors relative deadlines on its own clock, keeps the identity fixed at reserve, extends on beat but never moves max-end, frees a lane only on an emptiness proof, refuses definitely or uncertainly, and returns typed errors, in process (`ExecutorV2`). Amendment 9: the inhibitor, request validation, inspect/ceiling/extend (A5a2) and the wire (A5a3) are later parts.
+- SCOPE: `flightctl/executor.py` (new class `ExecutorV2` beside the v1 `Executor`, which stays until A5r retires it; the one v1 change: the cross-host boot-id refusal in `_reserve` is deleted), new files under `tests/executor/`, the mark of `tests/sim/test_repro_cross_host_reserve.py` (migration row). CONTRACTS: `executor.schema.json`, `unit.schema.json`, `gpu-probe.schema.json`, `common#/$defs/relative_deadline` invariant.
+- OBLIGATIONS: Holder mode relies on the occupancy emptiness rule. An own-boot change means reconcile. Max-end is set once at reserve and a beat never moves it. A message older than `max_clock_skew_s` is refused as definite `clock_skew`. `tests/executor/test_mutations.py`'s 13 v1 lines stay exactly once.
+- ACCEPTANCE: `test_relative_deadline_anchored_on_host_clock`; `test_beat_extends_expiry_never_max_end`; `test_stop_requires_reserve_identity_and_empty_proof`; `test_enforcer_real_seconds` [realtime]; the A0c repro `test_repro_cross_host_reserve` turns green (mark removed, assertions kept).
 - PROOF: G0, G2, G4. SEATS: O, L, S6.
+
+### A5a2: executor v2 part 2: the inhibitor, request validation, inspect/ceiling/extend (Amendment 9)
+- GOAL: Reserve takes the inhibitor first, then the fence (D-pow-3); a definite refusal leaves no fence and no inhibitor, and a failed release makes it uncertain. Every request is validated (definite `invalid`, nothing written). Inspect reports the holder-mode unit as absent and the lane's occupancy; `ceiling` only shortens max-end; only `extend` with an approval moves it later.
+- SCOPE: `ExecutorV2` in `flightctl/executor.py` (an injected Inhibitor port; validation; inspect, ceiling, extend), new files under `tests/executor/`.
+- ACCEPTANCE: `test_definite_refusal_leaves_no_fence_and_no_inhibitor`; `test_ceiling_shortens_only_and_extend_needs_approval`; `test_invalid_requests_are_definite_and_write_nothing`; `test_inspect_reports_holder_unit_absent`.
+- PROOF: G0, G2, G4. SEATS: O, L, S6.
+
+### A5a3: executor v2 part 3: the wire and executor_transport conformance (Amendment 9; Amendment 6's conformance moves here)
+- GOAL: A real executor process answers v2 requests over A4's transports: the stdio entry point routes schema_version 2 to `ExecutorV2` (the host id, the lane cards from the confirmed inventory, the occupancy real twin), the enforcer one-shot that A4ub's timer runs exists, and the frozen executor_transport cases pass strict.
+- SCOPE: `flightctl/executor_stdio.py`, new `tests/conformance/impl_executor_transport.py` (fake: in-process `ExecutorV2` per SimHost with `sim-` boot ids; real: `LocalSubprocessTransport` over the entry point, ssh to the target), `tests/transport/test_a4_transport.py` (the four Amendment 6 rows: requests to v2), new files under `tests/executor/`.
+- ACCEPTANCE: executor_transport conformance [strict]; `test_stdio_serves_v2_through_executor_v2` [realtime]; `test_enforcer_one_shot_entry_point` [realtime].
+- PROOF: G0, G2, G3 (host-local and ssh to the pilot host; the stop's emptiness proof reads the lane's cards read-only under a held lane), G4. SEATS: O, L, S6.
+
+### A4ub: units and timers (Amendment 9: part 2 of A4u)
+- GOAL: Installable unit templates, so assembly is copying files, not inventing them. The enforcer timer's service runs the executor's enforcer one-shot, which A5a3 delivers (Amendment 9: no packet owned that command before), so A4ub follows A4u and A5a3.
+- SCOPE: `units/host/*` (executor enforcer timer every 60 s; the P2 executor template becomes its one-shot service; inhibitor unit naming documented), `units/authority/*` (service plus cert-renewal timer, see A7), a template renderer in `flightctl/siteconfig.py`, the unit section of `docs/v2/DEPLOY-LAYOUT.md`, tests in `tests/siteconfig/`.
+- ACCEPTANCE: `test_templates_render_without_site_strings`; `test_timer_unit_runs_one_shot` [realtime, onlab].
+- PROOF: G0-G2, G4; the on-lab timer test on the pilot host (a harmless one shot). SEATS: L, A, Q.
 
 ### A5b1: authority executor client, identity and errors
 - GOAL: The authority assigns `run_id` and the unit before reserve, cancels on a definite refusal, keeps executor causes, and stores the lease v2 fields.
@@ -292,6 +320,11 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
 - ACCEPTANCE: `test_renew_rolls_within_ceiling_and_refuses_past_it`; `test_beat_loop_keeps_lease_alive_30min_sim`; `test_slow_round_trip_triggers_shorten_only_ceiling` (round 3, Sol 6 N1: 30 s skew + 60 s transport is detected from the authority's own RTT and corrected by a ceiling message; host max-end never later than approved once a round trip completes within the margin); `test_beat_loop_real_time` [realtime: real authority and executor subprocess, 3 s beats, 20 s].
 - PROOF: G0, G2, G4; the A0c beat/renew repro turns green. SEATS: O, L, S6.
 
+### A5r: retire executor v1 (Amendment 9; owned by the lead, not raced; the owner may fold it into the end of A5b2 instead)
+- GOAL: Once the authority speaks v2 to the executor (A5b1, A5b2), the v1 executor's tests, their package-local systemd adapter and the v1 executor path go, under the A5r migration rows.
+- SCOPE: `flightctl/executor.py` (the v1 path only), `tests/executor/**` under the A5r rows: moved from A5a, the five `tests/executor/test_executor.py` rewrites, the `tests/executor/systemd_adapter.py` delete and the `tests/executor/test_p01.py` and `tests/executor/test_review3.py` rewrites; new, the `tests/executor/test_review4.py` delete (it imports `test_executor` and `test_p01`, measured) and the `tests/executor/test_mutations.py` delete (its 13 mutants target the v1 executor and its v1 tests). The rewrite rows name their replacements as exact A5a nodes, because A5r adds none of them: `tests/executor/test_a5a_executor_v2.py::test_stop_requires_reserve_identity_and_empty_proof`, `tests/executor/test_a5a_executor_v2.py::test_relative_deadline_anchored_on_host_clock` and `tests/executor/test_a5a_executor_v2.py::test_enforcer_real_seconds`. Any other test that still drives the v1 executor gets its row (by amendment) before A5r starts; known today: `tests/sim/rig.py` and `tests/integration/test_p6_scaffold.py` (both import the v1 `Executor`).
+- PROOF: G0-G2 (G1b over the A5r rows). SEATS: the lead (deletion-dominated, like A3c: LINES counts deletions).
+
 ### A6: WorkloadRunner real twin and the linger probe
 - GOAL: Real transient user units with per-unit identity. Answer the linger question by experiment before A-ASM goes live (D-pow-4). Amendment 7: this is PART 1 (the real twin); the dryrun twin, the per-unit FakeRunner and the v1 fake's retirement are A6b.
 - SCOPE: `flightctl/runner.py` (the real twin), its real-only conformance registration, tests in `tests/runner/`.
@@ -300,7 +333,7 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
 
 ### A6b: WorkloadRunner part 2: the dryrun twin, the per-unit FakeRunner and the v1 fake's retirement (Amendment 7)
 - GOAL: The v1 fake's success-by-default semantics are gone: a per-unit, fail-closed FakeRunner with `script_next`, and a dryrun twin that never starts anything.
-- SCOPE: the dryrun twin (in `flightctl/runner.py`), `tests/fakes/runner.py`, their conformance registrations, tests, and the A6b migration rows (`tests/executor/test_executor.py::test_fake_isolation_guard` delete; `tests/contracts/test_fakes.py::test_fake_interfaces` rewrite; Amendment 8: `tests/runner/test_a6_runner.py::test_unit_and_inhibitor_survive_logout` rewrite, the linger probe reading `loginctl show-user <uid> -p Linger` and counting every session class except `manager`/`manager-early`, from one `loginctl list-sessions --json=short` snapshot before and one after the wait).
+- SCOPE: the dryrun twin (in `flightctl/runner.py`), `tests/fakes/runner.py`, their conformance registrations, tests, and the A6b migration rows (`tests/executor/test_executor.py::test_fake_isolation_guard` delete; `tests/contracts/test_fakes.py::test_fake_interfaces` rewrite; Amendment 8: `tests/runner/test_a6_runner.py::test_unit_and_inhibitor_survive_logout` rewrite, the linger probe reading `loginctl show-user <uid> -p Linger` and counting every session class except `manager`/`manager-early`, from one `loginctl list-sessions --json=short` snapshot before and one after the wait). Amendment 9: the A6b race leaves the first two rows to A6b's lead merge, which executes them once Amendment 9 is on main; they stay A6b's rows (until then `tests/contracts_v2/test_v2_round3.py::test_b7_migration_gate_on_this_branchs_real_diff` failed whenever a packet's own row touched a test file that existed at `59bdd7f`, measured in R-A6b staging).
 - ACCEPTANCE: workload_runner conformance on the fake (the fake_only cases) and the dryrun twin; `test_fake_runner_per_unit_fail_closed`; `test_dryrun_never_starts` [onlab]; `test_unit_and_inhibitor_survive_logout` [onlab; Amendment 8: fails as `unreadable` when the Linger value or a snapshot is unreadable, `inconclusive` when sessions change during the wait].
 - PROOF: G0, G2, G4; G3 for the linger probe on a lane host with no other login session (Amendment 8). SEATS: L, S6, A.
 

@@ -36,7 +36,8 @@ def test_a3_is_split_into_occupancy_part_1_and_inventory_part_2() -> None:
     from tests.conformance import registry
     assert registry.OWED_BY["occupancy_probe"] == "A3" and registry.OWED_BY["inventory_probe"] == "A3i"
     rows = [l.split("\t") for l in (ROOT / "docs/v2/migration-map.tsv").read_text(encoding="utf-8").splitlines() if l.startswith("tests/fakes/fixtures/")]
-    assert {r[0]: r[1] for r in rows if r[1] != "A3b"} == {f"tests/fakes/fixtures/{n}.json": "A3i" for n in ("titan-rtx", "rtx-8000", "t4")}
+    # Amendment 9: the amd.json delete row moved from A3b to A3c (A3b part 1 touches no migration row)
+    assert {r[0]: r[1] for r in rows if r[1] not in {"A3b", "A3c"}} == {f"tests/fakes/fixtures/{n}.json": "A3i" for n in ("titan-rtx", "rtx-8000", "t4")}
 
 
 # ---------------------------------------------------------------- 2. CommandResult.error

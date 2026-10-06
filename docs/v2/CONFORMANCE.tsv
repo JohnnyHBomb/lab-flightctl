@@ -13,7 +13,7 @@ plan-r4	ssh-sk approvals first, WebAuthn later, same semantics	approval-v1, auth
 plan-r4	pipeline available/unavailable/approval_required, acceptable-use purpose	pipeline-v1	kept	pipeline-v1 unchanged; template.pipeline_ref	-
 plan-r4	federation hooks frozen	common-v1	kept	../common.schema.json (dormant); v2 requests reject them	fail closed
 plan-r4	executor JSON over restricted SSH stdin	executor-v1	specified	executor; A4	G04
-plan-r4	host enforces deadlines independently of controller	executor.py	amended	executor relative_deadline/local_deadline; A5a, A4u timer	G02
+plan-r4	host enforces deadlines independently of controller	executor.py	amended	executor relative_deadline/local_deadline; A5a, A5a3 (enforcer one-shot), A4ub timer (Amendment 9)	G02
 plan-r4	restart/reboot reconciles before reopening	authority.py stub	specified	README semantics 7; A8	G27
 plan-r4	positional lanes.sh syntax; exits 0/1/2/3/4/5	cli vectors	kept	rpc-envelope exits; LEGACY-COMPAT; A10	-
 plan-r4	renew never extends approved max	authority.py	amended	policy.lease renew_mode rolling-within-ceiling; A5b1, A5b2	renew now succeeds inside ceiling (Grok 2)
@@ -25,7 +25,7 @@ P0	test_inventory_semantics	tests/contracts	kept	+ inventory_semantics v2 (G07 u
 P0	test_roundtrip_records	tests/contracts	kept	-	-
 P0	test_rpc_operation_vectors	tests/contracts	kept	v2 examples in rpc-ops; A7b	v1 vectors serve the /v1 adapter
 P0	test_cli_golden_vectors	tests/contracts	amended	renew vector rewritten; A5b1, A5b2, A10	expects approved maximum reached today
-P0	test_executor_vectors	tests/contracts	kept	executor v2 examples; A5a	v1 vectors retire with v1 executor
+P0	test_executor_vectors	tests/contracts	kept	executor v2 examples; A5a	v1 vectors retire with v1 executor (A5r)
 P0	test_discovery_vectors	tests/contracts	kept	discovery v2; A3b	-
 P0	test_approval_bindings	tests/contracts	kept	approval v2 signing vectors in C3	-
 P0	test_pipeline_policy_vectors	tests/contracts	kept	-	-
@@ -53,7 +53,7 @@ P2	test_cleanup_unknown	tests/executor	kept	gpu-probe unknown; unit unknown	-
 P2	test_deadlines_controller_loss	tests/executor	amended	relative deadlines; A5a	-
 P2	test_protected_stop_authority	tests/executor	amended	stop_authority adds operator-stop, holder-lost; A5a	-
 P2	test_clock_reboot	tests/executor	amended	own boot change = reconcile; A5a	-
-P2	test_executor_mutations	tests/executor	kept	-	-
+P2	test_executor_mutations	tests/executor	dropped	no packet owes a v2 mutation matrix; the v2 behaviour is held by the named tests of A5a, A5a2 and A5a3; Amendment 9: A5r deletes tests/executor/test_mutations.py with the v1 executor (its 13 mutants target v1 lines)	-
 P3	test_positional_compatibility	tests/client	kept	new CLI; shim separately (A10)	-
 P3	test_shell_quoting	tests/client	kept	-	-
 P3	test_all_cli_vectors	tests/client	amended	renew vector; A5b1, A5b2	-
@@ -95,7 +95,7 @@ P7	test_unknown_admission_boundary	tests/discovery	kept	-	-
 P7	test_deterministic_diff	tests/discovery	kept	-	-
 P7	test_bounded_probes	tests/discovery	kept	-	-
 P7	test_no_side_effects	tests/discovery	kept	-	-
-P7	test_discovery_mutations	tests/discovery	kept	-	-
+P7	test_discovery_mutations	tests/discovery	dropped	no packet owes a v2 mutation matrix; discovery v2 is held by A3b's named tests on replayed real captures; Amendment 9: A3c deletes test_discovery_mutations_regression_matrix (it monkeypatches the private-CSV parser A3c removes)	-
 P7 obligation	AMD/sysfs fallback	discovery.py	dropped	-	no AMD compute card in the lab; AMD display cards are not lanes (INVENTORY-NOTES); re-add with real captures if one appears
 grok-verified	boot-id coupling: authority stamps its pid boot id; executor rejects	authority.py:70-76, executor.py:484	contract-fixed	common relative_deadline/local_deadline, executor; A1, A5a	repro in A0c
 grok-verified	no beat: protected lease quarantines at 600 s	authority.py:1096	specified	executor beat; A5b1, A5b2	repro in A0c
@@ -104,19 +104,19 @@ grok-verified	status skips health check	authority.py:1831	specified	A8 (status u
 grok-new-1	release quarantines a good lease: unit/invocation assigned after reserve	authority.py:1126, executor.py:1579	contract-fixed	executor identity fixed before reserve; unit invocation_id observed; A5a, A5b1, A5b2	-
 grok-new-2	renew can never succeed (extend added to max_end)	authority.py:1313	contract-fixed	policy.lease rolling-within-ceiling; rpc-ops renew_args ttl_s; A5b1, A5b2	-
 grok-new-3	one GPUProbe protocol, two result shapes; no 512 MiB rule in executor	tests/fakes/gpu.py, executor.py:1719	contract-fixed	gpu-probe split inventory/occupancy with thresholds; A3	-
-grok-new-4	discovery asks nvidia-smi then parses private CSV; AMD imagined	discovery.py:1002, :258	contract-fixed	gpu-probe x-real-commands; discovery v2; A3, A3b	-
+grok-new-4	discovery asks nvidia-smi then parses private CSV; AMD imagined	discovery.py:1002, :258	contract-fixed	gpu-probe x-real-commands; discovery v2; A3, A3b, A3c (v1 retired, Amendment 9)	-
 grok-new-5	systemd fake: unscripted = success; stop clears all occupants	tests/fakes/systemd.py	contract-fixed	unit.schema.json per-unit fail-closed; FakeRunner; A6b	-
 grok-new-6	quotas cannot be stored in a confirmed policy	common.schema.json:362	contract-fixed	policy.quotas config_ref + quota.schema.json; C5b	-
 grok-new-7	authority throws away executor reason	authority.py:737-752	contract-fixed	typed_error cause chain (common), executor reply error, rpc-envelope error.cause; A5b1, A5b2	-
 grok-new-8	assembled gate names ondemand/qwen-od-proxy.sh	test_p6_scaffold.py:567	specified	A0c rewrites gate; ASM packets own assembly	-
 grok-new-9	CI runs only contracts+integration	.github/workflows/ci.yml:52	specified	A0a full job; GATES G2 (lab-ci + hosted)	-
-grok-plan-gap	no package owns listener, ssh forced command, timer, reconcile loop, watcher, wake, shim, workload handoff	plan r4	specified	A4, A4u, A7, A8, B4, A12, A10, C7b1, C7b2 + A-ASM/B-ASM/C-ASM owners	lesson 63
+grok-plan-gap	no package owns listener, ssh forced command, timer, reconcile loop, watcher, wake, shim, workload handoff	plan r4	specified	A4, A4u, A4ub (timer), A5a3 (enforcer one-shot), A7, A8, B4, A12, A10, C7b1, C7b2 + A-ASM/B-ASM/C-ASM owners (Amendment 9: A4ub, A5a3)	lesson 63
 grok-plan-gap	lane PCI/UUID/NUMA absent	inventory-v1	contract-fixed	inventory device uuid/pci_bus_id/numa_node; A3b	G07
 grok-review	approvals accepted fake-only evidence	Astra reviews	specified	GATES G3/G4 (real twin + realtime per seam)	-
 G01	authority server + whois	-	specified	A7	-
 G02	cross-host clock coupling	executor-v1	contract-fixed	A1, A5a	-
 G03	beat + renew	authority	specified	A5b1, A5b2	-
-G04	executor entry point + transport + timer	-	specified	A4, A4u	-
+G04	executor entry point + transport + timer	-	specified	A4, A5a3 (v2 wire, enforcer one-shot), A4ub (timer); Amendment 9 (was A4, A4u)	-
 G05	real GPUProbe + Systemd adapters	-	specified	A3, A6	-
 G06	legacy CLI compatibility	-	specified	A10, B3	-
 G07	lane-to-card binding	inventory-v1	contract-fixed	A3b	-
@@ -294,3 +294,8 @@ amd5-3	a one-string (rewritten) command line can never equal an allow-list argv0
 amd5-4	x-real-commands named the plain PIDS query, keyed by PCI bus id	R-A3 (measured)	contract-fixed	per-card nvidia-smi -q -d PIDS -i <uuid>; test_v2_amendment5.py::test_x_real_commands_name_the_per_card_pids_query	A3
 amd5-5	occupancy_from_capture returned ok observations the schema refuses (9 inputs)	R-A3 VALIDATION checklist 3	contract-fixed	out-of-range, fractional, non-finite numbers, pid 0 and negative memory -> unknown; unknown context type -> null; seeded 600-case corpus always schema-valid; test_v2_amendment5.py::test_oracle_*	A3 (conformed: _parse_gpus bounds, _parse_procs pid/memory, commit 'A3: conform to Amendment 5')
 amd5-6	strict conformance passes vacuously without the hardware (real cases pass on unknown)	R-A3 (measured)	specified	GATES G3: a probe real twin's evidence includes at least one status-ok observation from the real host; test_v2_amendment5.py::test_g3_needs_a_status_ok_observation_from_the_real_host	the gauge
+amd9-1	A4u did not fit one race (full reference 353 changed lines after trimming; entries run 17-35% over their reference, so 410-480 against the 400-line cap), and no packet owned the enforcer one-shot command its timer runs	R-A4u staging (measured)	amended	A4u = hash-verified site config loader, verified local copy, confirmed-inventory lane binding, DEPLOY-LAYOUT.md (3 named tests; closes G24); new A4ub = unit and timer templates + renderer (test_templates_render_without_site_strings, test_timer_unit_runs_one_shot), after A4u and A5a3 (A5a3 delivers the enforcer one-shot); test_v2_amendment9.py::test_a4u_is_split_and_a4ub_follows_a5a3	A4u, A4ub, A5a3
+amd9-2	A3b could not retire v1 discovery in one race: removing the AMD path and the private-CSV parser is 196 + 71 changed lines of deletions, three frozen tests fail and two turn vacuous without the parser, and none of them had a row	R-A3b staging (measured)	amended	A3b = inventory v2 card binding + discovery v2 beside v1 (4 named tests; closes G07); new A3c (lead, not raced) retires v1 discovery: the amd.json delete and two rewrite rows move from A3b (replacements = A3b's exact nodes) and five delete rows are added on tests/discovery/test_discovery.py; the deleted tests' card-binding and lane-retention obligations live in discovery v2 (A3b: test_enabled_lane_requires_uuid, test_discover_against_replayed_real_captures); test_v2_amendment9.py::test_a3b_is_split_and_a3c_retires_v1_discovery	A3b, A3c
+amd9-3	A5a did not fit one race (in-process semantics with the inhibitor and five named tests measured 376 changed lines before validation, the rig, the wire and the rows), and its v1-executor rows cannot run while frozen v1 tests drive the v1 executor	R-A5a staging (measured)	amended	A5a = ExecutorV2 in holder mode, in process + the v1 cross-host fix (4 named tests + the A0c repro); A5a2 = inhibitor first, request validation, inspect/ceiling/extend; A5a3 = the v2 wire, the enforcer one-shot, executor_transport conformance (registry OWED_BY) and the four A4 transport rows; A5b1 depends on A5a3, A11 on A5a2; proposed A5r (lead, after A5b2; the owner's call against the end of A5b2) owns the v1-executor rows with A5a's exact nodes, plus the test_review4.py and test_mutations.py deletes (v1 obligations that retire with the v1 executor; A5r's staging names a v2 test for any the contract keeps); test_v2_amendment9.py::test_a5a_is_split_in_three, test_v1_executor_rows_go_to_a5r	A5a, A5a2, A5a3, A5r
+amd9-4	frozen test_b7_migration_gate_on_this_branchs_real_diff failed whenever a packet executed its own migration row on a test file that existed at 59bdd7f (it accepted only contracts-v2 rows)	R-A3b, R-A6b staging (measured)	contract-fixed	every pre-existing file touched since 59bdd7f must pass migration_gate.check (G1b, unchanged) for at least one packet whose rows name it; an unmapped file, a whole-file delete only modified and a rewrite without its collected replacement still fail when no other packet's rows pass on that file; inherited from G1b: a file passes on ANY packet's rows that name it, and a path::name delete row authorises any change to its file (test_executor.py carries A6b's); tools/migration_gate.py and test_b7_migration_gate_logic unchanged; test_v2_amendment9.py::test_branch_rule_accepts_a_packets_own_rows_and_refuses_the_rest; proven both ways on throwaway commits	-
+amd9-5	A6b's two v1 rows (test_fake_isolation_guard delete, test_fake_interfaces rewrite) could not run in the A6b race (amd9-4)	R-A6b staging (measured)	specified	the rows stay A6b's (replacement test_fake_runner_per_unit_fail_closed); A6b's lead merge executes them once Amendment 9 is on main; test_v2_amendment9.py::test_a6b_keeps_its_v1_rows	A6b

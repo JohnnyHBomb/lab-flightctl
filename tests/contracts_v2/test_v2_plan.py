@@ -126,7 +126,8 @@ def test_migration_map_rows_name_real_packets() -> None:
     assert rows and set(rows[0]) == {"v1_test", "packet", "action", "replacement", "reason"}
     for row in rows:
         # Amendment 4 rev 2: "contracts-v2" = the lead's contract/amendment stream, whose real diff is gated by
-        # test_v2_round3.py::test_b7_migration_gate_on_this_branchs_real_diff with --packet contracts-v2
+        # test_v2_round3.py::test_b7_migration_gate_on_this_branchs_real_diff (Amendment 9: with every packet's rows,
+        # contracts-v2 included)
         assert row["packet"] in POS or row["packet"] == "contracts-v2", row
         assert row["action"] in {"rewrite", "delete"}, row
         if row["action"] == "rewrite":
