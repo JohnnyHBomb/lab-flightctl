@@ -3,9 +3,11 @@
 - **Date:** 7 Oct 2026. **Approved:** by the owner, 6 Oct 2026, from the wave-3 stagings' split proposals for A5a2 and
   A11. It needs review before use, as `FROZEN.md` requires.
 - **Basis:** the wave-3 stagings of A5a2 (references `8abc307` and `3109395` on main `5aefe88`) and A11 (reference `7489338`
-  on the provisional base `3109395`). Stacked on Amendment 11. Both part-1 races were judged on exactly the scopes written
-  below: R-A5a2 raced A5a2 part 1 on `5aefe88` (its harvested merge branch, `c96fc65`, not yet a PR, holds the three named
-  tests in `tests/executor/test_a5a2_executor_v2.py` and no request validation), and R-A11 races A11 part 1 on `3109395` (three twins, no executor change). This
+  on the provisional base `3109395`). Stacked on Amendment 11. Both part-1 races use exactly the scopes written below: R-A5a2
+  was judged on A5a2 part 1 on `5aefe88` (its harvested merge, PR #42, holds the three named tests in
+  `tests/executor/test_a5a2_executor_v2.py` and no request validation), and R-A11 raced A11 part 1 on `3109395` (three
+  twins, no executor change) and is being judged. Revision 2: blind Fable review (APPROVE WITH NITS), the two minor
+  findings and three nits taken. This
   amendment changes nothing either race is judged on.
 
 ## Reproduced first (measured in the stagings unless marked)
@@ -34,21 +36,25 @@
 2. **A11 splits.** **A11** (part 1, as raced): the Inhibitor port's real twin, dryrun and fake in `flightctl/power.py`,
    `tests/conformance/impl_inhibitor.py`, `tests/power/` and its ci.yml append; inhibitor conformance [strict],
    `test_inhibitor_failure_is_definite_refusal`, `test_real_twin_runs_the_contract_commands`,
-   `test_dryrun_twin_lists_for_real_and_records_the_rest`. The executor hooks leave its SCOPE: A5a2 owns reserve and
+   `test_dryrun_twin_lists_for_real_and_records_the_rest`. None of A11's tests is realtime; its real-process proof is G3
+   (strict conformance on the pilot host), as the A11 brief decides. The executor hooks leave its SCOPE: A5a2 owns reserve and
    release (point 1), A11b the reconcile. New **A11b** (after A11, before A12): the `ExecutorV2` reconcile over the
    Inhibitor port (a fence that records a held inhibitor whose unit is missing gets it back; a `flightctl-awake-*` unit
    with no such fence is released); `test_reconcile_recreates_missing_and_removes_orphan_inhibitors`,
    `test_guard_sees_inhibitor` [realtime, onlab]; PROOF G3 on the pilot host. A11 keeps `A5a2, A6` and the port; A12 keeps
    `A11, A7b, A10` (the waker needs only the port); A-ASM's `A0a-A12` range covers A11b.
 3. **Crosswalk.** `A5a, A5a2, A5a2b, A5a3, A5a4` and `A11, A11b, A12` (index order). The G6 row T07 names A11b, whose guard
-   test is that row's first real evidence. The frozen negative case in
-   `test_v2_round7.py::test_self_plan_checker_accepts_the_real_plan_and_catches_swaps` builds its swap from the exact
-   `A11, A12` row text, so it is updated in place to the new text (same swap, same expected "crosswalk order").
+   test is that row's first real evidence. This departs from the A11 proposal's "do not edit the `A11, A12` row; add a
+   separate one", and has to: A11b sits between A11 and A12 in the index (the proposal's own placement, which keeps it
+   inside A-ASM's `A0a-A12` range), and `test_v2_plan.py` requires the crosswalk to list every packet in index order, so
+   no separate row can follow `A11, A12` (measured: the old row plus a separate `A11b` row fails the plan checks). The
+   frozen negative case in `test_v2_round7.py::test_self_plan_checker_accepts_the_real_plan_and_catches_swaps` builds its
+   swap from the exact row text, so it is updated in place to the new text (same swap, same expected "crosswalk order").
 4. **Traceability.** New CONFORMANCE.tsv rows `amd12-1` and `amd12-2`; `amd9-3` notes that validation is A5a2b's; G14 adds
    A11b. The frozen plan tests that pinned A5b1's dependency are updated in place: `test_v2_amendment9.py` and
    `test_v2_amendment11.py`.
 
 ## Checks
 `tests/contracts_v2/test_v2_amendment12.py` (both splits against the raced named tests, dependencies, index and crosswalk
-order, no migration rows); `test_v2_plan.py`, `test_v2_round7.py` and `test_b7_migration_gate_on_this_branchs_real_diff`
-stay green.
+order, no migration rows); `test_v2_plan.py` and `test_b7_migration_gate_on_this_branchs_real_diff` stay green;
+`test_v2_round7.py` is updated in place (change 3) and green.
