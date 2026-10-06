@@ -10,8 +10,9 @@ from pathlib import Path
 
 import pytest
 
+import flightctl.executor
 from flightctl.clock import RealClock
-from flightctl.executor import ExecutorV2, JsonStateStore, MemoryStateStore
+from flightctl.executor import JsonStateStore, MemoryStateStore
 from tests.contracts_v2.validation import assert_invalid, assert_valid, examples, occupancy_from_capture
 from tests.sim.rig import SimClock
 
@@ -19,9 +20,11 @@ ROOT = Path(__file__).resolve().parents[2]
 UTC = "%Y-%m-%dT%H:%M:%SZ"
 SENT = datetime(2026, 10, 2, 10, 0, tzinfo=timezone.utc)  # the reserve example's sent_at
 CARD = "GPU-00000000-0000-0000-0000-000000000011"
-CARDS = {"lane-gpu1": [CARD], "lane-gpu2": ["GPU-00000000-0000-0000-0000-000000000012"]}
+CARDS = {"lane-gpu1": [CARD], "lane-gpu2": ["GPU-00000000-0000-0000-0000-000000000012"],
+         "lane-gpu3": ["GPU-00000000-0000-0000-0000-000000000013"]}
 LANE = {"site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu1"}
 LANE2 = dict(LANE, lane_id="lane-gpu2")
+LANE3 = dict(LANE, lane_id="lane-gpu3")
 RESERVE = (("expiry", 1800), ("max-end", 14400), ("heartbeat-stale", 600))  # the reserve example's deadlines
 BEAT = (("expiry", 1800), ("heartbeat-stale", 600))
 
@@ -50,7 +53,7 @@ def call(host, req):
 
 
 def executor(clock, store, probe=None):
-    return ExecutorV2(clock, host_id="host-1", store=store, lane_cards=CARDS, occupancy=probe)
+    return flightctl.executor.ExecutorV2(clock, host_id="host-1", store=store, lane_cards=CARDS, occupancy=probe)
 
 
 def anchored(clock, kind, in_s):
@@ -82,6 +85,7 @@ def test_relative_deadline_anchored_on_host_clock():
     host = executor(clock, store, probe)
     old = call(host, request("reserve", clock.utc() - timedelta(seconds=31)))
     assert (old["ok"], old["definite"], old["error"]["code"], old["observed_state"], old["fences"]) == (False, True, "clock_skew", "free", [])
+    assert call(host, request("reserve", SENT, lane=LANE3))["ok"]  # reserved first: the enforcer goes by lane, not by reservation order
     reply = call(host, request("reserve", SENT))  # the controller's sent_at is 7 s behind this host's UTC
     assert (reply["ok"], reply["observed_state"], reply["max_end_remaining_s"]) == (True, "reserved", 14400)
     assert reply["fences"][0]["local_deadlines"] == [anchored(clock, kind, in_s) for kind, in_s in RESERVE]
@@ -90,7 +94,8 @@ def test_relative_deadline_anchored_on_host_clock():
     clock.advance(599)
     assert host.enforce_deadlines() == []
     clock.advance(1)
-    assert host.enforce_deadlines() == [{"lane": LANE, "generation": 7, "due": ["heartbeat-stale"], "state": "quarantined"}]
+    assert host.enforce_deadlines() == [{"lane": lane, "generation": 7, "due": ["heartbeat-stale"], "state": "quarantined"}
+                                        for lane in (LANE, LANE3)]
     assert probe.calls == []  # a protected lease is quarantined, never probed or stopped
     assert call(host, request("reserve", clock.utc(), lane=LANE2))["ok"]
     clock.reboot("sim-host-1-b")
@@ -142,6 +147,7 @@ def test_stop_requires_reserve_identity_and_empty_proof():
     assert (freed["ok"], freed["definite"], freed["observed_state"], freed["fences"], freed["occupancy"]) == (True, True, "free", [], empty)
     assert probe.calls == [("host-1", "lane-gpu1", [CARD], [{"argv0": "browser", "uid": 1000}], 64, 1024, 10.0)] * 3
     assert call(host, request("reserve", SENT))["error"]["code"] == "stale_generation"  # the lane keeps its highest generation
+    assert call(host, request("reserve", SENT, generation=8))["ok"]
 
 
 ENFORCE = """import json, sys
@@ -155,7 +161,7 @@ print(json.dumps(host.enforce_deadlines()))
 @pytest.mark.realtime
 def test_enforcer_real_seconds(tmp_path):
     path = tmp_path / "executor-v2.json"
-    host = ExecutorV2(RealClock(), host_id="host-1", store=JsonStateStore(path), lane_cards=CARDS)
+    host = executor(RealClock(), JsonStateStore(path))
     assert call(host, request("reserve", datetime.now(timezone.utc), (("expiry", 1800), ("max-end", 14400), ("heartbeat-stale", 1))))["ok"]
     reserved_at = time.monotonic()
     assert call(host, request("reserve", datetime.now(timezone.utc), (("expiry", 1800), ("max-end", 14400), ("heartbeat-stale", 30)), lane=LANE2))["ok"]
@@ -170,7 +176,8 @@ def test_enforcer_real_seconds(tmp_path):
     assert enforce() == []
     time.sleep(max(0.0, 1.5 - (time.monotonic() - reserved_at)))
     assert enforce() == [{"lane": LANE, "generation": 7, "due": ["heartbeat-stale"], "state": "quarantined"}]
-    after = ExecutorV2(RealClock(), host_id="host-1", store=JsonStateStore(path), lane_cards=CARDS)
-    assert call(after, request("beat", datetime.now(timezone.utc)))["observed_state"] == "quarantined"
+    after = executor(RealClock(), JsonStateStore(path))
+    beat = call(after, request("beat", datetime.now(timezone.utc)))
+    assert (beat["error"]["code"], beat["observed_state"]) == ("conflict", "quarantined")
     assert call(after, request("beat", datetime.now(timezone.utc), lane=LANE2))["ok"]
     print(f"whole test: {time.monotonic() - reserved_at:.3f} s of real time after the 1 s reserve")
