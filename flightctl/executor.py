@@ -2287,22 +2287,25 @@ _V2_UTC = "%Y-%m-%dT%H:%M:%SZ"
 
 
 class ExecutorV2:
-    """Executor protocol v2 for holder-mode leases: reserve, beat and stop, and the deadline enforcer.
+    """Executor protocol v2 for holder-mode leases: reserve, beat, stop, inspect, ceiling and extend, and the deadline enforcer.
 
     A received relative deadline is anchored on this host's own monotonic clock and boot when the
     request is handled (G02): the sender's clocks never set one and no boot id is compared across
     hosts. Each record in the store document's ``lanes`` holds the lane's highest generation and its
     fence; every change is saved before the reply is built. A lane is freed only on an occupancy
-    observation that proves it empty.
+    observation that proves it empty. The injected Inhibitor port keeps the host awake for exactly
+    the lease (D-pow-3): a reserve that asks for it holds it before the fence is written, and the
+    lane is freed only after its release is confirmed; an unconfirmed call is never taken as done.
     """
 
     def __init__(self, clock: Clock, *, host_id: str, store: Any, lane_cards: Mapping[str, Iterable[str]],
-                 occupancy: Any | None = None, max_clock_skew_s: float = 30.0, timeout_s: float = 10.0) -> None:
+                 occupancy: Any | None = None, inhibitor: Any | None = None, max_clock_skew_s: float = 30.0, timeout_s: float = 10.0) -> None:
         self.clock = clock
         self.host_id = host_id
         self._store = store
         self._lane_cards = lane_cards
         self._occupancy = occupancy
+        self._inhibitor = inhibitor
         self._max_clock_skew_s = max_clock_skew_s
         self._timeout_s = timeout_s
         self._state = store.load()
@@ -2311,12 +2314,14 @@ class ExecutorV2:
         """Answer one v2 request with one v2 reply; every expected failure is a returned refusal."""
 
         now = (self.clock.utc().astimezone(timezone.utc), self.clock.monotonic(), self.clock.boot_id())
-        handler = {"reserve": self._reserve, "beat": self._beat, "stop": self._stop}.get(request["kind"])
+        kind = request["kind"]
+        handler = {"reserve": self._reserve, "beat": self._renew, "ceiling": self._renew, "extend": self._renew, "stop": self._stop,
+                   "inspect": self._inspect}.get(kind)
         if (now[0] - _parse_utc(request["sent_at"])).total_seconds() > self._max_clock_skew_s:
             return self._reply(request, now, "clock_skew", f"the request is more than {self._max_clock_skew_s} s old on this host's clock")
-        if handler is None:
-            return self._reply(request, now, "unavailable", f"this executor does not serve {request['kind']} requests yet")
-        lane = request["identity"]["lane"]
+        if handler is None or (kind == "inspect" and request["scope"] == "host"):
+            return self._reply(request, now, "unavailable", f"this executor does not serve this {kind} request yet")
+        lane = request["lane"] if kind == "inspect" and request["scope"] == "lane" else request["identity"]["lane"]
         if lane["host_id"] != self.host_id or lane["lane_id"] not in self._lane_cards:
             return self._reply(request, now, "not_found", "this host does not serve the lane")
         return handler(request, now, _lane_key(lane))
@@ -2346,27 +2351,40 @@ class ExecutorV2:
         fence, highest = lane.get("fence"), lane.get("generation", 0)
         if not any(deadline["kind"] == "max-end" for deadline in request["deadlines"]):
             return self._reply(request, now, "invalid", "a reserve must carry a max-end deadline")
-        if policy["work_mode"] == "unit" or request["awake"]["hold_inhibitor"]:
-            return self._reply(request, now, "unavailable", "unit work and the awake inhibitor are not served yet")
+        if policy["work_mode"] == "unit":
+            return self._reply(request, now, "unavailable", "unit work is not served yet")
+        awake = request["awake"]["hold_inhibitor"]
+        if awake and self._inhibitor is None:
+            return self._reply(request, now, "unavailable", "this executor has no inhibitor port for the awake inhibitor")
         if fence and fence["identity"] == identity and fence["state"] == "reserved":
             return self._reply(request, now)  # a retried reserve: the fence stays exactly as it was anchored
         if fence:
             return self._reply(request, now, "fenced", f"the lane is fenced ({fence['state']})")
         if identity["generation"] <= highest:
             return self._reply(request, now, "stale_generation", f"generation {identity['generation']} is not above the lane's highest, {highest}")
+        if awake:  # D-pow-3: the inhibitor first, then the fence
+            held, cause = self._inhibit(identity, hold=True)
+            if not held:  # whatever the port did, release once: definite only when that release is confirmed
+                return self._reply(request, now, "inhibitor_failed", "the awake inhibitor was not confirmed held",
+                                   definite=self._inhibit(identity, hold=False)[0], cause=cause)
         fence = {"identity": copy.deepcopy(identity), "execution_policy": copy.deepcopy(policy), "state": "reserved", "boot_id": now[2],
-                 "local_deadlines": [_v2_anchor(deadline, now) for deadline in request["deadlines"]]}
+                 "inhibitor_held": awake, "local_deadlines": [_v2_anchor(deadline, now) for deadline in request["deadlines"]]}
         try:
             self._save(key, {"generation": identity["generation"], "fence": fence})
-        except Exception as exc:  # nothing was kept: a definite non-reservation
-            return self._reply(request, now, "unavailable", f"the fence could not be saved: {exc}"[:1024])
+        except Exception as exc:  # nothing was kept: definite only when no inhibitor was held or its release is confirmed
+            released = not awake or self._inhibit(identity, hold=False)[0]
+            return self._reply(request, now, "unavailable", f"the fence could not be saved: {exc}"[:1024], definite=released)
         return self._reply(request, now)
 
-    def _beat(self, request: Mapping[str, Any], now: tuple[datetime, float, str], key: str) -> dict[str, Any]:
+    def _renew(self, request: Mapping[str, Any], now: tuple[datetime, float, str], key: str) -> dict[str, Any]:
+        """Beat, ceiling and extend renew a kind of the live reserved fence in place; only an approved extend moves max-end later."""
+
         lane = self._state["lanes"].get(key, {})
-        fence = lane.get("fence")
-        if any(deadline["kind"] == "max-end" for deadline in request["deadlines"]):
+        fence, kind = lane.get("fence"), request["kind"]
+        if kind == "beat" and any(deadline["kind"] == "max-end" for deadline in request["deadlines"]):
             return self._reply(request, now, "invalid", "a beat never moves max-end; only an approved extend does")
+        if kind == "extend" and not request.get("approval_id"):
+            return self._reply(request, now, "invalid", "an extend moves max-end later only with an approval_id")
         if not fence:
             return self._reply(request, now, "not_found", "the lane holds no fence")
         if fence["identity"] != request["identity"]:
@@ -2377,7 +2395,10 @@ class ExecutorV2:
         if fence["state"] != "reserved" or due:
             return self._reply(request, now, "conflict", f"the fence is {fence['state']}; passed deadlines: {', '.join(due) or 'none'}")
         kinds = {deadline["kind"]: deadline for deadline in fence["local_deadlines"]}
-        kinds.update((deadline["kind"], _v2_anchor(deadline, now)) for deadline in request["deadlines"])
+        received = request["deadlines"] if kind == "beat" else [request["max_end"]]
+        for new in (_v2_anchor(deadline, now) for deadline in received):
+            if kind != "ceiling" or new["monotonic_deadline_s"] < kinds[new["kind"]]["monotonic_deadline_s"]:  # a ceiling only shortens
+                kinds[new["kind"]] = new
         self._save(key, {**lane, "fence": {**fence, "local_deadlines": list(kinds.values())}})
         return self._reply(request, now)
 
@@ -2391,29 +2412,61 @@ class ExecutorV2:
         if fence["execution_policy"]["protected"] and mode not in _V2_PROTECTED_STOP_MODES:
             return self._reply(request, now, "denied", f"a {mode} stop cannot end a lease reserved protected")
         code, observation = self._release(key, "stopping")
-        return self._reply(request, now, code, f"the lane is not proven empty ({code})", definite=code is None, occupancy=observation)
+        why = "the awake inhibitor release is not confirmed" if code == "inhibitor_failed" else f"the lane is not proven empty ({code})"
+        return self._reply(request, now, code, why, definite=code is None, occupancy=observation)
+
+    def _inspect(self, request: Mapping[str, Any], now: tuple[datetime, float, str], key: str) -> dict[str, Any]:
+        """Read-only: the lane's fence, its occupancy (one probe while it holds a fence) and the holder-mode unit, which is never started."""
+
+        fence = self._state["lanes"].get(key, {}).get("fence")
+        observation = self._probe(fence) if fence else None
+        identity = request["identity"] if request["scope"] == "lease" else (fence or {}).get("identity")
+        return self._reply(request, now, "conflict" if fence and fence["state"] == "quarantined" else None, "the lane's fence is quarantined",
+                           occupancy=observation if isinstance(observation, Mapping) else None, key=key,
+                           unit=_v2_absent_unit(identity, now[0].strftime(_V2_UTC)) if identity else None)
 
     def _release(self, key: str, failed_state: str) -> tuple[str | None, Mapping[str, Any] | None]:
-        """Probe the lane once; remove the fence only on an emptiness proof, else keep it in failed_state."""
+        """Probe the lane once; remove the fence only on an emptiness proof and a confirmed inhibitor release, else keep it in failed_state."""
 
         lane = self._state["lanes"][key]
         fence = lane["fence"]
-        lane_id = fence["identity"]["lane"]["lane_id"]
-        try:
-            tenant = fence["execution_policy"]["external_tenant"]
-            observation = None if self._occupancy is None else self._occupancy.occupancy(
-                self.host_id, lane_id, list(self._lane_cards[lane_id]), noise_allowlist=tenant["noise_allowlist"],
-                noise_cap_mib=tenant["noise_cap_mib"], lane_noise_mib=tenant["lane_noise_mib"], timeout_s=self._timeout_s)
-        except Exception:  # a probe that raised proves nothing
-            observation = None
+        observation = self._probe(fence)
         if not isinstance(observation, Mapping):
             observation, code = None, "probe_unknown"
         elif observation.get("status") != "ok" or "empty" not in observation or "tenants" not in observation:
             code = "probe_unknown"
         else:
             code = None if observation["empty"] is True and observation["tenants"] == [] else "gpu_tenant"
+        if code is None and fence.get("inhibitor_held") and not self._inhibit(fence["identity"], hold=False)[0]:
+            code = "inhibitor_failed"  # the lane is empty, but the inhibitor may still be held: the fence stays, holding it
         self._save(key, {**lane, "fence": None if code is None else {**fence, "state": failed_state}})
         return code, observation
+
+    def _probe(self, fence: Mapping[str, Any]) -> Any:
+        """One occupancy probe of the fence's lane with the fence's tenant thresholds; None when there is no probe or it raised."""
+
+        lane_id = fence["identity"]["lane"]["lane_id"]
+        try:
+            tenant = fence["execution_policy"]["external_tenant"]
+            return None if self._occupancy is None else self._occupancy.occupancy(
+                self.host_id, lane_id, list(self._lane_cards[lane_id]), noise_allowlist=tenant["noise_allowlist"],
+                noise_cap_mib=tenant["noise_cap_mib"], lane_noise_mib=tenant["lane_noise_mib"], timeout_s=self._timeout_s)
+        except Exception:  # a probe that raised proves nothing
+            return None
+
+    def _inhibit(self, identity: Mapping[str, Any], *, hold: bool) -> tuple[bool, dict[str, Any] | None]:
+        """One Inhibitor call for the lease: (confirmed, the port's typed error). Only a mapping with the wanted held and no error confirms."""
+
+        lane_id, generation = identity["lane"]["lane_id"], identity["generation"]
+        try:
+            result = (self._inhibitor.hold(lane_id, generation, why=f"flightctl holds this host awake for lease {identity['lease_id']}",
+                                           timeout_s=self._timeout_s)
+                      if hold else self._inhibitor.release(lane_id, generation, timeout_s=self._timeout_s))
+            error = result.get("error") if isinstance(result, Mapping) else None
+            confirmed = isinstance(result, Mapping) and result.get("held") is hold and error is None
+            return confirmed, dict(error) if isinstance(error, Mapping) else None
+        except Exception:  # a port that raised (or is missing), or a result that cannot be read, confirmed nothing
+            return False, None
 
     def _save(self, key: str, lane: Mapping[str, Any]) -> None:
         document = {**self._state, "lanes": {**self._state["lanes"], key: lane}}
@@ -2421,16 +2474,22 @@ class ExecutorV2:
         self._state = document  # only a saved document becomes the executor's state
 
     def _reply(self, request: Mapping[str, Any], now: tuple[datetime, float, str], code: str | None = None, message: str = "", *,
-               definite: bool = True, occupancy: Mapping[str, Any] | None = None) -> dict[str, Any]:
+               definite: bool = True, occupancy: Mapping[str, Any] | None = None, unit: Mapping[str, Any] | None = None,
+               cause: Mapping[str, Any] | None = None, key: str | None = None) -> dict[str, Any]:
+        """The reply describes one lane: key (a lane-scope inspect's own lane) or else the request identity's."""
+
         utc, monotonic, boot = now
         identity = request.get("identity")
-        fence = self._state["lanes"].get(_lane_key(identity["lane"]), {}).get("fence") if identity else None
+        fence = self._state["lanes"].get(key or (_lane_key(identity["lane"]) if identity else None), {}).get("fence")
         if code is not None and request["kind"] == "reserve" and fence:
             definite = False  # a reserve refusal is definite only while the lane holds no fence
-        remaining = None
+        remaining, inhibitor = None, None
         if fence and fence["identity"] == identity and fence["boot_id"] == boot:
             max_end = next(deadline["monotonic_deadline_s"] for deadline in fence["local_deadlines"] if deadline["kind"] == "max-end")
             remaining = max(0.0, max_end - monotonic)
+        if fence and fence.get("inhibitor_held"):  # named after the fence's own lane and generation
+            who = fence["identity"]
+            inhibitor = {"held": True, "unit": f"flightctl-awake-{who['lane']['lane_id']}-g{who['generation']}.service", "what": "idle"}
         stamp = utc.strftime(_V2_UTC)
         reply = {
             "schema_version": 2, "kind": request["kind"], "controller_request_id": request["controller_request_id"],
@@ -2438,9 +2497,9 @@ class ExecutorV2:
             "observed_state": fence["state"] if fence else "free" if definite else "unknown",
             "host_boot": {"host_id": self.host_id, "boot_id": boot, "observed_at": stamp}, "host_utc": stamp,
             "fences": [{"identity": fence["identity"], "state": fence["state"], "local_deadlines": fence["local_deadlines"],
-                        "inhibitor_held": False, "rebooted_since_reserve": fence["boot_id"] != boot}] if fence else [],
-            "unit": None, "occupancy": occupancy, "inhibitor": None, "stage": None, "log_lines": [], "next_cursor": None,
-            "error": None if code is None else {"code": code, "message": message, "layer": "executor", "cause": None},
+                        "inhibitor_held": inhibitor is not None, "rebooted_since_reserve": fence["boot_id"] != boot}] if fence else [],
+            "unit": unit, "occupancy": occupancy, "inhibitor": inhibitor, "stage": None, "log_lines": [], "next_cursor": None,
+            "error": None if code is None else {"code": code, "message": message, "layer": "executor", "cause": cause},
             "dry_run": False, "output": None, "max_end_remaining_s": remaining,
         }
         if request["kind"] == "session":
@@ -2453,6 +2512,14 @@ def _v2_anchor(deadline: Mapping[str, Any], now: tuple[datetime, float, str]) ->
 
     return {"kind": deadline["kind"], "boot_id": now[2], "monotonic_deadline_s": now[1] + deadline["in_s"],
             "utc_estimate": (now[0] + timedelta(seconds=deadline["in_s"])).strftime(_V2_UTC)}
+
+
+def _v2_absent_unit(identity: Mapping[str, Any], observed_at: str) -> dict[str, Any]:
+    """A holder-mode lease never starts its unit: an inspect reports it absent (unit.schema.json observation, state absent)."""
+
+    return {"kind": "unit-observation", "unit": identity["unit"], "run_id": identity["run_id"], "invocation_id": None, "state": "absent",
+            "load_state": "not-found", "active_state": None, "sub_state": None, "result": None, "main_pid": None, "exit_status": None,
+            "cgroup": None, "cgroup_pids": [], "cgroup_empty": True, "observed_at": observed_at, "error": None}
 
 
 def _v2_due(fence: Mapping[str, Any], monotonic: float) -> list[str]:
