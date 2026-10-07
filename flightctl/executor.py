@@ -2345,6 +2345,40 @@ class ExecutorV2:
             acted.append({"lane": fence["identity"]["lane"], "generation": fence["identity"]["generation"], "due": due, "state": state})
         return copy.deepcopy(acted)
 
+    def reconcile_inhibitors(self) -> dict[str, Any]:
+        """After a restart: hold again each unit a fence records held (any state, any boot) that the port's list lacks, and release
+        each listed unit no fence records, one call each. One list first; an unknown list holds and releases nothing; nothing is saved."""
+
+        report: dict[str, Any] = {"held": [], "released": [], "failed": [], "error": None}
+        if self._inhibitor is None:
+            report["error"] = {"code": "unavailable", "message": "this executor has no inhibitor port", "layer": "executor", "cause": None}
+            return report
+        try:  # error: the list's own error, or why its answer cannot be read
+            listed = self._inhibitor.list(timeout_s=self._timeout_s)
+            error, units = (listed.get("error"), listed.get("units")) if isinstance(listed, Mapping) else ("its answer is not a mapping", None)
+        except Exception as exc:
+            error, units = f"it raised {exc!r}", None
+        if error is not None or not isinstance(units, list) or not all(isinstance(unit, str) for unit in units):  # unknown, never empty
+            report["error"] = copy.deepcopy(dict(error)) if isinstance(error, Mapping) else {
+                "code": "inhibitor_failed", "message": f"the inhibitor list is unknown: {error or 'no list of unit names'}"[:1024],
+                "layer": "executor", "cause": None}
+            return report
+        recorded = {}  # each unit a fence records held, named after the fence's own lane and generation -> its identity
+        for lane in self._state["lanes"].values():
+            fence = lane.get("fence")
+            if fence is not None and fence.get("inhibitor_held"):
+                who = fence["identity"]
+                recorded[f"flightctl-awake-{who['lane']['lane_id']}-g{who['generation']}.service"] = who
+        for unit in sorted(set(recorded) - set(units)):  # recorded, not listed: held again
+            report["held" if self._inhibit(recorded[unit], hold=True)[0] else "failed"].append(unit)
+        for unit in sorted(set(units) - set(recorded)):  # recorded by no fence: released as read back from its name, else failed
+            read = re.fullmatch(r"flightctl-awake-(.+)-g([1-9][0-9]{0,99})\.service", unit)  # lane id to the last -g; g07 is unread, never g7
+            # (and a generation of more than 100 digits is unread: int() of over 4300 digits raises and would stop the others)
+            released = read is not None and self._inhibit({"lane": {"lane_id": read[1]}, "generation": int(read[2])}, hold=False)[0]
+            report["released" if released else "failed"].append(unit)
+        report["failed"].sort()
+        return report
+
     def _reserve(self, request: Mapping[str, Any], now: tuple[datetime, float, str], key: str) -> dict[str, Any]:
         identity, policy = request["identity"], request["execution_policy"]
         lane = self._state["lanes"].get(key, {})
