@@ -2372,7 +2372,8 @@ class ExecutorV2:
         for unit in sorted(set(recorded) - set(units)):  # recorded, not listed: held again
             report["held" if self._inhibit(recorded[unit], hold=True)[0] else "failed"].append(unit)
         for unit in sorted(set(units) - set(recorded)):  # recorded by no fence: released as read back from its name, else failed
-            read = re.fullmatch(r"flightctl-awake-(.+)-g([1-9][0-9]*)\.service", unit)  # lane id to the last -g; g07 is unread, never g7
+            read = re.fullmatch(r"flightctl-awake-(.+)-g([1-9][0-9]{0,99})\.service", unit)  # lane id to the last -g; g07 is unread, never g7
+            # (and a generation of more than 100 digits is unread: int() of over 4300 digits raises and would stop the others)
             released = read is not None and self._inhibit({"lane": {"lane_id": read[1]}, "generation": int(read[2])}, hold=False)[0]
             report["released" if released else "failed"].append(unit)
         report["failed"].sort()
