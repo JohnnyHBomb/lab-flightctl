@@ -1,5 +1,6 @@
 """Amendment 9 (wave-2 staging): A4u, A3b and A5a split; the v1-executor rows go to A5r; A6b keeps its v1 rows; the
-branch-wide migration test accepts a packet's own rows."""
+branch-wide migration test accepts a packet's own rows. Updated in place by Amendment 11 (A5a3's conformance is A5a4's,
+A5a3 depends on A4u, the A4 transport rows are A5r's)."""
 
 from pathlib import Path
 
@@ -75,19 +76,21 @@ def test_a3b_is_split_and_a3c_retires_v1_discovery() -> None:
 
 
 def test_a5a_is_split_in_three() -> None:
-    assert OWED_BY["executor_transport"] == "A5a3"
-    assert [_row(p)[6] for p in ("A5a", "A5a2", "A5a3")] == ["-", "-", "executor_transport"]
-    assert (_row("A5a2")[4], _row("A5a3")[4], _row("A5b1")[4], _row("A11")[4]) == ("A5a", "A5a2", "A5a3", "A5a2, A6")
+    # Amendment 11: A5a3's conformance moved to A5a4 (OWED_BY, ports column) and A5a3 also depends on A4u
+    assert OWED_BY["executor_transport"] == "A5a4"
+    assert [_row(p)[6] for p in ("A5a", "A5a2", "A5a3")] == ["-", "-", "-"]
+    assert (_row("A5a2")[4], _row("A5a3")[4], _row("A5b1")[4], _row("A11")[4]) == ("A5a", "A5a2, A4u", "A5a3", "A5a2, A6")
     assert POS["A5a"] < POS["A5a2"] < POS["A5a3"] < POS["A5b1"]
     a5a, a5a2, a5a3 = _field("A5a:", "ACCEPTANCE"), _field("A5a2:", "ACCEPTANCE"), _field("A5a3:", "ACCEPTANCE")
     for name in ("test_relative_deadline_anchored_on_host_clock", "test_beat_extends_expiry_never_max_end",
                  "test_stop_requires_reserve_identity_and_empty_proof", "test_enforcer_real_seconds", "test_repro_cross_host_reserve"):
         assert f"`{name}`" in a5a, name
     assert "`test_definite_refusal_leaves_no_fence_and_no_inhibitor`" in a5a2 and "test_definite_refusal" not in a5a
-    assert "executor_transport conformance [strict]" in a5a3 and "executor_transport" not in a5a
+    assert "executor_transport conformance [strict]" in _field("A5a4:", "ACCEPTANCE") and "executor_transport" not in a5a
     assert "`test_enforcer_one_shot_entry_point` [realtime]" in a5a3
     assert _rows("A5a") == {"tests/sim/test_repro_cross_host_reserve.py::test_repro_cross_host_reserve": ("rewrite", "test_repro_cross_host_reserve")}
-    assert {k for k in _rows("A5a3")} == {f"tests/transport/test_a4_transport.py::{n}" for n in (
+    assert _rows("A5a3") == {}  # Amendment 11: the four A4 transport rows are A5r's
+    assert {k for k in _rows("A5r") if k.startswith("tests/transport/")} == {f"tests/transport/test_a4_transport.py::{n}" for n in (
         "test_one_shot_invocations_keep_state", "test_garbage_is_unparsable_not_ok",
         "test_transport_failures_are_typed_and_bounded", "test_wrong_key_denied")}
 
@@ -96,7 +99,8 @@ def test_v1_executor_rows_go_to_a5r() -> None:
     assert _row("A5r")[4] == "A5b2" and _row("A5r")[5] == "lead" and POS["A5b2"] < POS["A5r"] < POS["A-ASM"]
     ex = "tests/executor/test_executor.py::"
     stop, deadline = A5A + "test_stop_requires_reserve_identity_and_empty_proof", A5A + "test_relative_deadline_anchored_on_host_clock"
-    assert _rows("A5r") == {
+    v1_executor_rows = {k: v for k, v in _rows("A5r").items() if not k.startswith("tests/transport/")}  # Amendment 11
+    assert v1_executor_rows == {
         ex + "test_reserve_start_fence": ("rewrite", stop),
         ex + "test_clock_reboot_and_same_boot_deadline": ("rewrite", deadline),
         ex + "test_reboot_reconcile_rejects_partial_and_reanchors_deadline": ("rewrite", deadline),
@@ -108,7 +112,7 @@ def test_v1_executor_rows_go_to_a5r() -> None:
         "tests/executor/test_review4.py": ("delete", "-"),
         "tests/executor/test_mutations.py": ("delete", "-"),
     }
-    for _, replacement in _rows("A5r").values():  # exact nodes of A5a's named tests, because A5r adds none of them
+    for _, replacement in v1_executor_rows.values():  # exact nodes of A5a's named tests, because A5r adds none of them
         assert replacement == "-" or replacement.split("::")[1] in _field("A5a:", "ACCEPTANCE")
     assert "the owner may fold it into the end of A5b2" in _section("A5r:").split("\n", 1)[0]
 

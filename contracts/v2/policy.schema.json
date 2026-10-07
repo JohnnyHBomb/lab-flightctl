@@ -52,7 +52,7 @@
       "uniqueItems": true
     },
     "timing": {
-      "description": "Decided values (plan r4). Unchanged from v1.",
+      "description": "Decided values (plan r4). Unchanged from v1, except max_end_margin_s (added by Amendment 11).",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -70,7 +70,8 @@
         "booking_early_claim_s",
         "booking_checkin_s",
         "booking_warning_s",
-        "booking_completion_s"
+        "booking_completion_s",
+        "max_end_margin_s"
       ],
       "properties": {
         "max_clock_skew_s": {
@@ -117,6 +118,10 @@
         },
         "booking_completion_s": {
           "const": 600
+        },
+        "max_end_margin_s": {
+          "const": 30,
+          "description": "Amendment 11 (A5b2 staging, owner's approval 6 Oct 2026): the margin_s of the round-3 ceiling bound (common.schema.json relative_deadline). The authority sends max-end as in_s = approved_max_end - sent_at - max_end_margin_s, on reserve and on every shorten-only ceiling. A round trip longer than this margin triggers a ceiling message; without the margin the round-4 grant rule (ceiling_confirmed) never confirms over a wire slower than the rounding slack (measured in A5b2 staging: margin 0 with a 1.5 s delay never confirmed, margin 30 confirmed on the reserve)."
         }
       }
     },
@@ -462,7 +467,8 @@
           "booking_early_claim_s": 900,
           "booking_checkin_s": 900,
           "booking_warning_s": 600,
-          "booking_completion_s": 600
+          "booking_completion_s": 600,
+          "max_end_margin_s": 30
         },
         "lease": {
           "default_ttl_s": 14400,
@@ -607,7 +613,8 @@
           "booking_early_claim_s": 900,
           "booking_checkin_s": 900,
           "booking_warning_s": 600,
-          "booking_completion_s": 600
+          "booking_completion_s": 600,
+          "max_end_margin_s": 30
         },
         "lease": {
           "default_ttl_s": 14400,

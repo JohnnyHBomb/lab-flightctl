@@ -25,7 +25,8 @@
     "booking_early_claim_s": 900,
     "booking_checkin_s": 900,
     "booking_warning_s": 600,
-    "booking_completion_s": 600
+    "booking_completion_s": 600,
+    "max_end_margin_s": 30
   },
   "lease": {
     "default_ttl_s": 14400,
