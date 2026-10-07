@@ -13,13 +13,14 @@ from flightctl.store import SQLiteStore
 from flightctl.transport import LocalSubprocessTransport
 from tests.authority.helpers import PRINCIPAL, request as rpc_request
 from tests.contracts_v2.validation import assert_valid, occupancy_from_capture
-from tests.executor.wire_site import Rig
+from tests.executor.wire_site import CARDS, Rig
 from tests.sim.rig import SimClock
 
 CARD = "GPU-00000000-0000-0000-0000-000000000011"
 LANE = {"lane_id": "lane-gpu1", "host_id": "host-1", "reachability": "confirmed", "enabled": True}
 MAPPING = [{"external_id": "peer-a", "principal": PRINCIPAL, "roles": ["agent"]}]
 ACQUIRE = {"purpose": "simulated work", "est_s": 600, "max_s": 3600}
+TENANT = {"policy": "yield", "lane_noise_mib": 2048, "noise_cap_mib": 128, "noise_allowlist": [{"argv0": "browser", "uid": 1000}]}
 LOST = {"code": "reply_lost", "message": "no reply", "layer": "transport", "cause": {"code": "transport_failed", "message": "ssh exited 255", "layer": "transport", "cause": None}}
 
 
@@ -66,6 +67,10 @@ def raises(result):
     raise OSError("the transport is down")
 
 
+def altered(**fields):  # the host's reply with these fields changed is no longer an answer to the request
+    return lambda result: {**result, "reply": {**result["reply"], **fields}}
+
+
 def test_release_identity_matches_reserve(tmp_path):
     site = Site(tmp_path)
     granted = rpc(site.authority(), "acquire-1", "acquire", ACQUIRE)
@@ -84,9 +89,13 @@ def test_release_identity_matches_reserve(tmp_path):
     stop = site.calls[1][0]
     assert (released["status"], stop["kind"], stop["identity"]) == (200, "stop", identity), released
     assert (stop["stop_authority"]["mode"], stop["stop_authority"]["approval_id"]) == ("owner-release", None)
-    assert site.authority().store.get_lane("lane-gpu1")["state"] == "free"
+    store = site.authority().store
+    assert store.get_lane("lane-gpu1")["state"] == "free"
+    store.put_lane({**store.get_lane("lane-gpu1"), "policy": {"external_tenant": TENANT}})  # the lane now has a tenant rule of its own
     again = rpc(site.authority(), "acquire-2", "acquire", ACQUIRE)
-    assert (again["data"]["generation"], again["data"]["lease"]["run_id"] != lease["run_id"], site.calls[2][0]["identity"]["unit"]) == (2, True, "flightctl-lane-gpu1-g2.service")
+    second = site.calls[2][0]
+    assert (again["data"]["generation"], again["data"]["lease"]["run_id"] != lease["run_id"], second["identity"]["unit"], second["execution_policy"]["external_tenant"]) == (2, True, "flightctl-lane-gpu1-g2.service", TENANT)
+    assert len({call[0]["controller_request_id"] for call in site.calls}) == 3  # every message has a fresh request id
 
 
 def test_definite_refusal_cancels_lease_lane_stays_free(tmp_path):
@@ -121,8 +130,11 @@ def test_executor_cause_reaches_rpc_error(tmp_path):
     lease, status = authority.store.get_lease(lease_id=granted["data"]["lease"]["lease_id"])
     assert (lease["state"], status, authority.store.get_lane("lane-gpu1")["state"]) == ("quarantined", "uncertain", "quarantined")
     assert "cause" not in rpc(authority, "acquire-2", "acquire", ACQUIRE)["error"]  # no executor call produced this refusal
-    uncertain = {"lost": (lambda result: {"status": "lost", "reply": None, "error": LOST}, LOST), "raised": (raises, None),  # the transport's error is the cause; none for a call that raised
-                 "unanswered": (lambda result: {**result, "reply": {**result["reply"], "controller_request_id": "executor-other"}}, None)}  # or a reply to another request
+    uncertain = {"lost": (lambda result: {"status": "lost", "reply": None, "error": LOST}, LOST), "raised": (raises, None)}  # the transport's error is the cause; none for a call that raised
+    uncertain |= {name: (altered(**fields), None) for name, fields in {  # no cause either for a reply that does not answer, or whose error is no object, or that is not a definite success
+        "schema_version": {"schema_version": 1}, "kind": {"kind": "beat"}, "request id": {"controller_request_id": "executor-other"}, "identity": {"echoed_identity": None},
+        "not definite": {"ok": True, "definite": False, "observed_state": "free", "error": None}, "not free": {"ok": True, "definite": True, "observed_state": "stopping", "error": None},
+        "v1 shape": {"acknowledgement": "stopped", "ok": False, "error": "stop pending", "observed_state": "stopping", "uncertain": False}}.items()}  # the v1 pending stop is no 202 in protocol 2
     for name, (tamper, cause) in uncertain.items():
         other = Site(tmp_path / name)
         other.probe.tenant = True
@@ -151,6 +163,7 @@ def test_reserve_stop_real_executor_process(tmp_path):
     released = rpc(authority, "release-1", "release", {"token": granted["data"]["token"]})
     stopped = time.monotonic()
     assert (granted["status"], released["status"], authority.store.get_lane("lane-gpu1")["state"]) == (200, 200, "free"), (granted, released)
+    assert f"-q -d PIDS -i {CARDS['lane-gpu1']}" in rig.smi_calls()  # the child process probed the lane's card before it freed the lane
     denied = rpc(authority_v2(database, entry("controller-b"), clock), "acquire-2", "acquire", ACQUIRE)  # the entry point of another controller refuses
     cause = denied["error"]["cause"]
     assert (denied["status"], denied["error"]["code"], cause["code"], cause["layer"]) == (503, "unknown", "denied", "transport"), denied

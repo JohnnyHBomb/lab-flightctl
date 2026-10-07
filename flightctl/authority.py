@@ -121,7 +121,9 @@ class Authority:
 
     The constructor accepts neutral inventory/policy structures from the v1
     examples.  Existing records are never overwritten on restart; only absent
-    lane definitions are bootstrapped.
+    lane definitions are bootstrapped.  ``executor_protocol`` 1 (the default)
+    speaks the v1 executor wire through ``transport.request``; 2 speaks
+    protocol v2 through an ExecutorTransport's ``call``.
     """
 
     def __init__(
@@ -141,9 +143,11 @@ class Authority:
         site_id: str | None = None,
         controller_id: str | None = None,
         lanes: Iterable[Mapping[str, Any]] | Mapping[str, Mapping[str, Any]] | None = None,
+        executor_protocol: int = 1,
     ) -> None:
         self.store = store if isinstance(store, SQLiteStore) else SQLiteStore(store, site_id=site_id or "site-a", controller_id=controller_id or "controller-a")
         self.transport = transport
+        self.executor_protocol = executor_protocol
         self.clock = clock or RealClock()
         self.inventory = dict(inventory or {})
         self.site_id = str(site_id or self.inventory.get("site_id") or getattr(self.store, "site_id", "site-a"))
@@ -745,6 +749,69 @@ class Authority:
             return False, reply, "executor reply is not a confirmed typed success"
         return True, reply, "ok"
 
+    def _executor_message(self, lane: Mapping[str, Any], lease: Mapping[str, Any], kind: str, stop_authority: Mapping[str, Any] | None) -> dict[str, Any]:
+        """The protocol-2 request for the lease; its identity comes from the lease record (stored before the reserve), so a new authority sends the same one."""
+
+        now = self._utc()
+        sent_at = _time_text(now)
+        protected = lease["class"] in PROTECTED_CLASSES
+        tenant = (lane.get("policy") or {}).get("external_tenant") or {"policy": "collision", "lane_noise_mib": 1024, "noise_cap_mib": 64, "noise_allowlist": []}
+        message: dict[str, Any] = {
+            "schema_version": 2,
+            "kind": kind,
+            "controller_request_id": f"executor-{uuid.uuid4().hex}",
+            "controller_id": self.controller_id,
+            "sent_at": sent_at,
+            "identity": {"lane": dict(lease["lane"]), "generation": int(lease["generation"]), **{key: lease[key] for key in ("lease_id", "token_sha256", "run_id", "unit")}},
+            "execution_policy": {"class": lease["class"], "protected": protected, "preemptible": not protected, "grace_s": 0, "work_mode": "holder", "holder_binding": "client-heartbeat", "external_tenant": tenant},
+        }
+        if kind == "reserve":
+            message["deadlines"] = [{"kind": "max-end", "in_s": max(0, int((_parse_time(lease["max_end"]) - now).total_seconds())), "sender_utc": sent_at}]
+            message["awake"] = {"hold_inhibitor": False}
+        elif kind == "stop":
+            authority = stop_authority or {"mode": "controller-match", "approval_id": None}
+            message["stop_authority"] = {"mode": authority["mode"], "approval_id": authority.get("approval_id"), "reason": f"authority stop: {authority['mode']}"}
+        return message
+
+    def _executor_outcome(self, lane: Mapping[str, Any], lease: Mapping[str, Any], kind: str, *, stop_authority: Mapping[str, Any] | None = None) -> tuple[str, Mapping[str, Any] | None, str, Mapping[str, Any] | None]:
+        """One executor call as (outcome, reply, why, cause); outcome is "ok", "refused" (protocol 2: an answered reserve that refuses definitely, so the host wrote nothing) or "uncertain".
+
+        Protocol 1 is ``_executor_call`` unchanged.  In protocol 2 only a reply with schema_version 2 and this message's kind, request id and identity answers the call; a call that is
+        not answered is uncertain, and so is an answer that is neither a definite success nor a definite reserve refusal.  The cause is the answered reply's ``error`` or the
+        ``error`` of a transport result whose status is not ok; None otherwise.
+        """
+
+        if self.executor_protocol != 2:
+            ok, reply, why = self._executor_call(lane, lease, kind, stop_authority=stop_authority)
+            return ("ok" if ok else "uncertain"), reply, why, None
+        if self.transport is None:
+            return "uncertain", None, "executor transport unavailable", None
+        try:
+            message = self._executor_message(lane, lease, kind, stop_authority)
+            result = self.transport.call(lane["host_id"], message, timeout_s=30.0)
+        except Exception:
+            return "uncertain", None, "executor call failed", None
+        if not isinstance(result, Mapping) or result.get("status") != "ok":
+            error = result.get("error") if isinstance(result, Mapping) else None
+            return "uncertain", None, "executor outcome is not a confirmed response", error if isinstance(error, Mapping) else None
+        reply = result.get("reply")
+        answered = isinstance(reply, Mapping) and reply.get("schema_version") == 2 and reply.get("kind") == kind and reply.get("controller_request_id") == message["controller_request_id"] and reply.get("echoed_identity") == message["identity"]
+        if not answered:
+            return "uncertain", None, "executor reply does not answer the request", None
+        cause = reply.get("error") if isinstance(reply.get("error"), Mapping) else None
+        if reply.get("ok") is True and reply.get("definite") is True and reply.get("observed_state") == ("reserved" if kind == "reserve" else "free"):
+            return "ok", reply, "ok", cause
+        refused = kind == "reserve" and reply.get("ok") is False and reply.get("definite") is True
+        return ("refused" if refused else "uncertain"), reply, f"executor {kind} was {'refused' if refused else 'not confirmed'}", cause
+
+    def _executor_error(self, code: str, why: str, cause: Mapping[str, Any] | None) -> dict[str, Any]:
+        """The error of the 503 for a failed executor call; protocol 2 always carries a cause (None when no typed error explains it), protocol 1 has no such key."""
+
+        error = self._error(code, why, retryable=True, failure_class="state")
+        if self.executor_protocol == 2:
+            error["cause"] = cause
+        return error
+
     # ---- acquire and lease operations ----------------------------------
 
     def _queue_active(self, connection: sqlite3.Connection, lane_id: str) -> list[dict[str, Any]]:
@@ -929,7 +996,7 @@ class Authority:
         instance = f"instance-{uuid.uuid4().hex}"
         lease_id = f"lease-{uuid.uuid4().hex}"
         generation_deadline = self._deadline(int((max_end - now).total_seconds()))
-        return {
+        lease = {
             "schema_version": 1,
             "lease_id": lease_id,
             "lane": dict(lane["lane"]),
@@ -951,6 +1018,9 @@ class Authority:
             "invocation": None,
             "state": "starting",
         }
+        if self.executor_protocol == 2:  # the whole executor identity exists before the reserve and never changes
+            lease.update(run_id=f"run-{uuid.uuid4().hex}", unit=f"flightctl-{lane['lane_id']}-g{generation}.service", token_sha256=hashlib.sha256(token.encode("utf-8")).hexdigest())
+        return lease
 
     def _grant_data(self, lease: Mapping[str, Any], operation: str, mode: str = "fresh-acquire") -> dict[str, Any]:
         return {"kind": "grant", "operation": operation, "token": lease["token"], "generation": lease["generation"], "lease": copy.deepcopy(dict(lease)), "reservation": copy.deepcopy(lease["reservation"]), "adoption": {"mode": mode, "principal_bound": True, "generation_bound": True, "token_source": "controller-grant" if mode == "fresh-acquire" else "authenticated-adoption"}}
@@ -1076,12 +1146,21 @@ class Authority:
             self.store.put_lease(lease, reservation_status="pending", connection=connection)
             if approval is not None:
                 self._consume_approval(connection, approval, context, str(request["request_id"]))
-        ok, _reply, why = self._executor_call(lane, lease, "reserve")
-        if not ok:
+        outcome, _reply, why, cause = self._executor_outcome(lane, lease, "reserve")
+        if outcome != "ok":
             with self.store.transaction() as connection:
                 current = self.store.get_lease(lease_id=lease["lease_id"], connection=connection)
                 if current:
                     record, _status = current
+                    if outcome == "refused":  # the host wrote nothing: the lease is cancelled, and the lane keeps the generation it took and stays free
+                        record.update(state="closed", close_reason="reserve-refused")
+                        record["reservation"]["state"] = "released"
+                        self.store.put_lease(record, reservation_status="released", connection=connection)
+                        self.store.put_lane(dict(self.store.get_lane(lane["lane_id"], connection=connection) or lane, state="free"), connection=connection)
+                        response = self._response(str(request["request_id"]), 503, error=self._executor_error("unavailable", why, cause))
+                        self._remember(connection, request, context, fingerprint, response)
+                        self.store.put_event(self._event(kind="reconcile", state="free", request_id=str(request["request_id"]), context=context, lane=lease["lane"], generation=lease["generation"], reason=why, data={"lease_id": lease["lease_id"]}), connection=connection)
+                        return response
                     record["state"] = "quarantined"
                     record["reservation"]["state"] = "quarantined"
                     self.store.put_lease(record, reservation_status="uncertain", connection=connection)
@@ -1089,7 +1168,7 @@ class Authority:
                     lane_bad["state"] = "quarantined"
                     lane_bad["uncertainty_reason"] = why
                     self.store.put_lane(lane_bad, connection=connection)
-                    response = self._response(str(request["request_id"]), 503, error=self._error("unknown", why, retryable=True, failure_class="state"))
+                    response = self._response(str(request["request_id"]), 503, error=self._executor_error("unknown", why, cause))
                     self._remember(connection, request, context, fingerprint, response)
                     self.store.put_event(self._event(kind="reconcile", state="quarantined", request_id=str(request["request_id"]), context=context, lane=lease["lane"], generation=lease["generation"], reason=why, data={"lease_id": lease["lease_id"]}), connection=connection)
                     return response
@@ -1214,7 +1293,7 @@ class Authority:
             "mode": "approved-forced-preemption" if approval is not None else ("controller-match" if preempt else "owner-release"),
             "approval_id": request["args"].get("approval_id") if approval is not None else None,
         }
-        ok, reply, why = self._executor_call(lane, lease, "stop", stop_authority=stop_authority)
+        outcome, reply, why, cause = self._executor_outcome(lane, lease, "stop", stop_authority=stop_authority)
         with self.store.transaction() as connection:
             current = self.store.get_lease(lease_id=lease["lease_id"], connection=connection)
             if current is None:
@@ -1229,8 +1308,8 @@ class Authority:
                 response = self._response(str(request["request_id"]), 409, error=self._error("conflict", "reservation changed during stop", retryable=False, failure_class="conflict"))
                 self._remember(connection, request, context, fingerprint, response)
                 return response
-            if not ok:
-                if not preempt and isinstance(reply, Mapping) and reply.get("kind") == "stop" and reply.get("acknowledgement") == "stopped" and reply.get("ok") is False and isinstance(reply.get("error"), str) and reply.get("error") and reply.get("observed_state") == "stopping" and reply.get("uncertain") is False:
+            if outcome != "ok":
+                if not preempt and self.executor_protocol != 2 and isinstance(reply, Mapping) and reply.get("kind") == "stop" and reply.get("acknowledgement") == "stopped" and reply.get("ok") is False and isinstance(reply.get("error"), str) and reply.get("error") and reply.get("observed_state") == "stopping" and reply.get("uncertain") is False:
                     lease_current["state"] = "stopping"
                     lease_current["reservation"]["state"] = "stopping"
                     self.store.put_lease(lease_current, reservation_status="acknowledged", connection=connection)
@@ -1257,7 +1336,7 @@ class Authority:
                 self.store.put_lease(lease_current, reservation_status="uncertain", connection=connection)
                 lane_bad = dict(lane, state="quarantined", uncertainty_reason=why)
                 self.store.put_lane(lane_bad, connection=connection)
-                response = self._response(str(request["request_id"]), 503, error=self._error("unknown", why, retryable=True, failure_class="state"))
+                response = self._response(str(request["request_id"]), 503, error=self._executor_error("unknown", why, cause))
                 self._remember(connection, request, context, fingerprint, response)
                 self.store.put_event(self._event(kind="reconcile", state="quarantined", request_id=str(request["request_id"]), context=context, lane=lease["lane"], generation=lease["generation"], reason=why, data={"lease_id": lease["lease_id"]}), connection=connection)
                 return response
