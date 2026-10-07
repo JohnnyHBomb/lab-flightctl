@@ -55,6 +55,16 @@ class Site:
         return self.tamper(result) if self.tamper else result
 
 
+class Recorder:  # an ExecutorTransport that keeps a copy of every result of the transport it wraps
+    def __init__(self, inner):
+        self.inner, self.results = inner, []
+
+    def call(self, host_id, request, *, timeout_s):
+        result = self.inner.call(host_id, request, timeout_s=timeout_s)
+        self.results.append(json.loads(json.dumps(result)))
+        return result
+
+
 def authority_v2(database, transport, clock):
     return Authority(SQLiteStore(database), transport, clock, executor_protocol=2, lanes=[LANE], identity_mapping=MAPPING)
 
@@ -164,8 +174,10 @@ def test_reserve_stop_real_executor_process(tmp_path):
     stopped = time.monotonic()
     assert (granted["status"], released["status"], authority.store.get_lane("lane-gpu1")["state"]) == (200, 200, "free"), (granted, released)
     assert f"-q -d PIDS -i {CARDS['lane-gpu1']}" in rig.smi_calls()  # the child process probed the lane's card before it freed the lane
-    denied = rpc(authority_v2(database, entry("controller-b"), clock), "acquire-2", "acquire", ACQUIRE)  # the entry point of another controller refuses
-    cause = denied["error"]["cause"]
-    assert (denied["status"], denied["error"]["code"], cause["code"], cause["layer"]) == (503, "unknown", "denied", "transport"), denied
-    assert "Permission denied" in cause["message"]
+    stranger = Recorder(entry("controller-b"))  # the entry point of another controller refuses
+    denied = rpc(authority_v2(database, stranger, clock), "acquire-2", "acquire", ACQUIRE)
+    [result] = stranger.results
+    assert (result["status"], result["error"]["code"], result["error"]["layer"]) == ("denied", "denied", "transport"), result
+    assert "Permission denied" in result["error"]["message"]
+    assert (denied["status"], denied["error"]["code"], denied["error"]["cause"]) == (503, "unknown", result["error"]), denied  # the transport's error exactly
     print(f"reserve {reserved - begun:.3f} s, release {stopped - reserved:.3f} s, denied call {time.monotonic() - stopped:.3f} s")
