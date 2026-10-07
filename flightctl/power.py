@@ -100,13 +100,13 @@ class SystemdInhibitor(_Port):
         except Exception as exc:  # a runner that raises proves nothing about the unit
             return None, _err("inhibitor_failed", f"{what} could not run: {exc!r}")
         res = res if isinstance(res, _Mapping) else {}
-        error = res.get("error")
+        rc, error = res.get("returncode"), res.get("error")
         cause = error if isinstance(error, _Mapping) else None
         if res.get("timed_out") is True or (cause or {}).get("code") == "timeout":
             return None, _err("timeout", f"{what} timed out", cause)
-        if error is not None or res.get("returncode") != 0 or not isinstance(res.get("stdout"), str):
+        if error is not None or type(rc) is not int or rc != 0 or not isinstance(res.get("stdout"), str):
             lines = [line for line in str(res.get("stderr") or "").splitlines() if line.strip()]
-            detail = f"{what} failed (exit {res.get('returncode')}): {lines[-1] if lines else ''}"
+            detail = f"{what} failed (exit {rc}): {lines[-1] if lines else ''}"
             return None, _err("inhibitor_failed", detail, cause)
         return res["stdout"], None
 
@@ -117,7 +117,8 @@ class SystemdInhibitor(_Port):
             return {"units": None, "error": error}
         names = [fields[0] for fields in map(str.split, out.splitlines()) if fields]
         if not all(_UNIT.fullmatch(name) for name in names):
-            return {"units": None, "error": _err("inhibitor_failed", "unparsable systemctl list-units output")}
+            error = _err("inhibitor_failed", f"unparsable systemctl list-units output: {out[:200]!r}")
+            return {"units": None, "error": error}
         return {"units": sorted(set(names)), "error": None}
 
     def _hold(self, unit, why, timeout_s):

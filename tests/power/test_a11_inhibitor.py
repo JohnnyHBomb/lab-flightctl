@@ -60,7 +60,9 @@ def test_inhibitor_failure_is_definite_refusal():
     assert (refused["fences"], refused["inhibitor"], store.value) == ([], None, None)
     assert runner.calls == [PREFIX + HOLD, PREFIX + STOP, PREFIX + LIST]  # the hold, then its release: stop and list
     cause = refused["error"]["cause"]  # the twin's typed error, with the reason systemd gave
-    assert (cause["code"], cause["layer"]) == ("inhibitor_failed", "runner") and "No medium found" in cause["message"]
+    assert cause["code"] == "inhibitor_failed" and "No medium found" in cause["message"]
+    lost = reserve(host(store, inhibitor=power.SystemdInhibitor(Scripted(hold=LOST), runtime_dir=RUNTIME)))
+    assert (*verdict(lost), lost["error"]["cause"]["cause"]) == (False, True, "inhibitor_failed", "free", LOST["error"])
     unverified = Scripted(hold=FAIL, stop=FAIL, list=FAIL)  # the release is not verified either: not definite
     unsure = reserve(host(store, inhibitor=power.SystemdInhibitor(unverified, runtime_dir=RUNTIME)))
     assert verdict(unsure) == (False, False, "inhibitor_failed", "unknown") and store.value is None
@@ -107,7 +109,8 @@ def test_real_twin_runs_the_contract_commands(monkeypatch):
     listed = power.SystemdInhibitor(runner, runtime_dir=RUNTIME).list(timeout_s=10)
     assert (listed, runner.calls) == ({"units": [a, b], "error": None}, [PREFIX + LIST])  # distinct, ascending
     assert twin(list={"stdout": " \n\n"}).list(timeout_s=10) == {"units": [], "error": None}
-    for stdout in ("No units listed.\n", LINE + "oops\n", "flightctl-awake-A-g1.service x\n"):
+    for stdout in ("No units listed.\n", LINE + "oops\n", "flightctl-awake-A-g1.service x\n",
+                   "UNIT LOAD ACTIVE SUB DESCRIPTION\n" + LINE):  # the header line --no-legend leaves out
         unparsable = twin(list={"stdout": stdout}).list(timeout_s=10)  # one line that is no unit spoils it all
         assert (unparsable["units"], unparsable["error"]["code"]) == (None, "inhibitor_failed")
     for answer, code in ((FAIL, "inhibitor_failed"), (TIMEOUT, "timeout")):
@@ -135,7 +138,7 @@ def test_real_twin_runs_the_contract_commands(monkeypatch):
     bad = (({"lane_id": "Lane"}, ValueError), ({"lane_id": 7}, TypeError), ({"generation": 0}, ValueError),
            ({"generation": True}, TypeError), ({"why": ""}, ValueError), ({"why": "a\0b"}, ValueError),
            ({"why": None}, TypeError), ({"timeout_s": 0}, ValueError), ({"timeout_s": True}, TypeError),
-           ({"timeout_s": float("inf")}, ValueError))
+           ({"timeout_s": float("inf")}, ValueError), ({"lane_id": "lane\n"}, ValueError))
     for one in twins:  # every refusal comes before any command, record or change
         for change, error in bad:
             with pytest.raises(error):
@@ -170,3 +173,5 @@ def test_dryrun_twin_lists_for_real_and_records_the_rest():
     other = power.DryRunInhibitor(Scripted(list=FAIL))  # the read is the real twin's: unknown, never empty
     unread = other.list(timeout_s=10)
     assert (unread["units"], unread["error"]["code"], other.recorded) == (None, "inhibitor_failed", [])
+    other.hold(*ARGS, why=WHY, timeout_s=10)  # no runtime dir: the records carry no prefix
+    assert (other.release(*ARGS, timeout_s=10), other.recorded) == (result(False, dry_run=True), [HOLD, STOP])
