@@ -2583,11 +2583,16 @@ def _v2_valid(value: Any, definition: str) -> bool:
     """Valid against executor.schema.json#/$defs/<definition> as JSON Schema draft 2020-12 evaluates the frozen files, with
     every number finite, every date-time asserted and each pattern's $ matching only at the very end (ECMA-262)."""
 
+    pending = [value]
+    while pending:  # NaN and the infinities, which Python's json parses, are not JSON numbers; an integer of any size is finite
+        item = pending.pop()
+        if isinstance(item, float) and not math.isfinite(item):
+            return False
+        pending.extend(item.values() if isinstance(item, dict) else item if isinstance(item, list) else ())
     try:
-        json.dumps(value, allow_nan=False)  # NaN and the infinities, which Python's json parses, are not JSON numbers
-    except (TypeError, ValueError, RecursionError):  # nor is anything else JSON cannot carry
+        return _v2_evaluate(value, *_v2_resolve(f"#/$defs/{definition}", _V2_SCHEMA)) is not None
+    except (TypeError, RecursionError):  # what JSON cannot carry (a key that is not a string) or nests past Python's limit
         return False
-    return _v2_evaluate(value, *_v2_resolve(f"#/$defs/{definition}", _V2_SCHEMA)) is not None
 
 
 def _v2_resolve(ref: str, base: Path) -> tuple[Any, Path]:

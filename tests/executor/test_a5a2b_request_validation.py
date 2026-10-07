@@ -2,10 +2,13 @@
 
 import copy
 import json
-from datetime import timedelta
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timedelta, timezone
 
 from tests.contracts_v2.validation import assert_valid, examples
-from tests.executor.test_a5a_executor_v2 import LANE, SENT, ScriptedProbe, call, observation, request
+from tests.executor.test_a5a_executor_v2 import CARDS, LANE, ROOT, SENT, ScriptedProbe, call, observation, request
 from tests.executor.test_a5a2_executor_v2 import FREED, HELD, HOLD, RELEASE, CountingStore, ScriptedInhibitor, ask, executor, max_end, reserve
 from tests.sim.rig import SimClock
 
@@ -27,6 +30,8 @@ EDITS = (  # (the valid request, the one place an edit makes invalid, the value 
     *(("stop", ("sent_at",), stamp) for stamp in ("2026-10-02T25:00:00Z", "2026-02-30T10:00:00Z", "2026-10-02T10:00:60Z", "2026-10-02T10:00Z",
                                                   "20261002T100000Z", "2026-10-02t10:00:00Z", "2026-10-02T10:00:00.Z", "2026-10-02T10:00:00Z\n")),
     ("reserve", ("deadlines", 0, "sender_utc"), "2026-13-02T10:00:00Z"), ("beat", ("deadlines", 1, "sender_utc"), "2026-10-02T10:00:00+00:00"),
+    *(("reserve", ("execution_policy", "external_tenant", "noise_allowlist"), [twin, {**twin, "uid": uid}])  # uniqueItems: 1000 equals 1000.0
+      for twin in ({"argv0": "browser", "uid": 1000},) for uid in (1000, 1000.0)),
 )
 
 
@@ -53,6 +58,8 @@ def refused(host, req, echo=None, lane=FREE, *, schema=True):
     assert (reply["kind"], reply["controller_request_id"], reply["echoed_identity"]) == (fields.get("kind"), fields.get("controller_request_id"), echo)
     assert (reply["ok"], reply["definite"], reply["unit"], reply["occupancy"]) == (False, True, None, None)
     assert (reply["error"]["code"], reply["error"]["layer"], reply["error"]["cause"]) == ("invalid", "executor", None)
+    stamp = host.clock.utc().strftime("%Y-%m-%dT%H:%M:%SZ")  # the refusal still reports this host's clock and boot
+    assert (reply["host_utc"], reply["host_boot"]) == (stamp, {"host_id": host.host_id, "boot_id": host.clock.boot_id(), "observed_at": stamp})
     assert {key: reply[key] for key in FREE} == lane
 
 
@@ -79,6 +86,40 @@ def test_invalid_requests_are_definite_and_write_nothing():
     for place, value in ((("kind",), "renew"), (("kind",), DROP), (("controller_request_id",), "creq beat")):  # nor for these
         refused(host, edit(valid["beat"], place, value), valid["beat"]["identity"], fenced, schema=False)
     assert (store.value, store.saves, probe.calls, port.calls) == (saved, 1, [], [HOLD])  # nothing saved, neither port called
-    assert call(host, valid["beat"] | {"sent_at": "2026-10-02T10:00:00.25Z"})["ok"]  # a fraction of a second is a valid date-time
+    for stamp in ("2026-10-02T10:00:00.25Z", "2026-10-02T10:00:00.123456789012Z"):  # a fraction of any length is a valid date-time
+        assert call(host, valid["beat"] | {"sent_at": stamp})["ok"]
     stopped = call(host, valid["stop"])
-    assert (stopped["ok"], stopped["observed_state"], stopped["fences"], port.calls, store.saves) == (True, "free", [], [HOLD, RELEASE], 3)
+    assert (stopped["ok"], stopped["observed_state"], stopped["fences"], port.calls, store.saves) == (True, "free", [], [HOLD, RELEASE], 4)
+
+
+def test_a_huge_but_finite_generation_is_a_valid_identity():
+    """A finite integer of any size is a number (DECIDED 4): an invalid beat with such an identity still echoes it and describes its lane."""
+    host = executor(SimClock(boot_id="sim-host-1", utc_start=SENT), CountingStore(), ScriptedProbe(observation()), ScriptedInhibitor(HELD, FREED))
+    assert host.handle(reserve())["ok"]
+    beat = request("beat", SENT)
+    beat["identity"]["generation"] = 10 ** 4300  # beyond Python's default int-to-text limit, so no serialisation may stand in for the check
+    reply = host.handle(beat | {"surplus": 1})
+    assert (reply["error"]["code"], reply["echoed_identity"] is not None, reply["observed_state"], len(reply["fences"])) == ("invalid", True, "reserved", 1)
+
+
+SERVE = """import json, sys
+from flightctl.clock import RealClock
+from flightctl.executor import ExecutorV2, MemoryStateStore
+reply = ExecutorV2(RealClock(), host_id="host-1", store=MemoryStateStore(), lane_cards=json.loads(sys.argv[2])).handle(json.loads(sys.argv[1]))
+print(json.dumps((reply["error"] or {}).get("code")))
+"""
+
+
+def test_validation_reads_the_frozen_schema_files(tmp_path):
+    """No copy of a schema is kept in code: edit a frozen file in a copy of the package and the same request stops being valid."""
+    for directory in ("flightctl", "contracts"):
+        shutil.copytree(ROOT / directory, tmp_path / directory, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    common = tmp_path / "contracts" / "v2" / "common.schema.json"
+    common.write_text(common.read_text(encoding="utf-8").replace('"maximum": 31536000', '"maximum": 1000'), encoding="utf-8")  # no duration may pass 1000 s
+    codes = []
+    for tree in (ROOT, tmp_path):
+        argv = [sys.executable, "-B", "-c", SERVE, json.dumps(reserve(datetime.now(timezone.utc), inhibitor=False)), json.dumps(CARDS)]
+        run = subprocess.run(argv, cwd=tree, capture_output=True, text=True, timeout=60)
+        assert run.returncode == 0, run.stderr
+        codes.append(json.loads(run.stdout))
+    assert codes == [None, "invalid"]  # a 14400 s max-end: served by the real package, invalid under the edited contract
