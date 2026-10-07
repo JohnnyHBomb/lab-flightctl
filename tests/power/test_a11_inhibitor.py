@@ -3,13 +3,24 @@ executor's definite refusal when the real twin's hold fails. Nothing here starts
 
 import pytest
 
-from flightctl.executor import MemoryStateStore
+from flightctl.executor import ExecutorV2, MemoryStateStore
 from tests.contracts_v2.validation import assert_valid, fence_evidence_ok
-from tests.executor.test_a5a2_executor_v2 import awake, host
-from tests.executor.test_a5a_executor_v2 import SENT, ScriptedProbe, call, observation, request
+from tests.executor.test_a5a_executor_v2 import CARDS, SENT, ScriptedProbe, call, observation, request
 from tests.sim.rig import SimClock
 
 RUNTIME = "/run/user/1000"
+
+
+def host(store=None, probe=None, inhibitor=None):
+    clock = SimClock(boot_id="sim-host-1", utc_start=SENT)
+    store = store or MemoryStateStore()
+    return ExecutorV2(clock, host_id="host-1", store=store, lane_cards=CARDS, occupancy=probe, inhibitor=inhibitor)
+
+
+def awake(req):  # the reserve example for a lane on a host that sleeps: the authority asks for the inhibitor
+    req["awake"]["hold_inhibitor"] = True
+    return req
+
 PREFIX = ["env", "XDG_RUNTIME_DIR=" + RUNTIME]
 ARGS = ("lane-gpu1", 7)
 UNIT = "flightctl-awake-lane-gpu1-g7.service"
@@ -17,6 +28,14 @@ WHY = "flightctl lease lse-0000100"  # the executor's reason for the example res
 HOLD = ["systemd-run", "--user", "--unit=" + UNIT[:-8], "--collect", "systemd-inhibit", "--what=idle", "--mode=block",
         "--who=flightctl", "--why=" + WHY, "sleep", "infinity"]
 STOP = ["systemctl", "--user", "stop", UNIT]
+# the executor's reason is free text (A5a2 DECIDED 3)
+EXECUTOR_HOLD = [a if a != "--why=" + WHY else "--why=*" for a in HOLD]
+
+
+def why_free(calls):  # a non-empty --why= of any text compares as --why=*
+    return [[("--why=*" if a.startswith("--why=") and len(a) > 6 else a) for a in argv] for argv in calls]
+
+
 LIST = ["systemctl", "--user", "list-units", "--plain", "--no-legend", "--full", "flightctl-awake-*.service"]
 LINE = UNIT + " loaded active running systemd-inhibit --what=idle sleep infinity\n"
 FAIL = {"returncode": 1, "stderr": "Failed to connect to bus: No medium found\n"}
@@ -58,7 +77,8 @@ def test_inhibitor_failure_is_definite_refusal():
     refused = reserve(host(store, inhibitor=power.SystemdInhibitor(runner, runtime_dir=RUNTIME)))
     assert verdict(refused) == (False, True, "inhibitor_failed", "free")
     assert (refused["fences"], refused["inhibitor"], store.value) == ([], None, None)
-    assert runner.calls == [PREFIX + HOLD, PREFIX + STOP, PREFIX + LIST]  # the hold, then its release: stop and list
+    # the hold, then its release: stop and list
+    assert why_free(runner.calls) == [PREFIX + EXECUTOR_HOLD, PREFIX + STOP, PREFIX + LIST]
     cause = refused["error"]["cause"]  # the twin's typed error, with the reason systemd gave
     assert cause["code"] == "inhibitor_failed" and "No medium found" in cause["message"]
     lost = reserve(host(store, inhibitor=power.SystemdInhibitor(Scripted(hold=LOST), runtime_dir=RUNTIME)))
@@ -76,7 +96,8 @@ def test_inhibitor_failure_is_definite_refusal():
     executor = host(store, ScriptedProbe(observation()), power.SystemdInhibitor(runner, runtime_dir=RUNTIME))
     held = reserve(executor)
     assert held["ok"] and fence_evidence_ok(held, {"lane_id": "lane-gpu1", "host_id": "host-1"})
-    assert (held["inhibitor"], runner.calls) == ({"held": True, "unit": UNIT, "what": "idle"}, [PREFIX + HOLD])
+    assert held["inhibitor"] == {"held": True, "unit": UNIT, "what": "idle"}
+    assert why_free(runner.calls) == [PREFIX + EXECUTOR_HOLD]
     freed = call(executor, request("stop", SENT))  # proven empty, then released: the stop, and the list shows it gone
     assert (freed["ok"], freed["inhibitor"], runner.calls[1:]) == (True, None, [PREFIX + STOP, PREFIX + LIST])
     assert fake.hold(*ARGS, why=WHY, timeout_s=10) == result(True)
