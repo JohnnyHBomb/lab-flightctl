@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import json
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,14 +54,24 @@ class Rig:
 
     def __init__(self, root):
         self.state, self.site, self.smi, self.log = root / "state.json", root / "site", root / "nvidia-smi", root / "nvidia-smi.log"
-        files = {"adapters.json": '{"profile": "sim"}\n', "inventory.json": json.dumps(_inventory())}
-        sums = "".join(f"{hashlib.sha256(text.encode()).hexdigest()}  {name}\n" for name, text in files.items())
+        self.inventory = _inventory()
         self.site.mkdir()
-        for name, text in {**files, "SHA256SUMS": sums}.items():
-            (self.site / name).write_text(text, encoding="utf-8")
+        self.publish()
         rows = " ".join(f"'{card}, 300, 24576, 0, 41, 18.2, 200, Not Active, Not Active, [N/A]'" for card in CARDS.values())
         self.smi.write_text(STUB.format(log=self.log, rows=rows), encoding="utf-8")
         self.smi.chmod(0o755)
+
+    def publish(self):
+        """Write the site copy: adapters.json, inventory.json (from self.inventory) and the SHA256SUMS that names both."""
+        files = {"adapters.json": '{"profile": "sim"}\n', "inventory.json": json.dumps(self.inventory)}
+        sums = "".join(f"{hashlib.sha256(text.encode()).hexdigest()}  {name}\n" for name, text in files.items())
+        for name, text in {**files, "SHA256SUMS": sums}.items():
+            (self.site / name).write_text(text, encoding="utf-8")
+
+    @staticmethod
+    def run(argv, stdin=b""):
+        """The command as a real child process in `/` with `stdin` (bytes) as its input: the completed process, output as bytes."""
+        return subprocess.run(argv, input=stdin, capture_output=True, cwd="/", timeout=60)
 
     def argv(self, *options):
         """The entry point's command with the state, host-1, its site copy and the stub, then `options`."""
