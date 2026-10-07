@@ -76,10 +76,11 @@ def test_a3b_is_split_and_a3c_retires_v1_discovery() -> None:
 
 
 def test_a5a_is_split_in_three() -> None:
-    # Amendment 11: A5a3's conformance moved to A5a4 (OWED_BY, ports column) and A5a3 also depends on A4u
+    # Amendment 11: A5a3's conformance moved to A5a4 (OWED_BY, ports column) and A5a3 also depends on A4u;
+    # Amendment 12: A5b1 also depends on A5a2b (request validation, split from A5a2)
     assert OWED_BY["executor_transport"] == "A5a4"
     assert [_row(p)[6] for p in ("A5a", "A5a2", "A5a3")] == ["-", "-", "-"]
-    assert (_row("A5a2")[4], _row("A5a3")[4], _row("A5b1")[4], _row("A11")[4]) == ("A5a", "A5a2, A4u", "A5a3", "A5a2, A6")
+    assert (_row("A5a2")[4], _row("A5a3")[4], _row("A5b1")[4], _row("A11")[4]) == ("A5a", "A5a2, A4u", "A5a3, A5a2b", "A5a2, A6")
     assert POS["A5a"] < POS["A5a2"] < POS["A5a3"] < POS["A5b1"]
     a5a, a5a2, a5a3 = _field("A5a:", "ACCEPTANCE"), _field("A5a2:", "ACCEPTANCE"), _field("A5a3:", "ACCEPTANCE")
     for name in ("test_relative_deadline_anchored_on_host_clock", "test_beat_extends_expiry_never_max_end",

@@ -72,11 +72,12 @@ each assembly's prerequisites are delivered before that assembly runs.
 | A4 | Executor stdio entry point + local-subprocess and ssh forced-command transports | A | M | A1, A2 | O, L, S6 | - | G04 |
 | A4u | Part 1 (Amendment 9): hash-verified site config loader + verified local copy + confirmed-inventory lane binding; deploy-dir layout | A | S | A4, A3 | L, A, Q | - | G24 |
 | A5a | Part 1 (Amendment 9): executor v2 semantics in holder mode, in process (ExecutorV2: relative deadlines on the host clock, identity fixed at reserve, beat never moves max-end, emptiness proof before free, host enforcer); the v1 cross-host reserve fix | A | M | A0c, A4 | O, L, S6 | - | G02, G03 host side, Grok 1 |
-| A5a2 | Part 2 (Amendment 9): inhibitor-first reserve and its definite/uncertain refusal (D-pow-3), request validation, inspect / ceiling / extend | A | S | A5a | O, L, S6 | - | Grok 7, Sol N1, D-pow-3 |
+| A5a2 | Part 2 (Amendment 9; Amendment 12: part 1 of 2): inhibitor-first reserve and its definite/uncertain refusal (D-pow-3), the inhibitor held until the verified release, inspect / ceiling / extend | A | S | A5a | O, L, S6 | - | Grok 7, Sol N1, D-pow-3 |
+| A5a2b | Part 2b (Amendment 12): every v2 request validated against the frozen executor schema (definite `invalid`, nothing written); the date-time format and finite numbers asserted | A | S | A5a2 | L, S6, A | - | Grok 7 (validation) |
 | A5a3 | Part 3 (Amendment 9, split by Amendment 11): the v2 executor on the wire: the stdio entry point serves v2 through ExecutorV2 (host id, lane cards from the confirmed inventory copy, the occupancy real twin) and the enforcer one-shot | A | S | A5a2, A4u | O, L, S6 | - | G04 (v2 wire) |
 | A5a4 | Part 4 (Amendment 11): executor_transport conformance over the A5a3 entry point (fake: in-process ExecutorV2 per SimHost; real: local subprocess and ssh), strict | A | S | A5a3 | O, L, S6 | executor_transport | G04 (conformance) |
 | A4ub | Part 2 of A4u (Amendment 9): unit and timer templates (executor enforcer timer every 60 s; enforcer one-shot service; Amendment 11: the authority units are A7's) + renderer | A | S | A4u, A5a3 | L, A, Q | - | G04 timer |
-| A5b1 | Part 1 of 3 (Amendment 11): the authority's executor client speaks protocol v2 through the ExecutorTransport port: identity (run_id, unit, token_sha256) before reserve, a definite refusal cancels, the executor's or transport's typed error is the RPC error's cause | A | S | A5a3 | O, L, S6 | - | Grok 1/7 |
+| A5b1 | Part 1 of 3 (Amendment 11): the authority's executor client speaks protocol v2 through the ExecutorTransport port: identity (run_id, unit, token_sha256) before reserve, a definite refusal cancels, the executor's or transport's typed error is the RPC error's cause | A | S | A5a3, A5a2b | O, L, S6 | - | Grok 1/7 |
 | A5b2 | Authority beat loop + rolling renew within ceiling (protocol 2; Amendment 11) + max-end margin (policy timing.max_end_margin_s) | A | M | A5b1 | O, L, S6 | - | G03, Grok 2, Sol N1 |
 | A5b1s | Part 2 of 3 (Amendment 11): raw tokens only in a never-backed-up replay store (the main DB holds token_sha256 and token-free responses; secure_delete + scrub), the split-store commit order and restore, idempotency keyed by (principal, request_id) with the request-fingerprint check | A | M | A5b1 | O, L, S6 | - | D-token-4, Sol r5-r8 replay |
 | A5b1c | Part 3 of 3 (Amendment 11): no grant until the host acknowledges a ceiling at or before the approved end (reserve reply max_end_remaining_s, 202 ceiling-unconfirmed, persisted-fence and inhibitor evidence) on A5b2's margin and shorten-only ceiling sender | A | S | A5b2, A5b1s, A5a2 | O, L, S6 | - | Sol N1 (rounds 4-8) |
@@ -88,7 +89,8 @@ each assembly's prerequisites are delivered before that assembly runs.
 | A8 | Per-lane reconcile on restart + quarantine-clear | A | M | A5b2, A7b | O, L, S6 | - | G27 |
 | A9 | Shadow mode: evaluation, LegacyObserver, divergence + coverage report | A | M | A7b, A3 | O, S6, L | legacy_observer | shadow (owner 2 Oct), Sol N4 |
 | A10 | Legacy shim core (v2 and tee modes) + hex16 tokens | A | S | A7b | L, A, Q | - | G06 (core) |
-| A11 | Inhibitor real twin, held from reserve to verified release (was B1a) | A | S | A5a2, A6 | L, S6, A | inhibitor | G13 (inhibitor), G14, Sol B1 |
+| A11 | Part 1 (Amendment 12): Inhibitor twins (real, dryrun, fake), held from reserve to verified release by the A5a2 executor (was B1a) | A | S | A5a2, A6 | L, S6, A | inhibitor | G13 (inhibitor), G14, Sol B1 |
+| A11b | Part 2 (Amendment 12): inhibitor reconcile in ExecutorV2 + the pilot host's sleep guard sees the inhibitor | A | S | A11 | L, S6, A | - | G14, Sol B1 |
 | A12 | Waker real twin + wake-on-acquire (202 waking) + client and shim retry (was B1b) | A | M | A11, A7b, A10 | O, L, S6 | waker | G13, G22, Sol B1 |
 | **A-ASM** | Assembly A: pilot lane shadow (coverage + 3 clean days), inhibitor proven under the legacy fence, then live | A | M | A0a-A12 | **lead** | - | milestone A |
 | B2 | Holder liveness: heartbeat op, client heartbeat, stale-holder handling | B | S | A-ASM | L, S6, A | - | G28 |
@@ -144,7 +146,7 @@ delivering its ports.
 | A2 | (new: command seam) |
 | A3, A3i, A3b, A3c | S03 |
 | A4, A4u | S04 |
-| A5a, A5a2, A5a3, A5a4 | S01-S02 |
+| A5a, A5a2, A5a2b, A5a3, A5a4 | S01-S02 |
 | A4ub | S04 (units and timers; after A5a3, Amendment 9) |
 | A5b1, A5b2, A5b1s, A5b1c, A5r | S01-S02 |
 | A6, A6b | S05 |
@@ -152,7 +154,7 @@ delivering its ports.
 | A8 | S07 |
 | A9 | S08 (shadow) |
 | A10 | S10 (shim core) |
-| A11, A12 | S09 (now delivered before the A-ASM assembly) |
+| A11, A11b, A12 | S09 (now delivered before the A-ASM assembly) |
 | A-ASM | S08 (live flip) |
 | B2 | S11 |
 | B3 | S10 (all callers) |
@@ -188,7 +190,7 @@ delivering its ports.
 | T05 holder crash, target rule (reclaim within 120 s) | B2 | B-ASM |
 | T06a unreachable host | A7b | A-ASM |
 | T06b sleeping host with the wake feature off (stays asleep/unreachable, never free) | A12 (feature switch) | A-ASM |
-| T07 wake-on-acquire and inhibitor | A11, A12 | A-ASM; re-run at B-ASM through the shim; per sleeping lane at C-ASM |
+| T07 wake-on-acquire and inhibitor | A11, A11b, A12 | A-ASM; re-run at B-ASM through the shim; per sleeping lane at C-ASM |
 | T08 controller restart | A8 | A-ASM |
 | T09a/T09b unmodified callers through the shim at the legacy path | B3 | B-ASM |
 | T10 status --all vs live GPU (collision/orphan) | B4 | B-ASM; per lane at C-ASM |
@@ -293,11 +295,17 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
 - ACCEPTANCE: `test_relative_deadline_anchored_on_host_clock`; `test_beat_extends_expiry_never_max_end`; `test_stop_requires_reserve_identity_and_empty_proof`; `test_enforcer_real_seconds` [realtime]; the A0c repro `test_repro_cross_host_reserve` turns green (mark removed, assertions kept).
 - PROOF: G0, G2, G4. SEATS: O, L, S6.
 
-### A5a2: executor v2 part 2: the inhibitor, request validation, inspect/ceiling/extend (Amendment 9)
-- GOAL: Reserve takes the inhibitor first, then the fence (D-pow-3); a definite refusal leaves no fence and no inhibitor, and a failed release makes it uncertain. Every request is validated (definite `invalid`, nothing written). Inspect reports the holder-mode unit as absent and the lane's occupancy; `ceiling` only shortens max-end; only `extend` with an approval moves it later.
-- SCOPE: `ExecutorV2` in `flightctl/executor.py` (an injected Inhibitor port; validation; inspect, ceiling, extend), new files under `tests/executor/`.
-- ACCEPTANCE: `test_definite_refusal_leaves_no_fence_and_no_inhibitor`; `test_ceiling_shortens_only_and_extend_needs_approval`; `test_invalid_requests_are_definite_and_write_nothing`; `test_inspect_reports_holder_unit_absent`.
+### A5a2: executor v2 part 2: the inhibitor, inspect/ceiling/extend (Amendment 9; Amendment 12: request validation moved to A5a2b)
+- GOAL: Reserve takes the inhibitor first, then the fence (D-pow-3); a definite refusal leaves no fence and no inhibitor, and a failed release makes it uncertain; the inhibitor is released only after the verified release, and a quarantine keeps it. Inspect reports the holder-mode unit as absent and the lane's occupancy; `ceiling` only shortens max-end; only `extend` with an approval moves it later.
+- SCOPE: `ExecutorV2` in `flightctl/executor.py` (an injected Inhibitor port; inspect, ceiling, extend), new files under `tests/executor/`.
+- ACCEPTANCE: `test_definite_refusal_leaves_no_fence_and_no_inhibitor`; `test_ceiling_shortens_only_and_extend_needs_approval` [realtime]; `test_inspect_reports_holder_unit_absent`.
 - PROOF: G0, G2, G4. SEATS: O, L, S6.
+
+### A5a2b: executor v2 request validation (Amendment 12: part 2 of A5a2)
+- GOAL: Every v2 request is validated against the frozen `executor.schema.json#/$defs/request` before anything else (definite `invalid`, nothing written, no port called), with the date-time format and finite numbers asserted, by a standard-library interpreter of the frozen schema files (production code has no runtime dependency).
+- SCOPE: `ExecutorV2` in `flightctl/executor.py` (validation only), new files under `tests/executor/`.
+- ACCEPTANCE: `test_invalid_requests_are_definite_and_write_nothing`.
+- PROOF: G0, G2. SEATS: L, S6, A.
 
 ### A5a3: executor v2 part 3: the wire (Amendment 9; split by Amendment 11)
 - GOAL: A real executor process answers v2 requests: the stdio entry point routes schema_version 2 to `ExecutorV2` (the host id, the lane cards from the confirmed inventory, the occupancy real twin) and keeps schema_version 1 on the v1 executor until A5r; the enforcer one-shot that A4ub's timer runs exists.
@@ -396,10 +404,16 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
 - ACCEPTANCE: `test_all_legacy_shim_vectors` (real shim process); `test_tee_mirror_failure_keeps_legacy_result`; `test_hex16_token_issued_and_principal_bound`; `test_shim_against_real_authority` [realtime].
 - PROOF: G2, G4. SEATS: L, A, Q.
 
-### A11: inhibitor held for exactly the lease (moved before A-ASM; Sol B1)
-- GOAL: The executor takes an idle-block inhibitor before writing the fence and releases it only after verified release. A quarantine keeps it.
-- SCOPE: `flightctl/power.py` (Inhibitor real twin, dryrun, fake); executor reserve/stop/reconcile hooks.
-- ACCEPTANCE: inhibitor conformance [strict]; `test_inhibitor_failure_is_definite_refusal`; `test_reconcile_recreates_missing_and_removes_orphan_inhibitors`; `test_guard_sees_inhibitor` [realtime, onlab: the pilot host's sleep guard status lists it].
+### A11: inhibitor held for exactly the lease, part 1: the Inhibitor twins (moved before A-ASM; Sol B1; split by Amendment 12)
+- GOAL: The Inhibitor port has its real twin (an idle-block inhibitor held by a transient `systemd --user` unit), its dryrun and its fake, so the executor (A5a2) takes an idle-block inhibitor before writing the fence and releases it only after verified release. A quarantine keeps it.
+- SCOPE: `flightctl/power.py` (Inhibitor real twin, dryrun, fake); `tests/conformance/impl_inhibitor.py` (fake, dryrun, real); `tests/power/` (and its ci.yml `full` append).
+- ACCEPTANCE: inhibitor conformance [strict]; `test_inhibitor_failure_is_definite_refusal`; `test_real_twin_runs_the_contract_commands`; `test_dryrun_twin_lists_for_real_and_records_the_rest`.
+- PROOF: G3 on the pilot host. SEATS: L, S6, A.
+
+### A11b: inhibitor reconcile and the guard proof (part 2 of A11, Amendment 12; before A-ASM)
+- GOAL: A restarted executor holds exactly the inhibitors its fences record: a fence that records a held inhibitor whose unit is missing gets it back, and a `flightctl-awake-*` unit with no such fence is released. The pilot host's sleep guard sees a held inhibitor as protected work.
+- SCOPE: `flightctl/executor.py` (an `ExecutorV2` reconcile hook over the Inhibitor port's `list`, `hold` and `release`); `tests/power/` (new test file and a conftest for the markers).
+- ACCEPTANCE: `test_reconcile_recreates_missing_and_removes_orphan_inhibitors`; `test_guard_sees_inhibitor` [realtime, onlab: the pilot host's sleep guard status lists it].
 - PROOF: G3 on the pilot host. SEATS: L, S6, A.
 
 ### A12: wake on acquire (moved before A-ASM; Sol B1)
