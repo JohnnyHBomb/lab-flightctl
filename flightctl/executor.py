@@ -2284,6 +2284,15 @@ ControllerTrust = TrustedController
 _V2_DUE = ("expiry", "max-end", "heartbeat-stale")  # the deadline kinds that act, in report order; grace never acts
 _V2_PROTECTED_STOP_MODES = frozenset({"owner-release", "operator-stop", "approved-forced-preemption", "holder-lost"})
 _V2_UTC = "%Y-%m-%dT%H:%M:%SZ"
+_V2_SCHEMA = Path(__file__).resolve().parents[1] / "contracts" / "v2" / "executor.schema.json"  # read at run time, never copied
+_V2_SCHEMA_FILES: dict[Path, Any] = {}  # each frozen schema file as read, kept for the life of the process
+_V2_DATE_TIME = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.[0-9]+)?Z")
+_V2_PATTERN_ANCHOR = re.compile(r"\\.|\[(?:\\.|[^\\\]])*\]|(\$)")  # an escape, a class, or (group 1) a $ that anchors
+_V2_TYPES: dict[str, Callable[[Any], bool]] = {  # a boolean is never a number; an integer is a number with no fraction (7, 7.0)
+    "null": lambda value: value is None, "boolean": lambda value: isinstance(value, bool), "string": lambda value: isinstance(value, str),
+    "object": lambda value: isinstance(value, dict), "array": lambda value: isinstance(value, list),
+    "number": lambda value: isinstance(value, (int, float)) and not isinstance(value, bool),
+    "integer": lambda value: isinstance(value, int) and not isinstance(value, bool) or isinstance(value, float) and value.is_integer()}
 
 
 class ExecutorV2:
@@ -2314,6 +2323,14 @@ class ExecutorV2:
         """Answer one v2 request with one v2 reply; every expected failure is a returned refusal."""
 
         now = (self.clock.utc().astimezone(timezone.utc), self.clock.monotonic(), self.clock.boot_id())
+        if not _v2_valid(request, "request"):  # first: a definite invalid refusal that saves nothing and calls no port
+            fields = request if isinstance(request, dict) else {}
+            identity = fields.get("identity") if _v2_valid(fields.get("identity"), "identity") else None
+            kind, request_id = fields.get("kind"), fields.get("controller_request_id")  # returned as sent: they may nest too deep to copy
+            described = {"kind": kind if isinstance(kind, str) else None, "controller_request_id": None,
+                         "identity": None if kind == "reserve" else identity}  # a reserve's definite refusal describes no lane
+            reply = self._reply(described, now, "invalid", "the request is not valid against contracts/v2/executor.schema.json#/$defs/request")
+            return {**reply, "kind": kind, "controller_request_id": request_id, "echoed_identity": copy.deepcopy(identity)}
         kind = request["kind"]
         handler = {"reserve": self._reserve, "beat": self._renew, "ceiling": self._renew, "extend": self._renew, "stop": self._stop,
                    "inspect": self._inspect}.get(kind)
@@ -2560,3 +2577,100 @@ def _v2_due(fence: Mapping[str, Any], monotonic: float) -> list[str]:
     """The fence's passed expiry, max-end and heartbeat-stale deadlines, in that order."""
 
     return [kind for kind in _V2_DUE if any(d["kind"] == kind and monotonic >= d["monotonic_deadline_s"] for d in fence["local_deadlines"])]
+
+
+def _v2_valid(value: Any, definition: str) -> bool:
+    """Valid against executor.schema.json#/$defs/<definition> as JSON Schema draft 2020-12 evaluates the frozen files, with
+    every number finite, every date-time asserted and each pattern's $ matching only at the very end (ECMA-262)."""
+
+    try:
+        json.dumps(value, allow_nan=False)  # NaN and the infinities, which Python's json parses, are not JSON numbers
+    except (TypeError, ValueError, RecursionError):  # nor is anything else JSON cannot carry
+        return False
+    return _v2_evaluate(value, *_v2_resolve(f"#/$defs/{definition}", _V2_SCHEMA)) is not None
+
+
+def _v2_resolve(ref: str, base: Path) -> tuple[Any, Path]:
+    """The subschema a $ref names, resolved relative to base (the file that holds the $ref), and the file that holds it."""
+
+    name, _, pointer = ref.partition("#")
+    path = Path(os.path.normpath(base.parent / name)) if name else base
+    if path not in _V2_SCHEMA_FILES:
+        _V2_SCHEMA_FILES[path] = json.loads(path.read_text(encoding="utf-8"))
+    schema = _V2_SCHEMA_FILES[path]
+    for token in pointer.split("/")[1:]:  # a JSON pointer: ~1 is /, ~0 is ~, an array is indexed by number
+        token = token.replace("~1", "/").replace("~0", "~")
+        schema = schema[int(token)] if isinstance(schema, list) else schema[token]
+    return schema, path
+
+
+def _v2_evaluate(value: Any, schema: Any, base: Path) -> set[str] | None:
+    """None when value is invalid against schema (held in the file base), else the names of value's properties that schema
+    evaluated: the annotations unevaluatedProperties reads. Only the keywords the frozen files use are judged."""
+
+    if isinstance(schema, bool):
+        return set() if schema else None
+    seen: set[str] = set()
+
+    def passes(subschema: Any, path: Path = base) -> bool:  # an in-place subschema: what it evaluated counts only when it passes
+        found = _v2_evaluate(value, subschema, path)
+        seen.update(found or ())
+        return found is not None
+
+    if ("$ref" in schema and not passes(*_v2_resolve(schema["$ref"], base)) or not all(passes(sub) for sub in schema.get("allOf", ()))
+            or "anyOf" in schema and not any([passes(sub) for sub in schema["anyOf"]])  # a list: every passing branch counts
+            or "oneOf" in schema and [passes(sub) for sub in schema["oneOf"]].count(True) != 1
+            or "not" in schema and _v2_evaluate(value, schema["not"], base) is not None
+            or "if" in schema and not passes(schema.get("then", True) if passes(schema["if"]) else schema.get("else", True))):
+        return None
+    types = schema.get("type", ())
+    if (types and not any(_V2_TYPES[name](value) for name in ([types] if isinstance(types, str) else types))
+            or "const" in schema and not _v2_equal(value, schema["const"])
+            or "enum" in schema and not any(_v2_equal(value, item) for item in schema["enum"])):
+        return None
+    if _V2_TYPES["number"](value) and (value < schema.get("minimum", value) or value > schema.get("maximum", value)
+                                       or "exclusiveMinimum" in schema and value <= schema["exclusiveMinimum"]):
+        return None
+    if isinstance(value, str) and (not schema.get("minLength", 0) <= len(value) <= schema.get("maxLength", len(value))
+                                   or "pattern" in schema and not re.search(_V2_PATTERN_ANCHOR.sub(
+                                       lambda part: r"\Z" if part[1] else part[0], schema["pattern"]), value)  # ECMA-262: $ ends the string
+                                   or schema.get("format") == "date-time" and not _v2_date_time(value)):
+        return None
+    if isinstance(value, list) and (not schema.get("minItems", 0) <= len(value) <= schema.get("maxItems", len(value))
+                                    or schema.get("uniqueItems") and any(_v2_equal(item, other) for at, item in enumerate(value) for other in value[:at])
+                                    or any(_v2_evaluate(item, schema.get("items", True), base) is None for item in value)):
+        return None
+    if isinstance(value, dict):
+        properties, others = schema.get("properties", {}), schema.get("additionalProperties", True)
+        if (any(name not in value for name in schema.get("required", ()))
+                or any(_v2_evaluate(name, schema.get("propertyNames", True), base) is None for name in value)
+                or any(_v2_evaluate(item, properties.get(name, others), base) is None for name, item in value.items())):
+            return None
+        seen.update(name for name in value if name in properties or "additionalProperties" in schema)
+        if any(_v2_evaluate(value[name], schema.get("unevaluatedProperties", True), base) is None for name in value if name not in seen):
+            return None
+        seen.update(value if "unevaluatedProperties" in schema else ())
+    return seen
+
+
+def _v2_equal(one: Any, other: Any) -> bool:
+    """JSON equality (const, enum, uniqueItems): a boolean is never a number, 7 equals 7.0, arrays and objects by content."""
+
+    if isinstance(one, list) and isinstance(other, list):
+        return len(one) == len(other) and all(map(_v2_equal, one, other))
+    if isinstance(one, dict) and isinstance(other, dict):
+        return one.keys() == other.keys() and all(_v2_equal(item, other[key]) for key, item in one.items())
+    return (isinstance(one, bool), one) == (isinstance(other, bool), other)
+
+
+def _v2_date_time(value: str) -> bool:
+    """YYYY-MM-DDTHH:MM:SS, an optional fraction, then Z, naming a real UTC date and time (a leap second does not)."""
+
+    match = _V2_DATE_TIME.fullmatch(value)
+    if match is None:
+        return False
+    try:
+        datetime(*map(int, match.groups()))
+    except ValueError:  # no such year, month, day, hour, minute or second
+        return False
+    return True

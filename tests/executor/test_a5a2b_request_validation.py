@@ -1,6 +1,7 @@
 """A5a2b named acceptance test: ExecutorV2 validates every v2 request against the frozen executor.schema.json#/$defs/request first."""
 
 import copy
+import json
 from datetime import timedelta
 
 from tests.contracts_v2.validation import assert_valid, examples
@@ -65,16 +66,17 @@ def test_invalid_requests_are_definite_and_write_nothing():
     for kind, place, value in EDITS:  # an invalid identity is not echoed; a reserve's definite refusal and an invalid identity describe no lane
         echo = None if place[0] == "identity" else valid[kind]["identity"]
         refused(host, edit(valid[kind], place, value), echo, fenced if echo and kind != "reserve" else FREE)
-    first, as_reply, beat, session = copy.deepcopy(examples("executor")["invalid"])  # the contract's own (the first was unavailable)
+    first, as_reply, beat, session = copy.deepcopy(examples("executor")["invalid"])  # the contract's own (the first: unavailable)
     for req, echo, lane in ((first, None, FREE), (as_reply, None, FREE), (beat, beat["identity"], fenced), (session, None, FREE)):
         refused(host, req, echo, lane)
     stale = edit(reserve(SENT - timedelta(minutes=5)), ("surplus",), 1)  # invalid and stale: invalid, not clock_skew
     refused(host, stale, stale["identity"])
     elsewhere = edit(request("beat", SENT, lane=dict(LANE, host_id="host-2")), ("surplus",), 1)  # invalid and another host's lane: not not_found
     refused(host, elsewhere, elsewhere["identity"])
-    for thing in ([], [valid["beat"]], "beat", 7, None, {}):  # not request objects (TypeError): the same refusal, no schema-valid reply
-        refused(host, thing, schema=False)
-    for place, value in ((("kind",), "renew"), (("kind",), DROP), (("controller_request_id",), "creq beat")):
+    nested = json.loads("[" * 1000 + "]" * 1000)  # parses, but nests too deep for copy.deepcopy
+    for thing in ([], [valid["beat"]], "beat", 7, None, {}, {"kind": nested, "controller_request_id": nested}):  # not request objects
+        refused(host, thing, schema=False)  # the same refusal (TypeError on the base); no schema-valid reply exists
+    for place, value in ((("kind",), "renew"), (("kind",), DROP), (("controller_request_id",), "creq beat")):  # nor for these
         refused(host, edit(valid["beat"], place, value), valid["beat"]["identity"], fenced, schema=False)
     assert (store.value, store.saves, probe.calls, port.calls) == (saved, 1, [], [HOLD])  # nothing saved, neither port called
     assert call(host, valid["beat"] | {"sent_at": "2026-10-02T10:00:00.25Z"})["ok"]  # a fraction of a second is a valid date-time
