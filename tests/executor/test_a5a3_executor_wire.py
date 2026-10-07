@@ -12,6 +12,7 @@ import pytest
 from flightctl.clock import RealClock
 from flightctl.executor_stdio import main
 from tests.contracts.validation import validate_instance
+from tests.contracts_v2.validation import assert_valid
 from tests.executor.wire_site import CARDS, LANE1, LANE2, OTHER, ROOT, Rig, request
 
 V1_RESERVE = json.loads((ROOT / "contracts" / "executor-v1.schema.json").read_text(encoding="utf-8"))["x-examples"]["valid"][0]
@@ -24,7 +25,8 @@ def test_stdio_serves_v2_through_executor_v2(tmp_path):
     reserve = rig.reply(request("reserve"))
     assert (reserve["ok"], reserve["observed_state"], reserve["host_boot"]["host_id"], reserve["host_boot"]["boot_id"]) == (
         True, "reserved", "host-1", RealClock().boot_id())
-    assert [lane["fence"]["state"] for lane in json.loads(v2.read_text(encoding="utf-8"))["lanes"].values()] == ["reserved"]
+    [fence] = [lane["fence"] for lane in json.loads(v2.read_text(encoding="utf-8"))["lanes"].values()]
+    assert (fence["state"], fence["identity"], fence["boot_id"]) == ("reserved", reserve["echoed_identity"], RealClock().boot_id())
     assert not rig.state.exists()  # the v2 fence is in the sibling file only
     beat = rig.reply(request("beat"))  # a later invocation finds the fence in the v2 file
     assert (beat["ok"], beat["observed_state"]) == (True, "reserved")
@@ -32,7 +34,9 @@ def test_stdio_serves_v2_through_executor_v2(tmp_path):
     assert (other["ok"], other["definite"], other["error"]["code"]) == (False, True, "not_found")
     kept, stop = v2.read_bytes(), request("stop")
     refused = [("denied", "denied", dict(stop, controller_id="controller-b"))]  # a v2 request from another controller
-    refused += [("unparsable", "reply_unparsable", dict(stop, schema_version=version)) for version in (3, 2.0, True)]
+    assert_valid(refused[0][2], "executor", "request")  # a valid request: refused only for its controller
+    refused += [("unparsable", "reply_unparsable", dict(stop, schema_version=version)) for version in (3, 0, 2.0, True, "2")]
+    refused += [("unparsable", "reply_unparsable", {key: value for key, value in stop.items() if key != "schema_version"})]
     for status, code, bad in refused:
         result = rig.call(bad)
         assert (result["status"], result["reply"], result["error"]["code"]) == (status, None, code), result
@@ -43,6 +47,7 @@ def test_stdio_serves_v2_through_executor_v2(tmp_path):
     assert (occupancy["status"], occupancy["empty"], occupancy["expected_uuids"]) == ("ok", True, [CARDS["lane-gpu1"]])
     assert f"-q -d PIDS -i {CARDS['lane-gpu1']}" in rig.smi_calls()  # the stub ran for the lane's card
     freed = v2.read_bytes()
+    validate_instance(V1_RESERVE, "executor-v1.schema.json")
     v1 = rig.call(V1_RESERVE)
     assert (v1["status"], v1["reply"]["schema_version"], v1["reply"]["ok"]) == ("ok", 1, True), v1
     validate_instance(v1["reply"], "executor-v1.schema.json")

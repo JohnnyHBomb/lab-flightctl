@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import json
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -17,7 +18,7 @@ LANE1 = {"site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu1"}
 LANE2 = dict(LANE1, lane_id="lane-gpu2")
 OTHER = dict(LANE1, lane_id="lane-gpu0")  # a lane of host-0 in the inventory: host-1 does not serve it
 STUB = """#!/bin/sh
-echo "$*" >> '{log}'
+echo "$*" >> {log}
 case "$1" in --query-gpu=*) printf '%s\\n' {rows} ;; esac
 """
 
@@ -58,7 +59,7 @@ class Rig:
         self.site.mkdir()
         self.publish()
         rows = " ".join(f"'{card}, 300, 24576, 0, 41, 18.2, 200, Not Active, Not Active, [N/A]'" for card in CARDS.values())
-        self.smi.write_text(STUB.format(log=self.log, rows=rows), encoding="utf-8")
+        self.smi.write_text(STUB.format(log=shlex.quote(str(self.log)), rows=rows), encoding="utf-8")
         self.smi.chmod(0o755)
 
     def publish(self):
