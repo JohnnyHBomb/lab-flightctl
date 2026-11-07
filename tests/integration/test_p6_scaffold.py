@@ -51,12 +51,12 @@ def _trace(state_dir: Path) -> list[str]:
 
 def _tracked_fixture(root: Path, files: dict[str, str]) -> Path:
     root.mkdir(parents=True)
-    subprocess.run(["git", "init", "--quiet", str(root)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)  # noqa: S603, S607 -- argv list with shell=False, no untrusted input
+    subprocess.run(["git", "init", "--quiet", str(root)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     for relative, contents in files.items():
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(contents, encoding="utf-8")
-    subprocess.run(["git", "-C", str(root), "add", "."], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)  # noqa: S603, S607 -- argv list with shell=False, no untrusted input
+    subprocess.run(["git", "-C", str(root), "add", "."], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return root
 
 

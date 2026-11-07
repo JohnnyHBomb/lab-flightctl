@@ -14,7 +14,7 @@
    - The 4 `0o755`/`0o777` tmp-fixture chmods in `test_v2_amendment3_boundary.py` become `noqa: S103`.
    - Ruff S603 is exempt in `tests/**`, so the 2 hook launches in `tests/roster/shims.py` need no suppression. Ruff did flag both (measured before the exemption); their reason stays as a plain comment.
    - Ruff S103 does not flag the `0o664` line or the 4 `0o700` chmods in `deploy/flightctl_release.py`. Those lines keep their reason as a plain comment.
-   - New Ruff-only findings in `flightctl/` and `deploy/` (S603 x4, S607, S110, S310, S101 x3) are each suppressed with a reason; none was a real defect except S310 (below).
+   - New Ruff-only findings in `flightctl/` and `deploy/` (S603 x3, S607, S110, S310, S101 x3) are each suppressed with a reason; none was a real defect except S310 (below).
    - One product change: `HttpTransport.request` now refuses an endpoint that is not `http://` or `https://`, so the S310 reason is true (the endpoint comes from an environment variable and was not scheme-checked).
 6. **`.semgrepignore`** is removed; nothing else used it.
 7. **Coverage left to CodeQL (inferred, not measured).** GitHub CodeQL default setup (python and actions) stays. Semgrep's `dangerous-subprocess-use-tainted-env-args` has no Ruff rule; CodeQL's taint queries (command injection, uncontrolled data in a command) are the closest cover.

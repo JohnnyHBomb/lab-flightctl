@@ -547,7 +547,7 @@ def test_seam_loader_missing_hook_refuses_and_cleanup_still_works(tmp_path: Path
 def _py(flags, code, cwd=None):
     import subprocess
     import sys
-    r = subprocess.run([sys.executable, *flags, "-c", code], capture_output=True, text=True, timeout=60, cwd=cwd)  # noqa: S603 -- argv list with shell=False, no untrusted input
+    r = subprocess.run([sys.executable, *flags, "-c", code], capture_output=True, text=True, timeout=60, cwd=cwd)
     assert r.returncode == 0, r.stderr[-2000:]
     return json.loads(r.stdout.strip().splitlines()[-1])
 

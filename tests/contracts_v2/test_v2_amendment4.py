@@ -47,7 +47,7 @@ def test_adapter_refused_is_a_stderr_line_and_exit_3_not_an_event(tmp_path: Path
     bad["allow_fake"].append("inhibitor")
     path = tmp_path / "adapters.json"
     path.write_text(json.dumps(bad), encoding="utf-8")
-    run = subprocess.run([sys.executable, "-m", "flightctl.adapters", str(path)], cwd=ROOT, capture_output=True, text=True, timeout=60)  # noqa: S603 -- argv list with shell=False, no untrusted input
+    run = subprocess.run([sys.executable, "-m", "flightctl.adapters", str(path)], cwd=ROOT, capture_output=True, text=True, timeout=60)
     assert run.returncode == 3 and run.stdout == ""
     assert all(re.fullmatch(r"adapter-refused: port=[\w-]+ lane=[\w-]+: .+", l) for l in run.stderr.splitlines()), run.stderr
 
@@ -212,3 +212,68 @@ def test_ruff_s_scans_flightctl_deploy_and_tests() -> None:
             for line in path.read_text(encoding="utf-8").splitlines():
                 if "# noqa: S" in line and path.name != "test_v2_amendment4.py":
                     assert re.search(r"# noqa: S\d{3}(, S\d{3})* -- \S", line), (str(path), line)  # rule and reason named
+
+
+# Amendment 4 rev 3 (7 Nov 2026): Ruff S replaced semgrep. Two checks Ruff does not make on its own.
+
+
+@pytest.mark.parametrize("endpoint", ["file:///etc/passwd", "ftp://controller/v1/rpc", "//controller/v1/rpc", "", " https://controller/v1/rpc"])
+def test_http_transport_refuses_non_http_endpoints_before_opening(endpoint):
+    from flightctl.client import HttpTransport, TransportFailure
+
+    calls = []
+    with pytest.raises(TransportFailure) as err:
+        HttpTransport(opener=lambda request, timeout: calls.append(request)).request(endpoint, {}, 1.0)
+    assert calls == []
+    assert err.value.retryable is False
+
+
+def test_http_transport_accepts_upper_case_https_scheme():
+    from flightctl.client import HttpTransport
+
+    seen = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b'{"schema":1,"request_id":"r","status":503,"data":null,"error":null}'
+
+    def opener(request, timeout):
+        seen.append(request.full_url)
+        return Response()
+
+    HttpTransport(opener=opener).request("HTTPS://controller.invalid/v1/rpc", {}, 1.0)
+    assert seen == ["HTTPS://controller.invalid/v1/rpc"]
+
+
+def _mode_literals(tree):
+    import ast
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            name = getattr(node.func, "attr", getattr(node.func, "id", ""))
+            values = []
+            if name in {"chmod", "fchmod", "lchmod"} and node.args:
+                values.append(node.args[-1])
+            values += [kw.value for kw in node.keywords if kw.arg == "mode"]
+            for value in values:
+                if isinstance(value, ast.Constant) and isinstance(value.value, int):
+                    yield node.lineno, value.value
+
+
+def test_no_group_or_world_writable_modes_in_product_code():
+    """Ruff S103 misses group-writable modes such as 0o664 (semgrep's insecure-file-permissions caught them)."""
+    import ast
+
+    bad = []
+    for root in ("flightctl", "deploy"):
+        for path in sorted((ROOT / root).rglob("*.py")):
+            for line, mode in _mode_literals(ast.parse(path.read_text(encoding="utf-8"))):
+                if mode & 0o022:
+                    bad.append(f"{path.relative_to(ROOT)}:{line} mode {oct(mode)}")
+    assert bad == []

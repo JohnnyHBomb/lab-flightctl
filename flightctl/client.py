@@ -211,7 +211,7 @@ class HttpTransport:
 
     def request(self, endpoint: str, message: Mapping[str, object], timeout_s: float) -> Mapping[str, object]:
         if not endpoint.lower().startswith(("http://", "https://")):
-            raise TransportFailure("controller endpoint must be http or https")
+            raise TransportFailure("controller endpoint must be http or https", retryable=False)
         payload = json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(  # noqa: S310 -- endpoint scheme is checked as http or https in request() before the call
             endpoint,
