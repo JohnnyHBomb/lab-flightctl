@@ -1,0 +1,65 @@
+name: flightctl-denylist
+
+# Trusted external-denylist scan (Daybreak CI-01, CI-02). It runs for every pull request, forks included, and after
+# every push to main. The workflow file and the scanner always come from the protected base revision: under
+# pull_request_target GitHub runs this file from the base branch and actions/checkout checks out the base branch.
+# The PR head is fetched by commit id into a separate bare repository and read only as git objects (ls-tree and
+# cat-file); it is never checked out, installed, imported or executed. No PR-controlled text (title, body, branch
+# name) is expanded into a run script: the PR number and head commit id reach the scripts only through env.
+on:
+  pull_request_target:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# One run per PR (or per pushed commit); a new push to the same PR cancels the older run.
+concurrency:
+  group: denylist-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  external-denylist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: base
+          persist-credentials: false
+      - name: Fetch the PR head as data
+        if: github.event_name == 'pull_request_target'
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git init --bare --quiet "$RUNNER_TEMP/pr.git"
+          git -C "$RUNNER_TEMP/pr.git" fetch --quiet --no-tags --depth=1 "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$PR_HEAD_SHA"
+          test "$(git -C "$RUNNER_TEMP/pr.git" rev-parse FETCH_HEAD)" = "$PR_HEAD_SHA"
+      - name: External denylist (base scanner, content as data)
+        env:
+          FLIGHTCTL_DENYLIST_CONTENT: ${{ secrets.FLIGHTCTL_DENYLIST }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = pull_request_target ]; then
+            repo="$RUNNER_TEMP/pr.git"
+            rev="$PR_HEAD_SHA"
+          else
+            repo="$GITHUB_WORKSPACE/base"
+            rev="$GITHUB_SHA"
+          fi
+          test -n "$FLIGHTCTL_DENYLIST_CONTENT"
+          umask 077
+          denylist="$(mktemp)"
+          trap 'rm -f "$denylist"' EXIT
+          printf '%s\n' "$FLIGHTCTL_DENYLIST_CONTENT" > "$denylist"
+          unset FLIGHTCTL_DENYLIST_CONTENT
+          chmod 600 "$denylist"
+          test -s "$denylist"
+          cd "$RUNNER_TEMP"
+          python3 -I "$GITHUB_WORKSPACE/base/deploy/check_portability.py" --denylist "$denylist" --data-rev "$rev" "$repo"

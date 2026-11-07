@@ -1,5 +1,6 @@
-"""A0a: the workflow job `full` (the gate for every v2 packet) runs every suite on Linux, then portability, the
-external denylist and the plan check. Read as text so the check needs no YAML library."""
+"""A0a: the workflow job `full` (the gate for every v2 packet) runs every suite on Linux, then portability and the
+plan check. The external denylist moved to the trusted denylist.yml (Amendment 4 rev 4 draft, Daybreak CI-01/CI-02):
+ci.yml runs PR code and carries no secret. Read as text so the check needs no YAML library."""
 
 import re
 from pathlib import Path
@@ -33,9 +34,11 @@ def test_ci_full_job_lists_every_suite() -> None:
 
     suite = index(lambda s: 'pytest -o addopts="" -q tests/' in s and "test_v2_plan.py" not in s)
     portability = index(lambda s: "tools/check_portability.py ." in s)
-    denylist = index(lambda s: "check_portability.py --denylist" in s and "secrets.FLIGHTCTL_DENYLIST" in s)
     plan = index(lambda s: 'pytest -o addopts="" -q tests/contracts_v2/test_v2_plan.py' in s)
-    assert suite < portability < denylist < plan
+    assert suite < portability < plan
+    assert "secrets." not in WORKFLOW.read_text(encoding="utf-8")
+    trusted = (ROOT / ".github" / "workflows" / "denylist.yml").read_text(encoding="utf-8")
+    assert 'deploy/check_portability.py" --denylist' in trusted and "secrets.FLIGHTCTL_DENYLIST" in trusted
 
     listed = set(re.findall(r"(?<=\s)tests/([\w-]+)(?=\s|$)", steps[suite]))
     suites = {p.relative_to(ROOT / "tests").parts[0] for p in (ROOT / "tests").rglob("test_*.py")}

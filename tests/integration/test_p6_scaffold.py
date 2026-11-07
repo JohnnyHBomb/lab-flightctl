@@ -483,6 +483,79 @@ def test_external_denylist(tmp_path: Path, capsys: pytest.CaptureFixture[str], m
     assert scan_text(f"address={shared_first} {shared_last}", "config/inventory.json.example") == []
 
 
+def test_external_denylist_data_rev(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """--data-rev reads a commit's tree as git objects only: it never runs the tree's own code."""
+    forbidden = "synthetic-forbidden-marker-7f3e"
+    marker = tmp_path / "pr-code-ran"
+    files = {
+        "README.md": "clean\n",
+        "tools/check_portability.py": f"open({str(marker)!r}, 'w').close()\n",
+        "docs/nested/note.txt": "nothing here\n",
+    }
+    repo = _tracked_fixture(tmp_path / "pr-repo", files)
+    git = ["git", "-C", str(repo), "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false"]
+    subprocess.run([*git, "commit", "--quiet", "-m", "clean"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    clean_rev = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, stdout=subprocess.PIPE, text=True).stdout.strip()
+    (repo / "docs" / "nested" / "note.txt").write_text(f"carries {forbidden}\n", encoding="utf-8")
+    subprocess.run([*git, "commit", "--quiet", "-am", "forbidden"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    bad_rev = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, stdout=subprocess.PIPE, text=True).stdout.strip()
+    bare = tmp_path / "pr.git"  # the workflow's shape: a bare repository holding only fetched objects
+    subprocess.run(["git", "clone", "--quiet", "--bare", str(repo), str(bare)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    denylist = tmp_path / "denylist.txt"
+    denylist.write_text(f"{forbidden}\n", encoding="utf-8")
+
+    assert denylist_tool.scan_denylist_rev(bare, clean_rev, denylist) is True
+    assert denylist_tool.scan_denylist_rev(bare, bad_rev, denylist) is False
+    assert denylist_tool.main(["--denylist", str(denylist), "--data-rev", clean_rev, str(bare)]) == 0
+    assert denylist_tool.main(["--denylist", str(denylist), "--data-rev", bad_rev, str(bare)]) == 1
+    # The working tree is not what is scanned: the committed tree of the named commit is.
+    assert denylist_tool.main(["--denylist", str(denylist), "--data-rev", clean_rev, str(repo)]) == 0
+    for rev in ("HEAD", clean_rev[:12], "--output=x", "0" * 40):  # only a full, existing commit id is accepted
+        assert denylist_tool.main(["--denylist", str(denylist), f"--data-rev={rev}", str(bare)]) == 1
+    assert not marker.exists(), "the scanned tree's code ran"
+    captured = capsys.readouterr()
+    assert forbidden not in captured.out and forbidden not in captured.err
+
+
+def test_trusted_denylist_workflow_shape() -> None:
+    """Daybreak CI-01/CI-02: the denylist secret only reaches base-revision code; PR content is data."""
+    workflow = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "denylist.yml").read_text(encoding="utf-8")
+    active = [line for line in workflow.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    stripped = [line.strip() for line in active]
+    trigger = workflow.split("\non:\n", 1)[1].split("\npermissions:\n", 1)[0]
+    assert re.findall(r"^  (\w+):", trigger, flags=re.M) == ["pull_request_target", "push"]
+    assert "branches: [main]" in trigger
+    assert re.findall(r"^\s*(\w[\w-]*): (read|write)$", workflow, flags=re.M) == [("contents", "read"), ("contents", "read")]
+    assert "runs-on: ubuntu-latest" in stripped and "self-hosted" not in workflow
+    assert [line for line in stripped if line.startswith("- uses:") or line.startswith("uses:")] == [
+        "- uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
+    ]
+    assert "persist-credentials: false" in stripped and "path: base" in stripped
+    assert not any(line.startswith("ref:") for line in stripped)  # the default (base) checkout under pull_request_target
+    for forbidden in ("pip install", "actions/cache", "setup-python", "upload-artifact", "GITHUB_ENV", "GITHUB_OUTPUT",
+                      "head.ref", "head_ref", ".title", ".body", "github.event.pull_request.head.repo", "checkout -"):
+        assert forbidden not in workflow, forbidden
+    # Expressions appear only as env values or an if: condition, never inside a run script.
+    for line in stripped:
+        if "${{" in line:
+            assert re.fullmatch(r"(if: .*|[A-Z_]+: \$\{\{ [\w.]+ \}\}|group: denylist-\$\{\{ github\.event\.pull_request\.number \|\| github\.sha \}\})", line), line
+    assert "PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}" in stripped
+    assert "timeout-minutes: 5" in stripped and "cancel-in-progress: true" in stripped
+    assert ('git -C "$RUNNER_TEMP/pr.git" fetch --quiet --no-tags --depth=1 "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" '
+            '"$PR_HEAD_SHA"') in stripped
+    assert "unset FLIGHTCTL_DENYLIST_CONTENT" in stripped
+    assert '[[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]' in stripped
+    assert 'git init --bare --quiet "$RUNNER_TEMP/pr.git"' in stripped
+    assert any(line.startswith('test "$(git -C "$RUNNER_TEMP/pr.git" rev-parse FETCH_HEAD)" = "$PR_HEAD_SHA"') for line in stripped)
+    assert "FLIGHTCTL_DENYLIST_CONTENT: ${{ secrets.FLIGHTCTL_DENYLIST }}" in stripped
+    assert workflow.count("secrets.") == 1
+    assert "mktemp" in workflow and "chmod 600" in workflow and "test -s" in workflow
+    assert 'printf \'%s\\n\' "$FLIGHTCTL_DENYLIST_CONTENT" > "$denylist"' in stripped
+    assert stripped[-1] == (
+        'python3 -I "$GITHUB_WORKSPACE/base/deploy/check_portability.py" --denylist "$denylist" --data-rev "$rev" "$repo"'
+    )
+
+
 def test_ci_security_configuration() -> None:
     workflow = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     active_lines = [line.strip() for line in workflow.splitlines() if line.strip() and not line.lstrip().startswith("#")]
@@ -490,9 +563,7 @@ def test_ci_security_configuration() -> None:
     assert "timeout-minutes: 10" in workflow
     for tool in ("gitleaks", "pip-audit", "ruff", "shellcheck"):
         assert tool in workflow
-    assert "FLIGHTCTL_DENYLIST_CONTENT" in workflow
-    assert "mktemp" in workflow and "chmod 600" in workflow and "printf" in workflow
-    assert "test -s" in workflow
+    assert "secrets." not in workflow and "FLIGHTCTL_DENYLIST" not in workflow  # ci.yml runs PR code: no secret
     assert "--no-deps" in workflow
     assert "python -m pip check" in active_lines
     assert "gitleaks version" in workflow
@@ -511,8 +582,6 @@ def test_ci_security_configuration() -> None:
         assert command in active_lines
     for command in ("deploy/provision-ci-tools", "gitleaks version", "shellcheck --version", "ruff --version", "pip-audit --version"):
         assert command in active_lines
-    assert 'printf \'%s\\n\' "$FLIGHTCTL_DENYLIST_CONTENT" > "$denylist"' in active_lines
-    assert not any("--denylist \"$FLIGHTCTL_DENYLIST\"" in line for line in active_lines)
     assert "CodeQL" not in workflow
     dependabot = (Path(__file__).resolve().parents[2] / ".github" / "dependabot.yml").read_text(encoding="utf-8")
     assert "github-actions" in dependabot and "pip" in dependabot
