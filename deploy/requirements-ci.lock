@@ -2,6 +2,7 @@
 # then requires pip check to verify dependency closure before running tools.
 # A clean installation still requires verification on the CI runner.
 # Regenerated 28 Sept 2026 by the lead with pip's resolver (the first lock was written offline: pip check and pip-audit failed).
+# 7 Nov 2026: msgpack 1.2.3, certifi 2026.10.18, filelock 4.2.1 for advisories; mcp and opentelemetry-api wait on semgrep, which pins the vulnerable versions.
 annotated-types==0.8.0
 anyio==4.15.1
 attrs==26.1.0
@@ -9,7 +10,7 @@ boltons==21.0.0
 boolean.py==5.0
 bracex==3.0.1
 CacheControl==0.14.4
-certifi==2026.7.22
+certifi==2026.10.18
 cffi==2.1.1
 charset-normalizer==3.5.1
 click==8.4.2
@@ -20,7 +21,7 @@ cyclonedx-python-lib==11.12.0
 defusedxml==0.7.1
 exceptiongroup==1.2.2
 face==26.0.1
-filelock==4.0.5
+filelock==4.2.1
 glom==25.12.0
 googleapis-common-protos==1.75.4
 h11==0.16.0
@@ -36,7 +37,7 @@ license-expression==30.4.4
 markdown-it-py==4.2.0
 mcp==1.29.0
 mdurl==0.1.2
-msgpack==1.2.2
+msgpack==1.2.3
 opentelemetry-api==1.37.0
 opentelemetry-exporter-otlp-proto-common==1.37.0
 opentelemetry-exporter-otlp-proto-http==1.37.0
