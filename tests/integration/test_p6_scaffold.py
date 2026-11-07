@@ -51,12 +51,12 @@ def _trace(state_dir: Path) -> list[str]:
 
 def _tracked_fixture(root: Path, files: dict[str, str]) -> Path:
     root.mkdir(parents=True)
-    subprocess.run(["git", "init", "--quiet", str(root)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    subprocess.run(["git", "init", "--quiet", str(root)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)  # noqa: S603, S607 -- argv list with shell=False, no untrusted input
     for relative, contents in files.items():
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(contents, encoding="utf-8")
-    subprocess.run(["git", "-C", str(root), "add", "."], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    subprocess.run(["git", "-C", str(root), "add", "."], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)  # noqa: S603, S607 -- argv list with shell=False, no untrusted input
     return root
 
 
@@ -488,7 +488,7 @@ def test_ci_security_configuration() -> None:
     active_lines = [line.strip() for line in workflow.splitlines() if line.strip() and not line.lstrip().startswith("#")]
     assert "cancel-in-progress: true" in workflow
     assert "timeout-minutes: 10" in workflow
-    for tool in ("gitleaks", "pip-audit", "semgrep", "shellcheck"):
+    for tool in ("gitleaks", "pip-audit", "ruff", "shellcheck"):
         assert tool in workflow
     assert "FLIGHTCTL_DENYLIST_CONTENT" in workflow
     assert "mktemp" in workflow and "chmod 600" in workflow and "printf" in workflow
@@ -497,7 +497,7 @@ def test_ci_security_configuration() -> None:
     assert "python -m pip check" in active_lines
     assert "gitleaks version" in workflow
     assert "shellcheck --version" in workflow
-    assert "semgrep --version" in workflow
+    assert "ruff --version" in workflow
     assert "pip-audit --version" in workflow
     assert "deploy/ci-tools.lock" in workflow
     assert any(line.startswith("- uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1") for line in active_lines)
@@ -506,10 +506,10 @@ def test_ci_security_configuration() -> None:
         "run: shellcheck -x deploy/pre-commit-denylist deploy/provision-ci-tools",
         "run: gitleaks detect --source . --no-banner --redact --exit-code 1",
         "run: pip-audit --strict --no-deps -r deploy/requirements-ci.lock",
-        "run: semgrep scan --error --config p/python flightctl deploy tests",
+        "run: ruff check --select S flightctl deploy tests",
     ):
         assert command in active_lines
-    for command in ("deploy/provision-ci-tools", "gitleaks version", "shellcheck --version", "semgrep --version", "pip-audit --version"):
+    for command in ("deploy/provision-ci-tools", "gitleaks version", "shellcheck --version", "ruff --version", "pip-audit --version"):
         assert command in active_lines
     assert 'printf \'%s\\n\' "$FLIGHTCTL_DENYLIST_CONTENT" > "$denylist"' in active_lines
     assert not any("--denylist \"$FLIGHTCTL_DENYLIST\"" in line for line in active_lines)
@@ -521,7 +521,9 @@ def test_ci_security_configuration() -> None:
     assert pinned_requirements and all("==" in line and " " not in line for line in pinned_requirements)
     pinned_names = {line.split("==", 1)[0].lower().replace("_", "-") for line in pinned_requirements}  # PEP 503 names
     # Every CI tool is pinned, and the lock carries its transitive closure (verified in CI by `pip check`).
-    assert {"semgrep", "pip-audit", "pytest", "jsonschema", "referencing"} <= pinned_names
+    assert {"ruff", "pip-audit", "pytest", "jsonschema", "referencing"} <= pinned_names
+    # Semgrep pins mcp and opentelemetry-api at versions with open advisories; none of them may return to the lock.
+    assert not {"semgrep", "mcp"} & pinned_names and not any(name.startswith("opentelemetry") for name in pinned_names)
     assert len(pinned_names) > 20 and "rpds-py" in pinned_names  # transitive (jsonschema/referencing) pinned too
     tool_lock = (Path(__file__).resolve().parents[2] / "deploy" / "ci-tools.lock").read_text(encoding="utf-8")
     assert "GITLEAKS_VERSION=" in tool_lock and "GITLEAKS_IMAGE=" in tool_lock

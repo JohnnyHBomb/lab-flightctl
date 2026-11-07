@@ -47,7 +47,7 @@ def test_adapter_refused_is_a_stderr_line_and_exit_3_not_an_event(tmp_path: Path
     bad["allow_fake"].append("inhibitor")
     path = tmp_path / "adapters.json"
     path.write_text(json.dumps(bad), encoding="utf-8")
-    run = subprocess.run([sys.executable, "-m", "flightctl.adapters", str(path)], cwd=ROOT, capture_output=True, text=True, timeout=60)
+    run = subprocess.run([sys.executable, "-m", "flightctl.adapters", str(path)], cwd=ROOT, capture_output=True, text=True, timeout=60)  # noqa: S603 -- argv list with shell=False, no untrusted input
     assert run.returncode == 3 and run.stdout == ""
     assert all(re.fullmatch(r"adapter-refused: port=[\w-]+ lane=[\w-]+: .+", l) for l in run.stderr.splitlines()), run.stderr
 
@@ -201,14 +201,14 @@ def test_orphaned_adapter_refused_topic_and_error_code_are_removed() -> None:
     assert {n.strip("`") for n in re.findall(r"`[a-z_]+`", rule.split("SHARED exceptions", 1)[1])} >= set(SHARED)
 
 
-def test_semgrep_scans_flightctl_deploy_and_tests() -> None:
-    """Rev 2 (lead, measured): the pr job scans flightctl/ too, and the repo .semgrepignore replaces semgrep's built-in
-    list (which skipped tests/) while keeping only tool and cache directories out."""
+def test_ruff_s_scans_flightctl_deploy_and_tests() -> None:
+    """Rev 3 (7 Nov 2026): Ruff's S rules replace semgrep; the pr job scans flightctl, deploy and tests, and every
+    suppression in them names its rule and a reason."""
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    assert "run: semgrep scan --error --config p/python flightctl deploy tests" in workflow
-    ignored = [l.strip() for l in (ROOT / ".semgrepignore").read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")]
-    assert ignored == [".git/", ".venv/", "__pycache__/", ".pytest_cache/"]
-    for path in ("tests/contracts_v2/test_v2_amendment3_boundary.py", "tests/roster/shims.py"):
-        for line in (ROOT / path).read_text(encoding="utf-8").splitlines():
-            if "nosemgrep" in line:
-                assert re.search(r"# nosemgrep: python\.lang\.security\.audit\.[\w.-]+ -- \S", line), (path, line)  # rule and reason named
+    assert "run: ruff check --select S flightctl deploy tests" in workflow
+    assert "semgrep" not in workflow and not (ROOT / ".semgrepignore").exists()
+    for root in ("flightctl", "deploy", "tests"):
+        for path in (ROOT / root).rglob("*.py"):
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if "# noqa: S" in line and path.name != "test_v2_amendment4.py":
+                    assert re.search(r"# noqa: S\d{3}(, S\d{3})* -- \S", line), (str(path), line)  # rule and reason named

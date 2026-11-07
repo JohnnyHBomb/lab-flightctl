@@ -52,7 +52,7 @@ def _execute(command, argv, host_id, timeout_s, stdin, env) -> dict:
     """Start `command` (no shell, own session, clean env, cwd /) and bound it by timeout_s."""
     started = _time.monotonic()
     try:
-        proc = _subprocess.Popen(command, shell=False, env=env, cwd="/", close_fds=True, start_new_session=True,
+        proc = _subprocess.Popen(command, shell=False, env=env, cwd="/", close_fds=True, start_new_session=True,  # noqa: S603 -- the controller's job: starts the named command with no shell, own session, clean env (see docstring)
                                  stdin=_subprocess.DEVNULL if stdin is None else _subprocess.PIPE,
                                  stdout=_subprocess.PIPE, stderr=_subprocess.PIPE)
     except OSError as exc:

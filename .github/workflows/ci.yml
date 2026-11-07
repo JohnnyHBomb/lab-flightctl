@@ -31,7 +31,7 @@ jobs:
           export PATH="$RUNNER_TEMP/flightctl-ci-tools/bin:$PATH"
           gitleaks version
           shellcheck --version
-          semgrep --version
+          ruff --version
           pip-audit --version
       - name: Require the external denylist
         # Fork PRs get no secrets once the repo is public: skip the external denylist there (the in-tree portability
@@ -61,8 +61,8 @@ jobs:
         run: gitleaks detect --source . --no-banner --redact --exit-code 1
       - name: pip-audit
         run: pip-audit --strict --no-deps -r deploy/requirements-ci.lock
-      - name: Semgrep
-        run: semgrep scan --error --config p/python flightctl deploy tests
+      - name: Ruff S (flake8-bandit rules)
+        run: ruff check --select S flightctl deploy tests
 
   # A0a: the gate for every v2 packet. Linux only; lab-ci runs this same job from this file (steps are read, not retyped).
   full:

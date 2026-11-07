@@ -24,3 +24,20 @@ addopts = "-q"
 
 [tool.setuptools]
 packages = ["contracts", "tests", "tests.fakes", "tests.contracts"]
+
+# CI runs `ruff check --select S flightctl deploy tests` (flake8-bandit rules; replaced semgrep, 7 Nov 2026).
+# Only tests/ is exempt, and only from rules that are test-harness noise there. flightctl/ and deploy/ are not exempt
+# from anything: each finding there is fixed or carries a per-line `# noqa: S### -- reason`. S103 (permissive chmod)
+# is not exempt in tests either: the deliberate fixtures carry a per-line noqa with a reason.
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+  "S101",  # pytest asserts
+  "S102",  # tests exec this repo's own source files read from disk
+  "S105",  # fake token and secret strings used as test data
+  "S106",  # fake token passed as a test argument
+  "S107",  # fake token as a test helper default
+  "S108",  # literal /tmp paths fed to the path validator, never opened
+  "S311",  # fixed-seed pseudo-random test data
+  "S603",  # tests launch argv lists with shell=False (S603 has no taint analysis)
+  "S607",  # tests launch git, sleep and similar by bare name on PATH
+]
