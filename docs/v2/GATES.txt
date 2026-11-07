@@ -13,6 +13,11 @@ FLOW (the lab's pstack-derived workflow, "poteto mode")
 GATES EVERY PACKET MUST PASS (gauge reruns each one itself and files the evidence)
   G0 BASE-FAIL    Every named acceptance test the packet adds FAILS on the base commit (or is an xfail(strict) repro
                   that turns into a pass). Evidence: base run output with the named tests failing.
+  G0b REGRESSION  (Amendment 13, owner 7 Nov 2026) A race's hidden set may hold checks labelled regression-guard. One is
+      GUARD       exempt from fail-on-base only when (a) it passes on the base commit, (b) the packet's scope reworks the
+                  path it exercises, and (c) the label and the reason are written in the hidden set and the PROOF file. A
+                  guard that fails on base is an ordinary hidden check. First guard: the v1-shaped protocol-2 stop
+                  check (unknown stop outcome -> 503 unknown, lane quarantined, no cause), in A5b2's hidden set.
   G1 RACE GATE    Committed, clean tree; report present; every named test defined under its exact name; scope
                   respected; <= ~400 changed lines and <= 5 named tests unless the brief was split for proof (lesson 56;
                   the cap never justifies a half-proven packet). FROZEN: no pre-existing test is changed, skipped or
@@ -80,11 +85,25 @@ ADDITIONAL GATE FOR ASSEMBLY PACKETS (A-ASM, B-ASM, C-ASM)
                   min_path_counts met, zero mirror errors, clean-days counter), the inhibitor proven while the legacy
                   fence still stands (A-ASM step 4), and a recorded rollback rehearsal.
 
+GATE BEFORE A7 (Amendment 13, owner 7 Nov 2026; the Daybreak review's must-fix list)
+  G7 MUST-FIX     A7 does not start until every row below is PROVEN in its packets' PROOF files (acceptance criteria in
+                  AMENDMENT-13.md change 5): G7-POW (AD1 and A5b1c), G7-SM (AD2, AD6, AD7 meet G8), G7-CMD (AD3), G7-DB
+                  (AD4, AD5), G7-BOOK (AD7), G7-DISC (A3c2). Each named test reproduces its finding on base (G0).
+
+RESTART EXIT GATE (Amendment 13; the owner's definition of done, checked at A-ASM before the flip)
+  G8 STATE        Each of the 14 state machines in AMENDMENT-13.md change 6 has on main: one enum of its states; a
+     MACHINES     transition table naming every (state, event) cell as a legal transition or an explicit rejection; one
+                  transition function that is the only writer of that state; and a named test test_<machine>_machine
+                  that enumerates every cell and runs a seeded random event sequence against the machine's invariants
+                  (stdlib only). A retired machine meets G8 by deletion under migration rows, recorded in the PROOF.
+                  Evidence: per machine, the enum, table and function locations and the test output.
+
 GAUGE CHECKLIST (copy into each PROOF file)
   [ ] base commit and head commit recorded; diff read by the gauge (standing order 8)
   [ ] G0 base-fail output   [ ] G1 race gate   [ ] G1b touched-tests vs migration-map rows
   [ ] G2 lab-ci full + hosted CI on head   [ ] G3 strict conformance evidence per delivered port and host type
   [ ] G4 realtime test output
+  [ ] G0b regression guards labelled, passing on base, reason recorded   [ ] G8 artefacts for the machines this packet owns
   [ ] no lab hostnames/IPs/paths in repo files (tools/check_portability.py + external denylist)
   [ ] report claims match the evidence (honesty check; a false claim is a fault)
   [ ] verdict and next packet unblocked (or not)
@@ -93,3 +112,7 @@ WHO
   implementers: the race seats named per packet (Opus as Exemplar, Luna-max, Sol 6 (sol6-max), ASH-27B Q4/Q8 + MTP,
   Qwen3.8-27B + MTP). gauge: a seat that did not author the packet (default: the lead; Astra or Grok as second gauge
   for security packets A7, C2, C3, C7h, C9w, C9). Assembly packets: owned by the lead, never raced.
+  Amendment 13 (owner's D5, 7 Nov 2026), for milestone A from the restart on: M packets race Opus vs Sonnet; S packets
+  run one arm (Opus or Sonnet, the lead's recorded pick) plus a blind review; no catch-up lane until a local model meets
+  the lab's bar. On-lab proofs run only through the local gauge (G2, G3); no self-hosted runner is registered to this
+  repo (owner's D4).
