@@ -544,6 +544,7 @@ def test_trusted_denylist_workflow_shape() -> None:
     assert ('git -C "$RUNNER_TEMP/pr.git" fetch --quiet --no-tags --depth=1 "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" '
             '"$PR_HEAD_SHA"') in stripped
     assert "unset FLIGHTCTL_DENYLIST_CONTENT" in stripped
+    assert "environment: denylist" in stripped  # the secret is an environment secret limited to main
     assert '[[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]' in stripped
     assert 'git init --bare --quiet "$RUNNER_TEMP/pr.git"' in stripped
     assert any(line.startswith('test "$(git -C "$RUNNER_TEMP/pr.git" rev-parse FETCH_HEAD)" = "$PR_HEAD_SHA"') for line in stripped)

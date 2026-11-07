@@ -39,10 +39,9 @@ scanned; neither mode ever scanned submodule content. The secret is unset
 once it is written to the 0600 temp file. A `concurrency` group keeps one
 run per PR and cancels the older run on a new push.
 
-Residual risk: a repository writer can push a branch with their own workflow
-that reads any repository secret. Moving `FLIGHTCTL_DENYLIST` into an
-environment limited to `main` closes that path; it is a repository setting,
-not a workflow change.
+`FLIGHTCTL_DENYLIST` is a secret of the `denylist` environment, whose
+deployment branches are limited to `main`, and the job names that environment.
+A workflow pushed on any other branch cannot read it.
 
 The denylist workflow materializes the secret into a mode-600 temporary file;
 the secret is not interpreted as a runner pathname. `deploy/ci-tools.lock`
