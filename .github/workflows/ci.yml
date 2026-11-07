@@ -1,5 +1,7 @@
 name: flightctl-ci
 
+# No secret is used here: this workflow runs PR code. The external denylist runs in denylist.yml, which executes
+# only base-revision code and reads PR content as data (Daybreak CI-01, CI-02).
 on:
   pull_request:
 
@@ -33,22 +35,6 @@ jobs:
           shellcheck --version
           ruff --version
           pip-audit --version
-      - name: Require the external denylist
-        # Fork PRs get no secrets once the repo is public: skip the external denylist there (the in-tree portability
-        # check still runs). Same-repo PRs, pushes and manual runs still require it.
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        env:
-          FLIGHTCTL_DENYLIST_CONTENT: ${{ secrets.FLIGHTCTL_DENYLIST }}
-        run: |
-          set -euo pipefail
-          test -n "$FLIGHTCTL_DENYLIST_CONTENT"
-          umask 077
-          denylist="$(mktemp)"
-          trap 'rm -f "$denylist"' EXIT
-          printf '%s\n' "$FLIGHTCTL_DENYLIST_CONTENT" > "$denylist"
-          chmod 600 "$denylist"
-          test -s "$denylist"
-          python deploy/check_portability.py --denylist "$denylist" .
       - name: Contracts and scaffold integration
         env:
           FLIGHTCTL_INTEGRATION_PHASE: scaffold
@@ -88,21 +74,5 @@ jobs:
           tests/discovery tests/executor tests/integration tests/roster tests/adapters tests/sim tests/clock tests/commands tests/gpu tests/transport tests/runner tests/siteconfig tests/power
       - name: Portability
         run: python tools/check_portability.py .
-      - name: External denylist
-        # Fork PRs get no secrets once the repo is public: skip the external denylist there (the in-tree portability
-        # check still runs). Same-repo PRs, pushes and manual runs still require it.
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        env:
-          FLIGHTCTL_DENYLIST_CONTENT: ${{ secrets.FLIGHTCTL_DENYLIST }}
-        run: |
-          set -euo pipefail
-          test -n "$FLIGHTCTL_DENYLIST_CONTENT"
-          umask 077
-          denylist="$(mktemp)"
-          trap 'rm -f "$denylist"' EXIT
-          printf '%s\n' "$FLIGHTCTL_DENYLIST_CONTENT" > "$denylist"
-          chmod 600 "$denylist"
-          test -s "$denylist"
-          python deploy/check_portability.py --denylist "$denylist" .
       - name: Plan check
         run: python -m pytest -o addopts="" -q tests/contracts_v2/test_v2_plan.py
