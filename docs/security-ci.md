@@ -33,6 +33,11 @@ the title, body, or branch name is never expanded into a script; only the
 commit id reaches the scripts, through the environment, and it must be 40 hex
 digits. The workflow has `contents: read` only, no cache, no artifact, and no
 other action. On a push to `main` the same scanner scans the pushed commit.
+In `--data-rev` mode the scanner reads a symlink's target text, not the file it
+points to. Submodule entries (gitlinks) are skipped, but `.gitmodules` is
+scanned; neither mode ever scanned submodule content. The secret is unset
+once it is written to the 0600 temp file. A `concurrency` group keeps one
+run per PR and cancels the older run on a new push.
 
 Residual risk: a repository writer can push a branch with their own workflow
 that reads any repository secret. Moving `FLIGHTCTL_DENYLIST` into an

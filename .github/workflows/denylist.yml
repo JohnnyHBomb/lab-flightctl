@@ -14,6 +14,11 @@ on:
 permissions:
   contents: read
 
+# One run per PR (or per pushed commit); a new push to the same PR cancels the older run.
+concurrency:
+  group: denylist-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
 jobs:
   external-denylist:
     runs-on: ubuntu-latest
@@ -53,6 +58,7 @@ jobs:
           denylist="$(mktemp)"
           trap 'rm -f "$denylist"' EXIT
           printf '%s\n' "$FLIGHTCTL_DENYLIST_CONTENT" > "$denylist"
+          unset FLIGHTCTL_DENYLIST_CONTENT
           chmod 600 "$denylist"
           test -s "$denylist"
           cd "$RUNNER_TEMP"
