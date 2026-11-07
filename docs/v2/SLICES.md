@@ -52,9 +52,9 @@ checks this mechanically.
 Seat shorthand: **O** = Opus (Exemplar reference), **L** = Luna-max, **S6** = Sol 6 (sol6-max), **A** = ASH-27B
 Q4/Q8 + MTP, **Q** = Qwen3.8-27B + MTP.
 Amendment 13 (owner's D5, 7 Nov 2026): **Sn** = Sonnet, **BR** = a blind review of the single entry. M packets race
-O vs Sn; S packets run one arm (the lead picks O or Sn and records it) plus a blind review; there is no catch-up lane
-until a local model meets the lab's bar. For every unmerged milestone-A packet the index's Seats cell supersedes the
-SEATS line of its brief. Milestone B, C and D cells are unchanged until a later amendment opens those milestones (D6).
+O vs Sn; S packets run one arm (the lead picks O or Sn and records it) plus a blind review; there is no catch-up lane.
+The Seats cells and the SEATS lines of the unmerged milestone-A packets say this. Milestone B, C and D seats are
+unchanged until a later amendment opens those milestones (D6).
 Sizes are guesses: **S** is under one raced day, **M** is one to two days.
 
 ## Packet index
@@ -346,13 +346,13 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
 - GOAL: The frozen executor_transport cases pass strict against the A5a3 entry point, host-local and over ssh.
 - SCOPE: new `tests/conformance/impl_executor_transport.py` (fake: in-process `ExecutorV2` per SimHost with `sim-` boot ids behind the entry point's wire rules; real: `LocalSubprocessTransport` over the entry point with a rig-written site copy and a recording nvidia-smi wrapper, `SshForcedCommandTransport` to the target).
 - ACCEPTANCE: executor_transport conformance [strict].
-- PROOF: G0 (the fake cases are skipped while the port is unregistered on the base, so G0 is the REPRO-style "cannot pass without the packet"), G2, G3 (host-local and ssh to the pilot host; the stop's emptiness proof reads the lane's cards read-only under a held lane), G4. SEATS: O, L, S6.
+- PROOF: G0 (the fake cases are skipped while the port is unregistered on the base, so G0 is the REPRO-style "cannot pass without the packet"), G2, G3 (host-local and ssh to the pilot host; the stop's emptiness proof reads the lane's cards read-only under a held lane), G4. SEATS: O or Sn, BR (Amendment 13).
 
 ### A4ub: units and timers (Amendment 9: part 2 of A4u)
 - GOAL: Installable unit templates, so assembly is copying files, not inventing them. The enforcer timer's service runs the executor's enforcer one-shot, which A5a3 delivers (Amendment 9: no packet owned that command before), so A4ub follows A4u and A5a3.
 - SCOPE: `units/host/*` (executor enforcer timer every 60 s; the P2 executor template becomes its one-shot service; inhibitor unit naming documented), a template renderer in `flightctl/siteconfig.py`, the unit section of `docs/v2/DEPLOY-LAYOUT.md`, tests in `tests/siteconfig/`. (Amendment 11: the authority units moved to A7.)
 - ACCEPTANCE: `test_templates_render_without_site_strings`; `test_timer_unit_runs_one_shot` [realtime, onlab].
-- PROOF: G0-G2, G4; the on-lab timer test on the pilot host (a harmless one shot). SEATS: L, A, Q.
+- PROOF: G0-G2, G4; the on-lab timer test on the pilot host (a harmless one shot). SEATS: O or Sn, BR (Amendment 13).
 
 ### A5b1: authority executor client, identity and errors (part 1 of 3, Amendment 11)
 - GOAL: The authority speaks executor protocol v2 (selected per authority; the v1 path stays for the frozen tests until A5r): it assigns `run_id`, the unit and `token_sha256` before reserve and sends that identity on every call, cancels the lease on a definite refusal (the lane stays free), and keeps the executor's or the transport's typed error as the RPC error's cause. The A0c identity repro is a v1-wire repro the v1 wire cannot satisfy (the v1 executor refuses a reserve with a unit and a stop without one; its expected text is a v1 systemd stop reason), so this packet rewrites it onto protocol v2 under its migration row.
@@ -364,19 +364,19 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
 - GOAL: Every live lease is beaten every 60 s. Renew rolls the expiry within the ceiling on the executor protocol-2 path (Amendment 11: the protocol-1 /v1 renew keeps its v1 behaviour until A7b's /v1 adapter, which owns its rows). Max-end goes out as `approved_max_end - sent_at - margin`, where margin is the contract constant `policy.timing.max_end_margin_s` (30 s, Amendment 11).
 - SCOPE: `flightctl/authority.py` (beat loop, renew on protocol 2, the margin), the A0c beat/renew repro under its A5b2 row (rewritten onto protocol 2: the v1 wire cannot beat). Amendment 11: the three renew rows and the `tests/authority/test_review3.py` renew vector row are A7b's.
 - ACCEPTANCE: `test_renew_rolls_within_ceiling_and_refuses_past_it`; `test_beat_loop_keeps_lease_alive_30min_sim`; `test_slow_round_trip_triggers_shorten_only_ceiling` (round 3, Sol 6 N1: 30 s skew + 60 s transport is detected from the authority's own RTT and corrected by a ceiling message; host max-end never later than approved once a round trip completes within the margin); `test_beat_loop_real_time` [realtime: real authority and executor subprocess, 3 s beats, 20 s].
-- PROOF: G0, G2, G4; the A0c beat/renew repro turns green. Amendment 13 (G0b): at revalidation the hidden set gains the regression guard for the v1-shaped protocol-2 stop (an unknown stop outcome answers 503 `unknown`, the lane is quarantined, no cause). SEATS: O, L, S6.
+- PROOF: G0, G2, G4; the A0c beat/renew repro turns green. Amendment 13 (G0b): at revalidation the hidden set gains the regression guard for the v1-shaped protocol-2 stop (an unknown stop outcome answers 503 `unknown`, the lane is quarantined, no cause). SEATS: O, Sn (Amendment 13).
 
 ### A5b1s: raw tokens out of the main database, split store, replay rules (part 2 of 3 of A5b1, Amendment 11)
 - GOAL: Raw replay tokens live ONLY in a separate replay store that is never backed up; the main database holds `token_sha256` and token-free responses; idempotency and replay rows are keyed by (principal, request_id) and check the request fingerprint first.
 - SCOPE: `flightctl/store.py` (the `token_sha256` column, the replay store, `secure_delete`, the scrub, the startup orphan recovery, idempotency keyed by principal), `flightctl/authority.py` (the replay path), tests in `tests/authority/`. The v1 grant's `data.lease` keeps the lease-v1 shape (`test_frozen_rpc_vectors_against_production_handlers` validates it with `additionalProperties: false`).
 - ACCEPTANCE: `test_token_scrub_storage_level` (round 4, D-token-4: raw replay tokens live ONLY in a separate replay store that is never backed up; the main database holds `token_sha256` and token-free responses. On the authority's REAL files, a backup taken WHILE a token is live and examined after its deadline holds no token bytes, and neither do the replay db or its -wal after the scrub. Reference: test_v2_round4.py token tests, including the negative control); `test_split_store_crash_and_restore` (round 5: replay row committed first, main DB second; a crash between them leaves an orphan replay row that startup deletes and no grant; a main DB restored without its replay store answers a retry inside the window with 409 replay_unavailable and never grants twice; round 6: the token-free replay deadline is in the main record, so after the window a missing replay row is the routine scrub and the retry gets the grant replay with token null; round 7: a duplicate grant passes its real retry time, so after the deadline it gets the null-token replay even while the replay row still exists); `test_store_replay_checks_request_fingerprint` (round 8, Sol 6 r7: the same request id with a changed payload gets 409 conflict, never the stored response, inside or after the window and with or without the replay row; round 9, Sol 6 r8: idempotency and replay rows are keyed by (principal, request_id), so a second principal using the same request id and the same payload gets a fresh decision, never the first principal's lease or token; Amendment 11: renamed from test_replay_checks_request_fingerprint, the frozen oracle test of that name in `tests/contracts_v2/test_v2_round8.py`).
-- PROOF: G0, G2, G4. SEATS: O, L, S6.
+- PROOF: G0, G2, G4. SEATS: O, Sn (Amendment 13).
 
 ### A5b1c: grant withheld until the ceiling is acknowledged (part 3 of 3 of A5b1, Amendment 11; after A5b2)
 - GOAL: A reserve is not a grant until the host has acknowledged a ceiling at or before the approved end (N1, rounds 4-8), confirmed over A5b2's margin and shorten-only ceiling sender (Amendment 11: without the margin the rule never confirms over a wire slower than the rounding slack).
 - SCOPE: `flightctl/authority.py` (the grant rule on the reserve reply's `max_end_remaining_s`, 202 `ceiling-unconfirmed` until wait_until then stop or quarantine, the fence and inhibitor evidence, `awake.hold_inhibitor` for lanes on hosts whose power mode is `sleeps`), tests in `tests/authority/`.
 - ACCEPTANCE: `test_grant_withheld_until_ceiling_acknowledged` (round 4, N1: the reserve reply carries `max_end_remaining_s`; no grant until reply_received + remaining <= approved_max_end; with the shorten message dropped the client sees `202 ceiling-unconfirmed` and no grant; round 5: only a reply bound to this reserve's lease_id, generation, host and controller_request_id counts; round 6: the reply must validate as the executor reply WIRE shape with nested `echoed_identity` and `host_boot`, and be `ok: true` and `definite: true`; round 7: a `reserve` reply with `observed_state: reserved` must come first, a `ceiling` reply counts only after it and in a fenced state, and a dry-run never counts); `test_grant_needs_persisted_fence` (round 8: the reply must carry the persisted fence for this lane and identity (exactly one fence on the lane, state equal to observed_state, not rebooted) and, where the lane holds an inhibitor, a held inhibitor named for the lane and generation; Sol 6 r7's reply with `fences: []` and `inhibitor: null` never grants; Amendment 11: renamed from test_ceiling_needs_persisted_fence, the frozen oracle test of that name in `tests/contracts_v2/test_v2_round8.py`).
-- PROOF: G0, G2, G4. SEATS: O, L, S6.
+- PROOF: G0, G2, G4. SEATS: O or Sn, BR (Amendment 13).
 
 ### A5r: retire executor v1 (Amendment 9; owned by the lead, not raced; the owner may fold it into the end of A5b2 instead)
 - GOAL: Once the authority speaks v2 to the executor (A5b1, A5b2), the v1 executor's tests, their package-local systemd adapter and the v1 executor path go, under the A5r migration rows.
@@ -402,7 +402,7 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
 - PROOF: G0, G2, G3 (inhibitor, pilot host), G4. Gate G7-POW closes when AD1 and A5b1c are both PROVEN.
 
 ### AD2: executor v2 fence machine (Amendment 13; Daybreak state machine 3)
-- GOAL: The fence is an explicit machine: one enum, a transition table (every (state, event) cell legal or explicitly rejected), one transition function and `test_fence_machine` (every cell, plus a seeded random event sequence checking the invariants; GATES G8). `FenceState` is the seven contract fence states; the cells that only managed mode reaches (`staging`, `starting`, `running`) are named and rejected until C7b1. A quarantined fence leaves only through the operator-clear event (A8 supplies the evidence), never through an ordinary stop. Two in-process instances cannot overwrite each other's fence (a store-level lock or revision). The fence records the inhibitor as not requested, held or unknown.
+- GOAL: The fence is an explicit machine: one enum, a transition table (every (state, event) cell legal or explicitly rejected), one transition function and `test_fence_machine` (every cell, plus a seeded random event sequence checking the invariants; GATES G8). `FenceState` is the seven contract fence states; the cells that only managed mode reaches (`staging`, `starting`, `running`) are named and rejected until C7b1 (inferred from the contract's managed-mode states; settled at AD2 staging, which measures whether holder mode reaches any of them). A quarantined fence leaves only through the operator-clear event (A8 supplies the evidence), never through an ordinary stop. Two in-process instances cannot overwrite each other's fence (a store-level lock or revision). The fence records the inhibitor as not requested, held or unknown.
 - SCOPE: `flightctl/executor.py` (ExecutorV2's fence writes), tests in `tests/executor/`.
 - ACCEPTANCE: `test_fence_machine`; `test_quarantine_cannot_clear_via_ordinary_stop`; `test_two_instances_cannot_lose_a_fence`; `test_fence_machine_real_executor_process` [realtime].
 - PROOF: G0, G2, G4, G8 for machine 3. Gate G7-SM.
@@ -414,16 +414,16 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
 - PROOF: G0, G2, G4. Gate G7-CMD.
 
 ### AD4: authority request boundary (Amendment 13, Daybreak DB-01 part 1)
-- GOAL: A request over the contract's `max_request_bytes` (change 8, C13-2) is refused before parsing. `Authority.handle` validates every operation request against the frozen operation schema, identifier and purpose lengths included: a definite `invalid`, and no row, event or idempotency record written. This is the v1 handler A7's listener exposes first; A7b's `/v2/rpc` validation keeps its own scope.
+- GOAL: A request over the contract's `max_request_bytes` (change 8, C13-2) is refused before parsing (`policy.limits.max_request_bytes`). `Authority.handle` validates every operation request against the frozen operation schema, identifier and purpose lengths included: a definite `invalid`, and no row, event or idempotency record written. This is the v1 handler A7's listener exposes first; A7b's `/v2/rpc` validation keeps its own scope.
 - SCOPE: `flightctl/authority.py` (the ingress check and the validation), tests in `tests/authority/`.
 - ACCEPTANCE: `test_oversize_request_refused_before_parse`; `test_schema_invalid_request_writes_nothing` (a generated corpus over every operation); `test_overlong_identifier_and_purpose_refused`.
-- PROOF: G0, G2, G4. Not staged before C13-2 lands. Gate G7-DB.
+- PROOF: G0, G2, G4. Its ceiling is `policy.limits.max_request_bytes` (C13-2, landed by Amendment 13 revision 2). Gate G7-DB.
 
 ### AD5: quotas, retention and paged reads; the idempotency machine (Amendment 13, Daybreak DB-01 part 2; state machine 8)
 - GOAL: Per principal, open queue entries are capped and mutations are rate-limited (`quota_exceeded`, values from C13-2). Terminal queue rows and idempotency rows past their replay deadline are collected by a bounded sweep; events are not deleted (usage is derived from them) and are read in pages. `queue list` and `report` read at most 1,000 rows per page with a cursor. The idempotency record is an explicit machine: one enum, a transition table (every (state, event) cell legal or explicitly rejected), one transition function and `test_idempotency_machine` (every cell, plus a seeded random event sequence checking the invariants; GATES G8), keyed by (principal, request_id) as A5b1s leaves it.
 - SCOPE: `flightctl/authority.py`, `flightctl/store.py`, tests in `tests/authority/`. Split at staging if the reference passes the cap (lesson 56).
 - ACCEPTANCE: `test_per_principal_queue_cap_and_rate_quota`; `test_terminal_and_expired_rows_are_collected`; `test_list_and_report_are_paged_at_1000`; `test_idempotency_machine`.
-- PROOF: G0, G2, G4, G8 for machine 8. Not staged before C13-2 lands. Gate G7-DB.
+- PROOF: G0, G2, G4, G8 for machine 8. Its values are `policy.limits` (C13-2, landed by Amendment 13 revision 2). Gate G7-DB.
 
 ### AD6: authority allocation machine (Amendment 13; Daybreak state machine 1)
 - GOAL: Lane, lease and reservation state are one aggregate: an explicit machine: one enum, a transition table (every (state, event) cell legal or explicitly rejected), one transition function and `test_allocation_machine` (every cell, plus a seeded random event sequence checking the invariants; GATES G8). The lane is free if and only if no live or uncertain allocation exists; a late executor reply cannot advance a successor generation; a normal lease reaches `running` and `closed`; quarantine leaves only through the operator-clear event (A8).
@@ -433,9 +433,10 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
 
 ### AD7: booking machine and the claim/cancel race (Amendment 13, Daybreak BOOK-01; state machine 6)
 - GOAL: The booking is an explicit machine: one enum, a transition table (every (state, event) cell legal or explicitly rejected), one transition function and `test_booking_machine` (every cell, plus a seeded random event sequence checking the invariants; GATES G8), with `claiming` (C13-1) while the reserve is in flight. Terminal states never change; cancellation is allowed only from named cancellable states. At reserve completion a compare-and-swap on (state `claiming`, revision) moves the booking to `claimed`; if it fails, a compensating stop is issued and the lane is quarantined unless the cleanup is proven.
-- SCOPE: `flightctl/authority.py`, tests in `tests/authority/`.
+- WIRE CHANGE: `claiming` is a new booking-v1 state value, so it is a v1 wire-shape change. Clients that validate the booking state must accept it in the same packet: `flightctl/client.py` checks the state against a fixed set (measured: line 1016 on `09f0ba7`), and the v1 transition oracle `validate_booking_transition` in `tests/contracts/validation.py` has no `claiming` cell. AD7 updates both, the oracle under a migration row it adds (Amendment 9, change 4).
+- SCOPE: `flightctl/authority.py`, `flightctl/client.py` (the booking state set), `tests/contracts/validation.py` (the booking transition oracle, under AD7's own migration row), tests in `tests/authority/`.
 - ACCEPTANCE: `test_booking_machine`; `test_terminal_booking_cannot_cancel`; `test_cancel_racing_claim_never_resurrects` [realtime: a real executor with a delayed reserve].
-- PROOF: G0, G2, G4, G8 for machine 6. Not staged before C13-1 lands. Gates G7-BOOK and G7-SM.
+- PROOF: G0, G2, G4, G8 for machine 6. `claiming` is in `contracts/booking-v1.schema.json` (C13-1, landed by Amendment 13 revision 2). Gates G7-BOOK and G7-SM.
 
 ### A7: authority HTTPS listener with peer identity (Sol B4; Amendment 1: private CA)
 - GOAL: A TLS listener bound to the controller's tailnet address only, terminating TLS **in the authority process** with a certificate issued by the site's **private CA** for `adapters.tls.server_name` (Amendment 1, owner Q2). The real socket peer address (`ip:port`) stays visible to the authority, so `tailscale whois` identifies the caller (unchanged). WebAuthn then has a secure origin (C11b), with `rp_id` = `tls.server_name`.
@@ -449,31 +450,31 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
   - Rejected designs (unchanged): `tailscale serve` HTTPS (the backend sees a localhost peer; identity headers only for user-owned nodes, and the lab's nodes are tag-owned) and `tailscale serve` TCP with the PROXY protocol (workable, adds a parser for no benefit).
 - SCOPE: `flightctl/server.py` (ssl context, verification, reload), `flightctl/identity.py` (PeerIdentity real twin and fake), `flightctl/client.py` (`ca_file`), tests. Local tests use a throwaway test CA. Amendment 11 (moved from A4ub): `units/authority/flightctl-authority.service.template` (the authority server this packet delivers, rendered with A4ub's `render_unit`; A7 appends it to the expected list of A4ub's `test_templates_render_without_site_strings` under the A7 row for `tests/siteconfig/test_a4ub_units.py`) and the authority row of `docs/v2/DEPLOY-LAYOUT.md`'s unit table; the site's certificate renewer is a site process, documented there and templated only if it is a flightctl command.
 - ACCEPTANCE: peer_identity conformance [strict]; `test_forwarding_headers_ignored`; `test_unmapped_peer_denied_no_mutation`; `test_tls_listener_real_socket_peer_reaches_whois` [realtime: real TLS listener on 127.0.0.1 with a test CA; the scripted whois receives the client's real ip:port]; `test_plain_http_refused_on_tls_port`; `test_cert_rotation_reloads_without_dropping_connections` [realtime: replace the files under a live connection; new handshakes get the new leaf]; `test_bad_cert_set_refused_previous_kept` (wrong SAN, expired, key mismatch, broken chain: each refused with an alert, previous certificate still served while valid); rev 2 (Sol 6 amd1 carried): `test_trust_anchor_only_configured_root` and `test_chain_rooted_elsewhere_refused` [realtime: a leaf from a second test CA, and one from a pin-mismatched root, are refused on a live listener]; `test_anchor_change_revalidates_incumbent` [realtime, live listener, rev 3: remove the incumbent's root from `trust_anchor`, then separately change its pin and the `server_name`, while the served certificate is still date-valid; with no valid candidate the listener stops TLS and alerts; with a valid candidate it serves the candidate]; `test_incumbent_expiry_stops_tls_and_alerts` [realtime, live listener: the served certificate expires with only a bad replacement on disk; new handshakes fail, an alert is raised, no expired certificate is ever presented].
-- PROOF: G3, covering whois of the lead's workstation, an agent host and an unknown peer, plus an HTTPS request from a second host verifying against the private root only (no system CA). Second gauge: a security pass by Astra or Grok. SEATS: O, S6, L.
+- PROOF: G3, covering whois of the lead's workstation, an agent host and an unknown peer, plus an HTTPS request from a second host verifying against the private root only (no system CA). Second gauge: a security pass by Astra or Grok. SEATS: O, Sn (Amendment 13).
 
 ### A7b: RPC v2, the /v1 adapter, snapshot and events
 - GOAL: `/v2/rpc` with typed results, `/v1/rpc` translated, a one-call snapshot, and an events feed with a since-cursor and long-poll.
 - SCOPE: `flightctl/rpc.py`, authority read paths, `flightctl/store.py` (event `seq`), `flightctl/client.py`, tests. Amendment 11: the /v1 renew path retires its v1 semantics here (renew rolls within the ceiling, as A5b2 does on protocol 2) under the four A7b rows (three moved from A5b2, plus the `tests/authority/test_review3.py` renew vector); their replacement is A5b2's exact node `tests/authority/test_a5b2_beat_renew.py::test_renew_rolls_within_ceiling_and_refuses_past_it` (the file the A5b2 brief decides; A7b adds none of A5b2's tests, so a bare name would not count under G1b).
 - ACCEPTANCE: `test_every_op_validates_request_and_response`; `test_v1_adapter_translations`; `test_snapshot_redacts_and_never_wakes`; `test_events_since_seq_gapless`; `test_long_poll_returns_on_commit` [realtime].
-- PROOF: G2, G4. SEATS: L, S6, O.
+- PROOF: G2, G4. SEATS: O, Sn (Amendment 13).
 
 ### A8: per-lane reconcile and quarantine-clear
 - GOAL: After any authority restart, each lane reopens after an inspect-based reconcile. No global freeze. Operators clear quarantines with evidence.
 - SCOPE: `flightctl/authority.py`, `flightctl/store.py`; the migration row for A8.
-- ACCEPTANCE: `test_restart_reconciles_lane_by_inspect`; `test_unanswering_host_keeps_only_its_lane_unknown`; `test_quarantine_clear_requires_fresh_evidence`; `test_restart_real_process` [realtime].; Amendment 13: `test_recovery_machine`.
-- PROOF: G0, G2, G4; the A0c restart repro turns green. Amendment 13 (G8, machine 4): the recovery state is an explicit machine: one enum, a transition table (every (state, event) cell legal or explicitly rejected), one transition function and `test_recovery_machine` (every cell, plus a seeded random event sequence checking the invariants; GATES G8), the fifth named test. SEATS: O, L, S6.
+- ACCEPTANCE: `test_restart_reconciles_lane_by_inspect`; `test_unanswering_host_keeps_only_its_lane_unknown`; `test_quarantine_clear_requires_fresh_evidence`; `test_restart_real_process` [realtime]; Amendment 13: `test_recovery_machine`.
+- PROOF: G0, G2, G4; the A0c restart repro turns green. Amendment 13 (G8, machine 4): the recovery state is an explicit machine: one enum, a transition table (every (state, event) cell legal or explicitly rejected), one transition function and `test_recovery_machine` (every cell, plus a seeded random event sequence checking the invariants; GATES G8), the fifth named test. SEATS: O, Sn (Amendment 13).
 
 ### A9: shadow mode with coverage
 - GOAL: A shadow lane makes every decision and every read for real and executes no host write. The divergence report counts mirrored decisions per path, and the lane cannot flip without reaching `policy.shadow.min_path_counts` (Sol N4).
 - SCOPE: `flightctl/shadow.py`, `flightctl/legacy_observer.py`, the report command, tests.
 - ACCEPTANCE: legacy_observer conformance [strict]; `test_shadow_never_calls_mutating_ports` (a recording CommandRunner and registry see zero writes from any mutating port); `test_flip_blocked_until_path_counts_and_no_mirror_errors`; `test_unreadable_legacy_is_not_free`; `test_shadow_watch_real_time` [realtime, onlab].
-- PROOF: G3 on the pilot host (read-only). SEATS: O, S6, L.
+- PROOF: G3 on the pilot host (read-only). SEATS: O, Sn (Amendment 13).
 
 ### A10: legacy shim core
 - GOAL: A client byte-compatible with legacy `lanes.sh`, with `legacy`, `tee` and `v2` modes per lane.
 - SCOPE: `shim/lanes.sh` (thin) plus `flightctl/shim.py`; hex16 token issuance; vectors `tests/contracts_v2/vectors/legacy-shim.json`.
 - ACCEPTANCE: `test_all_legacy_shim_vectors` (real shim process); `test_tee_mirror_failure_keeps_legacy_result`; `test_hex16_token_issued_and_principal_bound`; `test_shim_against_real_authority` [realtime].
-- PROOF: G2, G4. SEATS: L, A, Q.
+- PROOF: G2, G4. SEATS: O or Sn, BR (Amendment 13).
 
 ### AS1: chat occupant machine (Amendment 13; Daybreak state machine 7)
 - GOAL: The chat occupant, its lease and its lane are one aggregate: an explicit machine: one enum, a transition table (every (state, event) cell legal or explicitly rejected), one transition function and `test_occupant_machine` (every cell, plus a seeded random event sequence checking the invariants; GATES G8). A late unload reply cannot overwrite a newer quarantine or a successor; `loading` reaches `running`.
@@ -539,7 +540,7 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
 - GOAL: Acquiring a lane on a sleeping host wakes it and keeps queue order. A host that fails to wake is never reported free. The wake feature can be switched off per site (`features.wake`) for T06b.
 - SCOPE: `flightctl/power.py` (Waker real twin, dryrun, fake); the authority's single-flight wake, `202 waking`, timeout to unreachable, and the rule that reads never wake; retries in the client and shim.
 - ACCEPTANCE: waker conformance [strict]; `test_waking_is_202_and_fifo_kept`; `test_wake_timeout_unreachable_never_free`; `test_reads_never_wake`; `test_wake_real_pilot_host` [realtime, onlab, T07 shape].
-- PROOF: G3 plus the T07 trace. The store host's wake on its routed link is an owner test (G23). Amendment 13: host power changes go through AS8's transition function. SEATS: O, L, S6.
+- PROOF: G3 plus the T07 trace. The store host's wake on its routed link is an owner test (G23). Amendment 13: host power changes go through AS8's transition function. SEATS: O, Sn (Amendment 13).
 
 ### A-ASM: assembly A (owned by the lead)
 - GOAL: Real lanes on the pilot host, first in shadow, then live.
@@ -551,6 +552,7 @@ what the gauge runs. `$LABCI` is the lab-ci entry point, `$EVID` is the packet's
      - The lead sets `lanes.<pilot>.shadow_real: ["inhibitor"]` in `adapters.json`. The validator allows this exception for the inhibitor only, only on a shadow lane, and only with `legacy_lane` set. The lane stays in shadow: workload, waker and every other mutating port stay dryrun or non-writing.
      - Legacy `lanes.sh` remains authoritative throughout. The lead holds the legacy lease, and mirrored decisions now take and release a real idle inhibitor on the pilot host.
      - Evidence: `systemd-inhibit --list` before, during and after; the sleep guard status shows the inhibitor as protected work; the host suspends after the quiet grace once it is released.
+     - Amendment 13: before this step the gauge re-runs A11b's `test_guard_sees_inhibitor` on the pilot host (G3 debt sweep), because its G3 ran on a stand-in host.
      - Then remove `shadow_real` (back to all-dryrun), take the `adapter-config` event hash, and go to step 5. The exception never coexists with mode `live`.
   5. Answer the linger probe (A6b, Amendment 8) and apply the owner's action if needed.
   6. Rollback rehearsal.

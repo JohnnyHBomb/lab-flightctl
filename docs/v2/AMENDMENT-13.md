@@ -1,7 +1,9 @@
 # Amendment 13: site refresh, Daybreak must-fix gates before A7, and the state-machine definition of done
 
-- **Status:** pending blind review. `FROZEN.md` requires review before use; no packet below is staged until the review
-  is resolved and the contract additions in change 8 have landed.
+- **Status:** revision 2. `FROZEN.md` requires review before use. Revision 2: blind Fable review (APPROVE WITH NITS); its
+  one medium finding and seven nits are taken (the checks file, the contract additions applied with their target fields,
+  the four low-scoring machines, D5's wording, the SEATS lines, a stray punctuation mark, AD2's inferred claim, the
+  A11b guard re-run). Revision 2 also records the lead's decisions on the two open points (see "Decided points").
 - **Date:** 7 Nov 2026. **Approved:** by the owner, 7 Nov 2026: decisions D1-D6 (quoted below), the regression-guard rule
   (change 4), the Daybreak must-fix list (change 5) and the definition-of-done caveat (change 6).
 - **Basis:** the lab's restart review of 6 Nov 2026 and the Daybreak security and state-machine review of 7 Nov 2026
@@ -17,8 +19,8 @@ re-run here; **inferred** = a conclusion from the evidence; **guess** = a propos
 - **D2** Lane T is the single remaining card on host C; host C stays out of A-ASM.
 - **D3** Take a golden capture of lane D's card (RTX 3090); the desktop host becomes a standby-only desktop lane at C-ASM.
 - **D4** The repo stays public; on-lab proofs only via the local gauge, never a self-hosted runner.
-- **D5** Races are Opus vs Sonnet for M packets; S packets one arm + a blind review; no catch-up lane until a local model
-  meets the bar.
+- **D5** Races are Opus vs Sonnet for M packets; S packets one arm + a blind review; no catch-up lane. (The restart
+  review's recommendation added "until a local model meets the bar"; the decision itself is "no catch-up lane".)
 - **D6** Scope is milestone A through A-ASM only, interleaved with other lab work.
 - **Regression guard** (owner, 7 Nov 2026): a hidden check may be a labelled regression guard, exempt from fail-on-base,
   when it protects behaviour that already works on base and the packet reworks that path.
@@ -59,12 +61,13 @@ re-run here; **inferred** = a conclusion from the evidence; **guess** = a propos
    lane T, which is not in A-ASM; the pilot host is confirmed as the first host to go live; the store host carries two
    48 GB cards, CI and long-study duty and is not the pilot; lane D is a 24 GB desktop card that also drives the display,
    standby-only, enabled at C-ASM. Owed pilot proofs that ran on a stand-in host (A11b's guard test) are re-run on the
-   pilot host in the G3 debt sweep before A-ASM step 4. D4: G2's lab-ci is the local gauge; no self-hosted runner is
+   pilot host in the G3 debt sweep before A-ASM step 4 (written as a line in that step). D4: G2's lab-ci is the local gauge; no self-hosted runner is
    registered to this repo, and hosted CI stays on GitHub-hosted runners.
 2. **Race policy (D5).** New seat shorthand `Sn` (Sonnet) and `BR` (blind review). The Seats cell of every unmerged
    milestone-A packet is rewritten: M packets `O, Sn`; S packets `O or Sn, BR` (the lead picks the arm and records it);
    lead-owned packets unchanged. GATES `WHO` says the same. Milestone B, C and D rows keep their old cells until a later
-   amendment opens those milestones (D6).
+   amendment opens those milestones (D6). The SEATS lines of the eleven repriced briefs (A5a4, A4ub, A5b2, A5b1s, A5b1c,
+   A7, A7b, A8, A9, A10, A12) are rewritten to match their cells.
 3. **Scope (D6).** The restart ends when A-ASM is live on the pilot lane and the state-machine exit gate (change 6) is
    PROVEN. No milestone B, C or D packet is staged in this restart.
 4. **Regression guard (G0b).** A race's hidden set may hold checks labelled `regression-guard`. Such a check is exempt
@@ -122,33 +125,45 @@ re-run here; **inferred** = a conclusion from the evidence; **guess** = a propos
    (item 7), so A12 does not formally depend on AS8; its brief says the waker drives host power through AS8's function.
    A8 gains one named test (`test_recovery_machine`, five in all). States that only managed mode or later milestones
    reach (fence `staging`/`starting`/`running`, approval `revoked`) are table cells whose events no milestone-A code
-   sends yet; the table still names them (inferred: this is what "explicit" requires without building milestone C).
+   sends yet; the table still names them (inferred: this is what "explicit" requires without building milestone C;
+   for the fence, AD2's staging settles it by measuring whether holder mode reaches any of them).
 7. **Lane D golden capture: pending.** When lane D is free (it is in use by other lab work now), the gauge holds lane D
    through the current authority and records `nvidia-smi` inventory, NUMA and device-minor output read-only with the A2
    record wrapper, exactly as A3i's other captures were made; nothing is started on the card. The capture lands in a
    lead-owned commit with one migration-map rewrite row for
    `tests/gpu/test_a3i_inventory.py::test_golden_captures_all_card_models` (its model set gains the RTX 3090). It does
    not block A-ASM (lane D is not in it); it must land before lane D's inventory is confirmed at C-ASM.
-8. **Contract additions requested (part of this amendment's review; not applied in this commit).** C13-1: booking-v1
-   `state` gains `claiming` (AD7). C13-2: policy constants for the authority boundary and retention (AD4, AD5):
-   `max_request_bytes` (guess: 1 MiB, the executor's value), a per-principal open-queue cap and mutation rate (guess: 64
-   entries, 60 mutations per minute), and a terminal-row retention period (guess: 7 days). Events are not deleted (C5a
-   derives usage from them); their growth is bounded by the rate quota and their reads by paging (inferred). The lead
-   applies C13-1 and C13-2 with their contracts_v2 checks in revision 2; AD4, AD5 and AD7 are not staged before then.
-9. **Traceability.** CONFORMANCE.tsv rows `amd13-1` to `amd13-9`; GATES.txt G0b, G7, G8 and WHO; OPEN-QUESTIONS.txt owner
-   items for the lane D capture and the two preference questions below.
+8. **Contract additions (applied in revision 2).**
+   - **C13-1** (AD7): `contracts/booking-v1.schema.json`, `$defs.booking.properties.state.enum` gains `claiming`
+     (between `blocked` and `claimed`). This is a v1 wire-shape change: `flightctl/client.py` checks the booking state
+     against a fixed set (measured: line 1016) and the v1 transition oracle `validate_booking_transition`
+     (`tests/contracts/validation.py`) has no `claiming` cell, so AD7 updates both (the oracle under its own migration
+     row). No frozen test pins the enum: the whole suite stays green with it (measured, Checks).
+   - **C13-2** (AD4, AD5): `contracts/v2/policy.schema.json`, a new required object `properties.limits` with four
+     constants, in the style of `timing`: `max_request_bytes` = 1048576 (guess: the executor's own ceiling),
+     `max_open_queue_entries_per_principal` = 64 (guess), `max_mutations_per_principal_per_min` = 60 (guess) and
+     `terminal_retention_s` = 604800 (guess: 7 days). No value is measured; changing one needs a new amendment.
+     `config/policy-v2.json.example` gains the same `limits` block, as Amendment 11 did for `max_end_margin_s`
+     (the frozen `test_max_end_margin_is_a_contract_constant` validates that example; without the block it fails,
+     measured).
+   - Events are not deleted (C5a derives usage from them); their growth is bounded by the rate quota and their reads by
+     paging (inferred).
+9. **Traceability.** CONFORMANCE.tsv rows `amd13-1` to `amd13-9`; GATES.txt G0b, G7, G8 and WHO; OPEN-QUESTIONS.txt the
+   decided points and the lane D owner action.
 
-## Open points for the owner
-- **Q13-1** The 14-machine gate costs eight new S packets (AS1-AS8) beyond the must-fix packets. Three machines score low in the review (client
-  lifecycle 6, approval 8, workload unit 9). Keep the full definition of done for them (as written), or accept a
-  documented table without a property test?
-- **Q13-2** Is deletion an acceptable way to meet the gate for executor v1 (machine 2), as written?
+## Decided points (lead decision 7 Nov per John's caveat/cauterize rule, John may override)
+- **Q13-1 decided: the full definition of done for every machine.** Four machines score 9 or lower in the review:
+  client lifecycle 6, approval 8, inventory 8 and workload unit 9 (AS6, AS4, AS5, AS3). They keep the full G8 artefacts;
+  the owner's caveat names all the machines, and a table without its test is not checked.
+- **Q13-2 decided: deletion meets G8 for executor v1** (machine 2, A5r), with the deletion recorded in A5r's PROOF.
 
 ## Checks
-- The contracts_v2 suite stays green with the new index, crosswalk and briefs (measured on this branch; result in the
-  commit message). A `test_v2_amendment13.py` that pins the new rows, A7's Depends and the G8 table is owed in revision 2
-  (tests are outside this commit's scope).
-- `deploy/check_portability.py` with the external denylist passes on this branch.
+- `tests/contracts_v2/test_v2_amendment13.py` pins the 15 new packet rows (A3c2, AD1-AD7, AS1-AS8), A7's Depends, the
+  Seats cells and SEATS lines of the eleven repriced packets, the G8 table of 14 with owners, the G0b, G7 and G8 gate
+  text, and the C13-1 and C13-2 contract values. It fails on `09f0ba7` and passes on this revision (measured; counts in
+  the commit message).
+- The whole suite stays green with the contract additions; `deploy/check_portability.py` with the external denylist
+  passes on this branch.
 
 ## Dated decisions
 | Date | Decision | By |
@@ -159,3 +174,5 @@ re-run here; **inferred** = a conclusion from the evidence; **guess** = a propos
 | 2026-11-07 | Restart definition of done: all 14 machines explicit (G8) | owner |
 | 2026-11-07 | Placement: AD1-AD7 after A6b, A3c2 after A3c, AS1-AS8 after A10; one machine test per machine | lead (this amendment) |
 | 2026-11-07 | CMD-01 maps to `reply_unparsable` (no new error code); events are paged, not deleted | lead (this amendment) |
+| 2026-11-07 | Q13-1: full definition of done for all 14 machines; Q13-2: deletion meets G8 for executor v1 | lead decision per John's caveat/cauterize rule; John may override |
+| 2026-11-07 | C13-1 and C13-2 applied with guessed values | lead (revision 2) |

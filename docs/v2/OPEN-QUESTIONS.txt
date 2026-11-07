@@ -46,14 +46,14 @@ OWNER ACTIONS (not questions; already-decided items that need your hands)
   - Enrol the FIDO2 key(s) on the approver (C3).
   - Enable linger on a lane host ONLY if A6b's logout probe (Amendment 8) shows it is needed (decided before A-ASM goes live).
 
-AMENDMENT 13 (7 Nov 2026; pending blind review)
+AMENDMENT 13 (7 Nov 2026; revision 2 after the blind review)
   Decided by the owner 7 Nov 2026 (recorded in AMENDMENT-13.md): D1 pilot host confirmed; D2 lane T is one card and
   host C stays out of A-ASM; D3 lane D golden capture, lane D standby-only at C-ASM; D4 repo public, on-lab proofs only
   through the local gauge; D5 race slate; D6 restart scope milestone A to A-ASM; the regression-guard rule (GATES G0b);
   the Daybreak must-fix list before A7 (GATES G7); the state-machine definition of done (GATES G8).
-Q13-1  The 14-machine gate (G8) costs eight new S packets (AS1-AS8). Three machines score low in the review (client
-       lifecycle 6, approval 8, workload unit 9). Keep the full definition of done for them, or accept a documented
-       transition table without a property test?
-Q13-2  Is deletion an acceptable way to meet G8 for the executor v1 record (retired by A5r), as written?
+Q13-1  DECIDED 7 Nov 2026 (lead decision per the owner's caveat/cauterize rule; the owner may override): the full G8
+       definition of done for every machine, the four that score 9 or lower included (client lifecycle, approval,
+       inventory, workload unit).
+Q13-2  DECIDED 7 Nov 2026 (same basis): deletion meets G8 for the executor v1 record (retired by A5r).
 OWNER ACTION (pending; lane D is in use by other work): free lane D for a read-only golden capture of its card under a
   held lane D (A3i note), before lane D's inventory is confirmed at C-ASM.

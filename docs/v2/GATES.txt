@@ -113,6 +113,5 @@ WHO
   Qwen3.8-27B + MTP). gauge: a seat that did not author the packet (default: the lead; Astra or Grok as second gauge
   for security packets A7, C2, C3, C7h, C9w, C9). Assembly packets: owned by the lead, never raced.
   Amendment 13 (owner's D5, 7 Nov 2026), for milestone A from the restart on: M packets race Opus vs Sonnet; S packets
-  run one arm (Opus or Sonnet, the lead's recorded pick) plus a blind review; no catch-up lane until a local model meets
-  the lab's bar. On-lab proofs run only through the local gauge (G2, G3); no self-hosted runner is registered to this
+  run one arm (Opus or Sonnet, the lead's recorded pick) plus a blind review; no catch-up lane. On-lab proofs run only through the local gauge (G2, G3); no self-hosted runner is registered to this
   repo (owner's D4).
