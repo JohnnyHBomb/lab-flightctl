@@ -2,9 +2,9 @@
 
 The pull-request workflow has one Linux job with a ten-minute timeout and
 superseded-run cancellation. It runs contract tests, P6 scaffold integration,
-the portability check, ShellCheck, Gitleaks, locked pip-audit, and Semgrep
-Python/shell rules. Actions are pinned by commit SHA. Dependabot covers
-Actions and pip. The external denylist is required; an absent, empty, or
+the portability check, ShellCheck, Gitleaks, locked pip-audit, and Ruff's
+S (flake8-bandit) rules. CodeQL default setup also scans Python and
+Actions. Actions are pinned by commit SHA. Dependabot covers Actions and pip. The external denylist is required; an absent, empty, or
 unreadable denylist fails the job, and matching content is never printed.
 
 The workflow materializes the denylist secret into a mode-600 temporary file;

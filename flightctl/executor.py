@@ -917,7 +917,7 @@ class Executor:
             snapshot = copy.deepcopy(record) if pending_restart_snapshot is None else None
         if pending_restart_snapshot is not None:
             return self._recover_pending_start_for_stop(request, key, pending_restart_snapshot)
-        assert snapshot is not None
+        assert snapshot is not None  # noqa: S101 -- type narrowing only; the branches above set snapshot, no security decision rests on it
         return self._stop_record(
             key,
             snapshot,
