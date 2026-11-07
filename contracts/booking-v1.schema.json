@@ -32,7 +32,7 @@
         "purpose": { "type": "string", "minLength": 1, "maxLength": 512 },
         "start": { "$ref": "common.schema.json#/$defs/utc_time" },
         "end": { "$ref": "common.schema.json#/$defs/utc_time" },
-        "state": { "enum": ["scheduled", "blocked", "claimed", "missed", "completed", "cancelled", "displaced", "recovery"] },
+        "state": { "enum": ["scheduled", "blocked", "claiming", "claimed", "missed", "completed", "cancelled", "displaced", "recovery"], "description": "Amendment 13 (C13-1, Daybreak BOOK-01): claiming = the reserve for this booking's claim is in flight; written only by AD7's transition function. Clients that validate the state enum accept it from AD7 on." },
         "checked_in_at": { "anyOf": [{ "$ref": "common.schema.json#/$defs/utc_time" }, { "type": "null" }] },
         "created_at": { "$ref": "common.schema.json#/$defs/utc_time" },
         "displacement": { "anyOf": [{ "$ref": "common.schema.json#/$defs/identifier" }, { "type": "null" }] },

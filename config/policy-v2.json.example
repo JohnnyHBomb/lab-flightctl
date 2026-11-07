@@ -28,6 +28,12 @@
     "booking_completion_s": 600,
     "max_end_margin_s": 30
   },
+  "limits": {
+    "max_request_bytes": 1048576,
+    "max_open_queue_entries_per_principal": 64,
+    "max_mutations_per_principal_per_min": 60,
+    "terminal_retention_s": 604800
+  },
   "lease": {
     "default_ttl_s": 14400,
     "class_ceiling_s": {

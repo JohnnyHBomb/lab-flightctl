@@ -13,6 +13,7 @@
     "purpose_rules",
     "content_rules",
     "timing",
+    "limits",
     "lease",
     "quotas",
     "approval_matrix",
@@ -122,6 +123,31 @@
         "max_end_margin_s": {
           "const": 30,
           "description": "Amendment 11 (A5b2 staging, owner's approval 6 Oct 2026): the margin_s of the round-3 ceiling bound (common.schema.json relative_deadline). The authority sends max-end as in_s = approved_max_end - sent_at - max_end_margin_s, on reserve and on every shorten-only ceiling. A round trip longer than this margin triggers a ceiling message; without the margin the round-4 grant rule (ceiling_confirmed) never confirms over a wire slower than the rounding slack (measured in A5b2 staging: margin 0 with a 1.5 s delay never confirmed, margin 30 confirmed on the reserve)."
+        }
+      }
+    },
+    "limits": {
+      "description": "Amendment 13 (C13-2; owner's Daybreak must-fix approval of 7 Nov 2026, DB-01): the authority's request boundary and retention. max_request_bytes: a request longer than this is refused (definite invalid) before it is parsed (AD4). max_open_queue_entries_per_principal: open (non-terminal) queue entries one principal may hold; one more is 403 quota_exceeded naming the limit (AD5). max_mutations_per_principal_per_min: mutating requests one principal may make in any 60 s window; one more is 403 quota_exceeded (AD5). terminal_retention_s: terminal queue rows, and idempotency rows past their replay deadline, are collected after this long (AD5); events are never collected by this rule. The values are the amendment's guesses (no measurement); a change needs a new amendment.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_request_bytes",
+        "max_open_queue_entries_per_principal",
+        "max_mutations_per_principal_per_min",
+        "terminal_retention_s"
+      ],
+      "properties": {
+        "max_request_bytes": {
+          "const": 1048576
+        },
+        "max_open_queue_entries_per_principal": {
+          "const": 64
+        },
+        "max_mutations_per_principal_per_min": {
+          "const": 60
+        },
+        "terminal_retention_s": {
+          "const": 604800
         }
       }
     },
@@ -470,6 +496,12 @@
           "booking_completion_s": 600,
           "max_end_margin_s": 30
         },
+        "limits": {
+          "max_request_bytes": 1048576,
+          "max_open_queue_entries_per_principal": 64,
+          "max_mutations_per_principal_per_min": 60,
+          "terminal_retention_s": 604800
+        },
         "lease": {
           "default_ttl_s": 14400,
           "class_ceiling_s": {
@@ -615,6 +647,12 @@
           "booking_warning_s": 600,
           "booking_completion_s": 600,
           "max_end_margin_s": 30
+        },
+        "limits": {
+          "max_request_bytes": 1048576,
+          "max_open_queue_entries_per_principal": 64,
+          "max_mutations_per_principal_per_min": 60,
+          "terminal_retention_s": 604800
         },
         "lease": {
           "default_ttl_s": 14400,
