@@ -210,8 +210,10 @@ class HttpTransport:
         self._opener = opener or urllib.request.urlopen
 
     def request(self, endpoint: str, message: Mapping[str, object], timeout_s: float) -> Mapping[str, object]:
+        if not endpoint.lower().startswith(("http://", "https://")):
+            raise TransportFailure("controller endpoint must be http or https", retryable=False)
         payload = json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        request = urllib.request.Request(
+        request = urllib.request.Request(  # noqa: S310 -- endpoint scheme is checked as http or https in request() before the call
             endpoint,
             data=payload,
             headers={"Content-Type": "application/json", "Accept": "application/json"},
@@ -757,7 +759,7 @@ def validate_operation(message: Mapping[str, object]) -> None:
     _validate_admission(message.get("admission"))
     _validate_args(str(op), lane, args)
     admission = message["admission"]
-    assert isinstance(admission, Mapping)
+    assert isinstance(admission, Mapping)  # noqa: S101 -- type narrowing only; the value is validated just above, no security decision rests on the assert
     if op in {"acquire", "chat-load"} and args.get("pipeline_ref") is not None:
         pipeline = admission.get("pipeline")
         if not isinstance(pipeline, Mapping) or pipeline.get("pipeline_id") != args.get("pipeline_ref"):
@@ -1558,7 +1560,7 @@ def local_action_projection(
         "manifest_hash": None,
     }
     projected_args = projection["args"]
-    assert isinstance(projected_args, dict)
+    assert isinstance(projected_args, dict)  # noqa: S101 -- type narrowing only; the value is validated just above, no security decision rests on the assert
     projected_args.pop("approval_id", None)
     _validate_local_action_projection(projection)
     return projection

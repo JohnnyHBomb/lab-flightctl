@@ -35,8 +35,8 @@ def _load_denylist(path: Path) -> list[bytes]:
 
 def _tracked_files(root: Path) -> list[Path]:
     try:
-        result = subprocess.run(
-            ["git", "-C", str(root), "ls-files", "-z"],
+        result = subprocess.run(  # noqa: S603 -- argv list with shell=False, no untrusted input
+            ["git", "-C", str(root), "ls-files", "-z"],  # noqa: S607 -- fixed tool name resolved on PATH
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -67,7 +67,7 @@ def _portable_scan(root: Path) -> int:
         print("portable-tree check is unavailable", file=sys.stderr)
         return 1
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # noqa: S603 -- argv list with shell=False, no untrusted input
             [sys.executable, str(checker), str(root)],
             check=False,
             timeout=10,
