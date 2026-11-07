@@ -22,6 +22,9 @@ concurrency:
 jobs:
   external-denylist:
     runs-on: ubuntu-latest
+    # The secret lives in the `denylist` environment, whose deployment branches are limited to main, so a workflow
+    # pushed on any other branch cannot read it. pull_request_target and push-to-main both run with ref main.
+    environment: denylist
     timeout-minutes: 5
     permissions:
       contents: read
