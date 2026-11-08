@@ -173,3 +173,23 @@ def lane_occupancy(site, probe, lane_id, *, timeout_s):
     hash-verified, confirmed inventory.json of `site` (as load_site returns it), and its result is returned unchanged."""
     host_id, uuids, allow, cap, noise = _bind_lane(site, lane_id)
     return probe.occupancy(host_id, lane_id, uuids, noise_allowlist=allow, noise_cap_mib=cap, lane_noise_mib=noise, timeout_s=timeout_s)
+
+
+_PLACEHOLDER = _re.compile(r"@([A-Z][A-Z0-9_]*)@")
+_VALUE = _re.compile(r"[A-Za-z0-9._/+:=,-]{1,1024}")
+
+
+def render_unit(template, values) -> str:
+    """The text of a unit-file `template` with every @NAME@ placeholder (NAME: A-Z, 0-9 and _, a letter first) replaced by values[NAME].
+    `values` must name exactly the template's placeholders and each value must be 1 to 1024 characters of A-Za-z0-9._/+:=,- (so it can
+    neither end its line nor add a directive, a specifier or a variable): anything else is SiteConfigRefused. Nothing is read or written."""
+    if not isinstance(template, str) or not isinstance(values, dict):
+        raise TypeError("template must be a str and values a dict")
+    names = set(_PLACEHOLDER.findall(template))
+    if names != set(values):
+        raise SiteConfigRefused(f"unit values must name exactly the template's placeholders: no value for {sorted(names - set(values))}, "
+                                f"no placeholder for {[key for key in values if key not in names]!r:.200}")
+    for name, value in values.items():
+        if not isinstance(value, str) or not _VALUE.fullmatch(value):
+            raise SiteConfigRefused(f"unit value {name} must be 1 to 1024 characters from A-Za-z0-9._/+:=,-")
+    return _PLACEHOLDER.sub(lambda match: values[match[1]], template)

@@ -1,0 +1,13 @@
+# Starts the executor's enforcer one shot (the service of the same name) 1 s after the timer starts, then every 60 s.
+# No site value: this file is installed as it is, without the template suffix.
+
+[Unit]
+Description=Flightctl executor deadline enforcer, every 60 s
+
+[Timer]
+OnActiveSec=1s
+OnUnitActiveSec=60s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
