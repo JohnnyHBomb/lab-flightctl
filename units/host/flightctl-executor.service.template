@@ -1,13 +1,10 @@
-# Template only.  This file is intentionally not installable or activated by P2.
-# A later deployment package must substitute an approved command and state path.
+# The executor's deadline enforcer, one shot, started only by the timer of the same name.
+# Every site value is a placeholder, filled by flightctl.siteconfig.render_unit; none is written here.
 
 [Unit]
-Description=Flightctl host executor (inactive template)
+Description=Flightctl executor deadline enforcer (one shot)
 
 [Service]
-Type=simple
-ExecStart=@FLIGHTCTL_EXECUTOR_COMMAND@
-Restart=no
-
-[Install]
-WantedBy=multi-user.target
+Type=oneshot
+ExecStart=@FLIGHTCTL_PYTHON@ @FLIGHTCTL_CHECKOUT@/flightctl/executor_stdio.py --enforce --state @FLIGHTCTL_STATE@ --host-id @FLIGHTCTL_HOST_ID@ --site-dir @FLIGHTCTL_SITE_DIR@
+TimeoutStartSec=50s

@@ -26,3 +26,24 @@ unreachable transport or no time left) does the host verify and use that local c
 
 `lane_occupancy` takes a lane's host, card UUIDs and noise thresholds from the loaded `inventory.json` only: its bytes must still
 match the published sha256 and its `stage` must be `confirmed`. They never come from the probe's own output.
+
+## Units
+
+`render_unit(template, values)` (`flightctl/siteconfig.py`) fills the `@NAME@` placeholders of a unit template (`NAME` is capital
+letters, digits and `_`, starting with a letter) from the site's values and returns the text. `values` must name exactly the
+template's placeholders, and each value is 1 to 1024 characters of `A-Za-z0-9._/+:=,-`, so a value cannot end its line, add a
+directive or use a specifier or a variable. Values that do not match the placeholders, or a value outside that alphabet or length,
+raise `SiteConfigRefused`; a template that is not a `str` or values that are not a `dict` raise `TypeError`. It reads, writes and
+installs nothing: rendering, installing and enabling are the deployment's (A-ASM).
+
+The templates are in `units/host/`. Install each rendered file without the `.template` suffix as a user unit (`systemctl --user`)
+of the executor's account. User units run without a login session only if that account has linger (A6's probe decides whether it
+is needed).
+
+| Installed unit | Placeholders | What it does |
+| --- | --- | --- |
+| `flightctl-executor.timer` | none | starts the service 1 s after the timer starts, then every 60 s |
+| `flightctl-executor.service` | `FLIGHTCTL_PYTHON`, `FLIGHTCTL_CHECKOUT`, `FLIGHTCTL_STATE`, `FLIGHTCTL_HOST_ID`, `FLIGHTCTL_SITE_DIR` | the enforcer one shot (`Type=oneshot`, `TimeoutStartSec=50s`): the interpreter runs `flightctl/executor_stdio.py --enforce` from the checkout with the state path, host id and site directory; only the timer starts it |
+
+The workload units `flightctl-<lane_id>-g<generation>.service` (A6) and the idle inhibitors
+`flightctl-awake-<lane_id>-g<generation>.service` (A11) are transient units made by `systemd-run --user`: they are never templates.
