@@ -129,6 +129,7 @@ def test_timer_unit_runs_one_shot(tmp_path):
             if active == "failed" or (active == "inactive" and lock.exists()):  # a finished run may already be unloaded
                 break
             time.sleep(0.5)
+        assert active == "inactive", f"the service did not finish within 30 s: {active}"
         assert show(f"{UNIT}.service", "Result", "ExecMainStatus") == {"Result": "success", "ExecMainStatus": "0"}
         assert show(f"{UNIT}.timer", "ActiveState", "SubState") == {"ActiveState": "active", "SubState": "waiting"}
         assert lock.exists()  # the real enforcer ran: it takes its state lock first
