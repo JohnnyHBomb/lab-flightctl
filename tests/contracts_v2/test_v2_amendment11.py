@@ -1,7 +1,7 @@
 """Amendment 11 (brief prep for A5a3, A4ub, A5b1 and A5b2): A5a3 splits into the wire and A5a4 (executor_transport
 conformance); the A4 transport rows go to A5r; A5b1 splits in three (A5b1, A5b1s, A5b1c) with two renamed tests;
 A5b2 comes before A5b1c; A5b2's renew rows go to A7b; the max-end margin is a policy constant; the authority units
-move from A4ub to A7."""
+move from A4ub to A7. Amendment 15: + the A5b1 reserve-deadlines row for A5b2."""
 
 import ast
 import json
@@ -103,7 +103,7 @@ def test_a5b2_comes_before_a5b1c() -> None:
 
 def test_renew_rows_go_to_a7b() -> None:
     assert _rows("A5b2") == {"tests/sim/test_repro_beat_and_renew.py::test_repro_beat_and_renew": ("rewrite", "test_repro_beat_and_renew"),  # Amendment 15: + the A5b1 deadlines row
-                             "tests/authority/test_a5b1_executor_client.py::test_release_identity_matches_reserve (the reserve deadlines assertion)": ("rewrite", "test_beat_loop_keeps_lease_alive_30min_sim")}
+                             "tests/authority/test_a5b1_executor_client.py::test_release_identity_matches_reserve (the reserve deadlines assertion)": ("rewrite", "tests/authority/test_a5b2_beat_renew.py::test_beat_loop_keeps_lease_alive_30min_sim")}
     a7b = _rows("A7b")
     assert {k.split(" (", 1)[0] for k in a7b} == {"tests/authority/test_revision2.py", "tests/client/test_vectors.py",
                                                   "tests/contracts/vectors/cli.json", "tests/authority/test_review3.py"}
