@@ -2017,7 +2017,7 @@ class Authority:
         if self.executor_protocol != 2:
             return []
         try:
-            with self.store.transaction() as connection:  # read the live leases and their lanes under the store's lock, before any call leaves the process
+            with self.store.transaction(immediate=False) as connection:  # read the live leases and their lanes under the store's lock, before any call leaves the process
                 live = [(lease, self.store.get_lane(lease["lane"]["lane_id"], connection=connection) or {}) for lease, status in self.store.leases(connection=connection)
                         if status == "acknowledged" and lease.get("state") in {"starting", "running"}]
         except (StoreError, sqlite3.DatabaseError):  # unreadable now: nothing is beaten this round, the next round tries again
