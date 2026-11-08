@@ -139,7 +139,7 @@ def test_clock_twins_registered_for_conformance() -> None:
     found = dict(registry.implementations("clock"))
     assert sorted(found) == ["fake", "real"]
 
-    real = found["real"]("host-1")
+    real = found["real"]("host-local")  # Amendment 14: the real twin refuses a remote target
     assert isinstance(real, RealClock)
     assert real.utc().tzinfo is timezone.utc
     assert real.boot_id() == Path(BOOT_ID_PATH).read_text(encoding="utf-8").strip()

@@ -13,12 +13,18 @@ skipped with the slice that owes it, never silently passed.
 Amendment 2 (Sol 6.1 cold review): implementations also expose the explicit identities the ports now take:
 test_lane (workload_runner, session_gateway), test_parent_lease (session_gateway) and test_noise_allowlist
 (occupancy_probe: the lane's approved desktop identities, [] when the target lane has none).
+
+Amendment 14: target() is FLIGHTCTL_CONFORMANCE_TARGET normalised (host_identity.normalise_target: a bare host name
+becomes its resolvable FQDN; 'host-local' is unchanged).
 """
 
 from __future__ import annotations
 
+import functools
 import os
 from typing import Any, Callable
+
+from .host_identity import normalise_target
 
 Factory = Callable[[str | None], Any]
 _REGISTRY: dict[str, dict[str, Factory]] = {}
@@ -41,5 +47,10 @@ def implementations(port: str) -> list[tuple[str, Factory]]:
     return sorted(_REGISTRY.get(port, {}).items())
 
 
+@functools.lru_cache(maxsize=8)
+def _normalised(raw: str | None) -> str | None:
+    return normalise_target(raw)
+
+
 def target() -> str | None:
-    return os.environ.get("FLIGHTCTL_CONFORMANCE_TARGET") or None
+    return _normalised(os.environ.get("FLIGHTCTL_CONFORMANCE_TARGET") or None)

@@ -15,10 +15,15 @@
   Cases that depend on the target's friend-session flags declare it with @pytest.mark.friend_flags("off"|"on"); the
   target's state is FLIGHTCTL_CONFORMANCE_FRIEND_FLAGS (default "off", which is every R1 target), the other state is
   recorded "n/a", and the case body asserts the implementation's read-back flag state equals the declared one.
+* Amendment 14 (G3 sweep 7 Nov, F1 and F4): every real/dryrun evidence file records the identity observed on the target
+  ("observed": hostname and kernel boot id, read through the twins' transport; see host_identity.py). In strict mode a
+  real/dryrun case of a listed port FAILS at setup when that identity cannot be read or is not the target's, and
+  "strict" is true only for the listed ports. The gauge counts a file only if host_identity.evidence_problems is empty.
 """
 
 from __future__ import annotations
 
+import functools
 import importlib
 import json
 import os
@@ -28,7 +33,7 @@ from pathlib import Path
 
 import pytest
 
-from . import registry
+from . import host_identity, registry
 
 _RESULTS: dict[tuple[str, str], dict[str, str]] = {}
 
@@ -91,10 +96,27 @@ def port_params(port: str) -> list:
     return params
 
 
+@functools.lru_cache(maxsize=4)
+def target_identity(host: str) -> tuple[dict | None, tuple[str, ...]]:
+    """(observed identity or None, reasons it does not prove `host`), read once per session."""
+    try:
+        observed = host_identity.observe(host)
+    except OSError as exc:
+        return None, (f"cannot read the target's identity: {exc}",)
+    return observed, tuple(host_identity.identity_problems(host, observed))
+
+
 def pytest_runtest_setup(item: pytest.Item) -> None:
     missing = item.get_closest_marker("strict_missing")
     if missing is not None:
         pytest.fail(f"STRICT conformance: no real twin of {missing.args[0]} is registered", pytrace=False)
+    marker, callspec = item.get_closest_marker("port"), getattr(item, "callspec", None)
+    kind = callspec.params.get("kind") if callspec else None
+    host = registry.target()
+    if marker is not None and kind in {"real", "dryrun"} and host and marker.args[0] in strict_ports():
+        problems = target_identity(host)[1]
+        if problems:
+            pytest.fail(f"STRICT conformance: evidence would not be from {host}: {'; '.join(problems)}", pytrace=False)
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -142,6 +164,18 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
     _RESULTS.setdefault((port, kind), {})[item.originalname] = result
 
 
+def evidence_record(port: str, kind: str, host: str, commit: str, stamp: str, cases: dict[str, str]) -> dict:
+    strict = port in strict_ports()
+    record = {"port": port, "implementation": kind, "host": host, "commit": commit, "at": stamp, "strict": strict, "cases": cases}
+    problems: tuple[str, ...] = ()
+    if kind != "fake":
+        record["observed"], problems = target_identity(host)
+        if problems:
+            record["identity_problems"] = list(problems)
+    record["proven"] = strict and kind != "fake" and not problems and all(v in {"passed", "n/a"} for v in cases.values())
+    return record
+
+
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     evidence = os.environ.get("FLIGHTCTL_CONFORMANCE_EVIDENCE")
     host = registry.target()
@@ -154,8 +188,6 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = Path(evidence)
     out.mkdir(parents=True, exist_ok=True)
-    strict = bool(strict_ports())
     for (port, kind), cases in sorted(_RESULTS.items()):
-        record = {"port": port, "implementation": kind, "host": host, "commit": commit, "at": stamp, "strict": strict, "cases": cases,
-                  "proven": strict and kind != "fake" and all(v in {"passed", "n/a"} for v in cases.values())}
+        record = evidence_record(port, kind, host, commit, stamp, cases)
         (out / f"conformance-{port}-{kind}-{host}-{stamp}.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")

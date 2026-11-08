@@ -1,0 +1,14 @@
+{
+  "_source": "G3 sweep 7 Nov 2026, finding F1: the ssh-form real clock evidence as written (host-neutral copy; the target renamed host-b). The runner was host-a; the boot id the twin read was host-a's.",
+  "at": "20261107T194907Z",
+  "cases": {
+    "test_boot_id_is_the_host_boot_not_the_process": "passed",
+    "test_monotonic_never_goes_backwards_and_utc_is_aware": "passed"
+  },
+  "commit": "1f08f4435642b0eb2ecbc9a7ab2723defd112ed6",
+  "host": "host-b",
+  "implementation": "real",
+  "port": "clock",
+  "proven": true,
+  "strict": true
+}

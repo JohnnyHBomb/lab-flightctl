@@ -12,9 +12,10 @@ import pytest
 from flightctl.clock import RealClock
 from flightctl.executor_stdio import MAX_REQUEST_BYTES
 from flightctl.transport import LocalSubprocessTransport, SshForcedCommandTransport
+from tests.conformance.host_identity import normalise_target
 
 ENTRY = str(Path(__file__).resolve().parents[2] / "flightctl" / "executor_stdio.py")
-TARGET = os.environ.get("FLIGHTCTL_CONFORMANCE_TARGET", "")
+TARGET = normalise_target(os.environ.get("FLIGHTCTL_CONFORMANCE_TARGET")) or ""  # Amendment 14: bare name -> FQDN
 
 
 def _reserve(generation: int, token: str) -> dict:
