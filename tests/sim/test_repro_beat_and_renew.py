@@ -1,24 +1,13 @@
-import pytest
-
-from tests.sim.rig import SimSite
+from tests.authority.test_a5b2_beat_renew import ACQUIRE, Site, rpc
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="A5b2: nothing ever sends a beat, so the executor quarantines a protected lease as heartbeat-stale, and renew right after acquire is 409 approved maximum reached",
-)
 def test_repro_beat_and_renew(tmp_path):
-    site = SimSite(
-        tmp_path,
-        {"host-ctl": {"boot_id": "boot-ctl", "monotonic_start": 1000.0}},
-        controller_host="host-ctl",
-        lanes={"lane-gpu0": "host-ctl"},
-    )
-    acquired = site.rpc("acquire", {"class": "batch", "purpose": "simulated work", "est_s": 600, "max_s": 3600}, lane="lane-gpu0")
+    site = Site(tmp_path)
+    acquired = rpc(site.authority, "acquire-1", "acquire", {**ACQUIRE, "class": "batch"})
     assert acquired["status"] == 200, acquired
-    site.advance(900)
-    state = site.executor_lane("lane-gpu0")
-    assert state["state"] in {"starting", "running"}, state
-    renewed = site.rpc("renew", {"token": acquired["data"]["token"], "extend_s": 60}, lane="lane-gpu0")
+    for minute in range(1, 16):
+        site.advance(60)
+        assert [beat["ok"] for beat in site.authority.beat_leases()] == [True], minute
+        assert site.host.enforce_deadlines() == [], minute
+    renewed = rpc(site.authority, "renew-1", "renew", {"token": acquired["data"]["token"], "extend_s": 60})
     assert renewed["status"] == 200, renewed

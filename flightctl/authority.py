@@ -123,7 +123,8 @@ class Authority:
     examples.  Existing records are never overwritten on restart; only absent
     lane definitions are bootstrapped.  ``executor_protocol`` 1 (the default)
     speaks the v1 executor wire through ``transport.request``; 2 speaks
-    protocol v2 through an ExecutorTransport's ``call``.
+    protocol v2 through an ExecutorTransport's ``call`` and keeps its live
+    leases alive with ``beat_leases`` / ``run_beat_loop``.
     """
 
     def __init__(
@@ -148,6 +149,9 @@ class Authority:
         self.store = store if isinstance(store, SQLiteStore) else SQLiteStore(store, site_id=site_id or "site-a", controller_id=controller_id or "controller-a")
         self.transport = transport
         self.executor_protocol = executor_protocol
+        self.ceiling_margin_s = 30.0  # policy.timing.max_end_margin_s: max-end goes out this long before approved_max_end; a reserve or ceiling round trip over it sends a ceiling
+        self.protected_stale_s = 600  # policy.timing.protected_stale_s and preemptible_stale_s: the heartbeat-stale durations sent
+        self.preemptible_stale_s = 180
         self.clock = clock or RealClock()
         self.inventory = dict(inventory or {})
         self.site_id = str(site_id or self.inventory.get("site_id") or getattr(self.store, "site_id", "site-a"))
@@ -753,56 +757,87 @@ class Authority:
         """The protocol-2 request for the lease; its identity comes from the lease record (stored before the reserve), so a new authority sends the same one."""
 
         now = self._utc()
-        sent_at = _time_text(now)
-        protected = lease["class"] in PROTECTED_CLASSES
-        tenant = (lane.get("policy") or {}).get("external_tenant") or {"policy": "collision", "lane_noise_mib": 1024, "noise_cap_mib": 64, "noise_allowlist": []}
         message: dict[str, Any] = {
             "schema_version": 2,
             "kind": kind,
             "controller_request_id": f"executor-{uuid.uuid4().hex}",
             "controller_id": self.controller_id,
-            "sent_at": sent_at,
+            "sent_at": _time_text(now),
             "identity": {"lane": dict(lease["lane"]), "generation": int(lease["generation"]), **{key: lease[key] for key in ("lease_id", "token_sha256", "run_id", "unit")}},
-            "execution_policy": {"class": lease["class"], "protected": protected, "preemptible": not protected, "grace_s": 0, "work_mode": "holder", "holder_binding": "client-heartbeat", "external_tenant": tenant},
         }
+        if kind in {"reserve", "stop"}:  # a beat and a ceiling name the lease by its identity alone
+            protected = lease["class"] in PROTECTED_CLASSES
+            tenant = (lane.get("policy") or {}).get("external_tenant") or {"policy": "collision", "lane_noise_mib": 1024, "noise_cap_mib": 64, "noise_allowlist": []}
+            message["execution_policy"] = {"class": lease["class"], "protected": protected, "preemptible": not protected, "grace_s": 0, "work_mode": "holder", "holder_binding": "client-heartbeat", "external_tenant": tenant}
         if kind == "reserve":
-            message["deadlines"] = [{"kind": "max-end", "in_s": max(0, int((_parse_time(lease["max_end"]) - now).total_seconds())), "sender_utc": sent_at}]
+            message["deadlines"] = [self._relative_deadline(name, lease, now) for name in ("max-end", "expiry", "heartbeat-stale")]
             message["awake"] = {"hold_inhibitor": False}
+        elif kind == "beat":
+            message["deadlines"] = [self._relative_deadline(name, lease, now) for name in ("expiry", "heartbeat-stale")]
+        elif kind == "ceiling":
+            message["max_end"] = self._relative_deadline("max-end", lease, now)
         elif kind == "stop":
             authority = stop_authority or {"mode": "controller-match", "approval_id": None}
             message["stop_authority"] = {"mode": authority["mode"], "approval_id": authority.get("approval_id"), "reason": f"authority stop: {authority['mode']}"}
         return message
+
+    def _relative_deadline(self, kind: str, lease: Mapping[str, Any], now: datetime) -> dict[str, Any]:
+        """A deadline as a duration from ``now`` in whole seconds, rounded down, never below 0: max-end is approved_max_end less ``ceiling_margin_s``, expiry the rolling max_end, heartbeat-stale the class's stale duration."""
+
+        if kind == "max-end":
+            seconds = (_parse_time(lease["approved_max_end"]) - now).total_seconds() - self.ceiling_margin_s
+        elif kind == "expiry":
+            seconds = (_parse_time(lease["max_end"]) - now).total_seconds()
+        else:
+            seconds = self.protected_stale_s if lease["class"] in PROTECTED_CLASSES else self.preemptible_stale_s
+        return {"kind": kind, "in_s": max(0, int(seconds)), "sender_utc": _time_text(now)}
 
     def _executor_outcome(self, lane: Mapping[str, Any], lease: Mapping[str, Any], kind: str, *, stop_authority: Mapping[str, Any] | None = None) -> tuple[str, Mapping[str, Any] | None, str, Mapping[str, Any] | None]:
         """One executor call as (outcome, reply, why, cause); outcome is "ok", "refused" (protocol 2: an answered reserve that refuses definitely, so the host wrote nothing) or "uncertain".
 
         Protocol 1 is ``_executor_call`` unchanged.  In protocol 2 only a reply with schema_version 2 and this message's kind, request id and identity answers the call; a call that is
         not answered is uncertain, and so is an answer that is neither a definite success nor a definite reserve refusal.  The cause is the answered reply's ``error`` or the
-        ``error`` of a transport result whose status is not ok; None otherwise.
+        ``error`` of a transport result whose status is not ok; None otherwise.  A reserve answered with success after a round trip of more than ``ceiling_margin_s`` is followed at once
+        by shorten-only ceilings (the host's max-end may be late by that round trip), one more while the last round trip stays over the margin, at most 3; the outcome is then the last
+        ceiling's, or uncertain when the third was still over the margin.
         """
 
         if self.executor_protocol != 2:
             ok, reply, why = self._executor_call(lane, lease, kind, stop_authority=stop_authority)
             return ("ok" if ok else "uncertain"), reply, why, None
+        outcome, reply, why, cause, round_trip_s = self._executor_exchange(lane, lease, kind, stop_authority)
+        ceilings = 0
+        while kind == "reserve" and outcome == "ok" and round_trip_s > self.ceiling_margin_s:
+            if ceilings == 3:
+                return "uncertain", reply, "executor ceiling round trips stayed over the margin", cause
+            outcome, reply, why, cause, round_trip_s = self._executor_exchange(lane, lease, "ceiling", None)
+            ceilings += 1
+        return outcome, reply, why, cause
+
+    def _executor_exchange(self, lane: Mapping[str, Any], lease: Mapping[str, Any], kind: str, stop_authority: Mapping[str, Any] | None) -> tuple[str, Mapping[str, Any] | None, str, Mapping[str, Any] | None, float]:
+        """One protocol-2 call of ``_executor_outcome`` as (outcome, reply, why, cause, round_trip_s), the last being the authority clock's monotonic time from just before ``transport.call`` to its return (0.0 if none returned)."""
+
         if self.transport is None:
-            return "uncertain", None, "executor transport unavailable", None
+            return "uncertain", None, "executor transport unavailable", None, 0.0
         try:
             message = self._executor_message(lane, lease, kind, stop_authority)
+            began = self._monotonic()
             result = self.transport.call(lane["host_id"], message, timeout_s=30.0)
         except Exception:
-            return "uncertain", None, "executor call failed", None
+            return "uncertain", None, "executor call failed", None, 0.0
+        round_trip_s = self._monotonic() - began
         if not isinstance(result, Mapping) or result.get("status") != "ok":
             error = result.get("error") if isinstance(result, Mapping) else None
-            return "uncertain", None, "executor outcome is not a confirmed response", error if isinstance(error, Mapping) else None
+            return "uncertain", None, "executor outcome is not a confirmed response", error if isinstance(error, Mapping) else None, round_trip_s
         reply = result.get("reply")
         answered = isinstance(reply, Mapping) and reply.get("schema_version") == 2 and reply.get("kind") == kind and reply.get("controller_request_id") == message["controller_request_id"] and reply.get("echoed_identity") == message["identity"]
         if not answered:
-            return "uncertain", None, "executor reply does not answer the request", None
+            return "uncertain", None, "executor reply does not answer the request", None, round_trip_s
         cause = reply.get("error") if isinstance(reply.get("error"), Mapping) else None
-        if reply.get("ok") is True and reply.get("definite") is True and reply.get("observed_state") == ("reserved" if kind == "reserve" else "free"):
-            return "ok", reply, "ok", cause
+        if reply.get("ok") is True and reply.get("definite") is True and reply.get("observed_state") == ("free" if kind == "stop" else "reserved"):
+            return "ok", reply, "ok", cause, round_trip_s
         refused = kind == "reserve" and reply.get("ok") is False and reply.get("definite") is True
-        return ("refused" if refused else "uncertain"), reply, f"executor {kind} was {'refused' if refused else 'not confirmed'}", cause
+        return ("refused" if refused else "uncertain"), reply, f"executor {kind} was {'refused' if refused else 'not confirmed'}", cause, round_trip_s
 
     def _executor_error(self, code: str, why: str, cause: Mapping[str, Any] | None) -> dict[str, Any]:
         """The error of the 503 for a failed executor call; protocol 2 always carries a cause (None when no typed error explains it), protocol 1 has no such key."""
@@ -1372,9 +1407,14 @@ class Authority:
             extension = request["args"].get("extend_s")
             if not isinstance(extension, int) or extension < 1:
                 raise _Reject(403, "invalid", "renew extension must be positive", failure_class="client")
-            proposed = _parse_time(lease["max_end"]) + timedelta(seconds=extension)
             approved = _parse_time(lease["approved_max_end"])
-            if proposed > approved:
+            if self.executor_protocol == 2:  # rolling inside the ceiling: the expiry becomes now + extension (earlier or later), at most approved_max_end; refused only once now has reached it
+                now = self._utc()
+                proposed, past = min(now + timedelta(seconds=extension), approved), now >= approved
+            else:
+                proposed = _parse_time(lease["max_end"]) + timedelta(seconds=extension)
+                past = proposed > approved
+            if past:
                 raise _Reject(409, "conflict", "approved maximum reached", failure_class="conflict")
             lease["max_end"] = _time_text(proposed)
             lease["heartbeat_at"] = _time_text(self._utc())
@@ -1967,6 +2007,34 @@ class Authority:
                 self.store.put_event(self._event(kind="reconcile", state="quarantined", request_id=f"deadline-{lease['lease_id']}", context=context, lane=lease["lane"], generation=lease["generation"], reason="deadline expired without cleanup proof", data={"lease_id": lease["lease_id"]}), connection=connection)
                 changed.append(lease["lease_id"])
         return changed
+
+    def beat_leases(self) -> list[dict[str, Any]]:
+        """Protocol 2: one beat for each live lease (an acknowledged reservation in state starting or running) with its renewed expiry and heartbeat-stale durations; protocol 1 sends none.
+
+        Returns one dict per beat sent (``lease_id``, ``ok``: the host answered with a definite success, ``why``); a beat that fails is reported, never raised.
+        """
+
+        if self.executor_protocol != 2:
+            return []
+        try:
+            with self.store.transaction(immediate=False) as connection:  # read the live leases and their lanes under the store's lock, before any call leaves the process
+                live = [(lease, self.store.get_lane(lease["lane"]["lane_id"], connection=connection) or {}) for lease, status in self.store.leases(connection=connection)
+                        if status == "acknowledged" and lease.get("state") in {"starting", "running"}]
+        except (StoreError, sqlite3.DatabaseError):  # unreadable now: nothing is beaten this round, the next round tries again
+            return []
+        beats = []
+        for lease, lane in live:
+            outcome, _reply, why, _cause = self._executor_outcome(lane, lease, "beat")
+            beats.append({"lease_id": lease["lease_id"], "ok": outcome == "ok", "why": why})
+        return beats
+
+    def run_beat_loop(self, stop: threading.Event, interval_s: float | None = None) -> None:
+        """Call ``beat_leases`` at once and then every ``interval_s`` seconds (default: the policy's admission heartbeat_s) until ``stop`` is set; the wait is real time and ends as soon as ``stop`` is set."""
+
+        interval = float(self.policy["admission"]["heartbeat_s"] if interval_s is None else interval_s)
+        while not stop.is_set():
+            self.beat_leases()
+            stop.wait(interval)
 
     # ---- public boundary -------------------------------------------------
 
