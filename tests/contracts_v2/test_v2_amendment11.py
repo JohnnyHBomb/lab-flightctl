@@ -102,7 +102,8 @@ def test_a5b2_comes_before_a5b1c() -> None:
 
 
 def test_renew_rows_go_to_a7b() -> None:
-    assert _rows("A5b2") == {"tests/sim/test_repro_beat_and_renew.py::test_repro_beat_and_renew": ("rewrite", "test_repro_beat_and_renew")}
+    assert _rows("A5b2") == {"tests/sim/test_repro_beat_and_renew.py::test_repro_beat_and_renew": ("rewrite", "test_repro_beat_and_renew"),  # Amendment 15: + the A5b1 deadlines row
+                             "tests/authority/test_a5b1_executor_client.py::test_release_identity_matches_reserve (the reserve deadlines assertion)": ("rewrite", "test_beat_loop_keeps_lease_alive_30min_sim")}
     a7b = _rows("A7b")
     assert {k.split(" (", 1)[0] for k in a7b} == {"tests/authority/test_revision2.py", "tests/client/test_vectors.py",
                                                   "tests/contracts/vectors/cli.json", "tests/authority/test_review3.py"}
