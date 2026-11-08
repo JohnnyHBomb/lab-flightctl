@@ -73,7 +73,8 @@ GATES EVERY PACKET MUST PASS (gauge reruns each one itself and files the evidenc
                   real/dryrun evidence file records "observed" {hostname, boot_id}, read on the target through the twins'
                   transport (tests/conformance/host_identity.py). In strict mode a listed port's real/dryrun case FAILS at
                   setup when that identity cannot be read or is not the target's, and "strict" is true only for the listed
-                  ports. The gauge counts a file only if host_identity.evidence_problems() is empty. TARGET is normalised
+                  ports. The gauge counts a file only if host_identity.evidence_problems() is empty; a host-local file
+                  counts for the host whose kernel hostname is observed.hostname (first DNS label). TARGET is normalised
                   (a bare host name becomes its resolvable FQDN). The real clock twin refuses a remote target: clock G3
                   runs host-local on each host.
   G4 REAL TIME    At least one test per seam the packet touches uses real time and real processes (marker realtime):

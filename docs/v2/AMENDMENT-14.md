@@ -1,7 +1,8 @@
 # Amendment 14: G3 evidence must come from the host it names
 
 - **Date:** 8 Nov 2026. **Approved:** by the owner, as drift-plan item P15 (v1.8 retrospective, 7 Nov 2026). It needs
-  review before use, as `FROZEN.md` requires.
+  review before use, as `FROZEN.md` requires. Revision 2: blind Fable review APPROVE WITH NITS, findings 1-4 taken;
+  5 (boot_id != runner) noted, not taken.
 - **Basis:** the G3 debt sweep on main `1f08f44` (7 Nov 2026), findings F1 and F4, and its A4 pilot addendum. Stacked on
   Amendment 13. It changes the G3 rule in `GATES.txt` (what strict evidence the gauge counts), so it is an amendment,
   not only a harness fix. No packet, port, dependency or named test of `SLICES.md` changes.
@@ -28,7 +29,10 @@
    label. An IP-address target never matches. `"strict"` is true only for the listed ports (F4).
 3. **The gauge's validator.** The gauge counts a G3 evidence file only if `host_identity.evidence_problems(record)` is
    empty: strict, a real or dryrun twin, every case passed or n/a, proven, and an observed identity that matches the
-   target. Evidence written before this amendment has no `observed` and does not count; re-run it.
+   target. Evidence written before this amendment has no `observed` and does not count; re-run it. A host-local file
+   counts for the host whose kernel hostname is `observed.hostname` (first DNS label); `evidence_problems(record,
+   expected_host=...)` applies the match rule to a host-local file for the host the gauge wants evidence for. An
+   invalid TARGET (one the ssh runner refuses, such as a bracketed IPv6 literal) fails with the same STRICT message.
 4. **The real clock twin refuses a remote target** with a clear error (`RemoteClockTarget`). Clock G3 runs host-local on
    each host it serves. Host-local runs are unchanged. The A1 test
    `tests/clock/test_a1_clock.py::test_clock_twins_registered_for_conformance` built the real twin with a remote target
@@ -36,11 +40,18 @@
 5. **TARGET normalisation.** `registry.target()` (and the A4 transport test) normalise `FLIGHTCTL_CONFORMANCE_TARGET`:
    `host-local` is unchanged; a bare host name (no dot, not an IP) in `host` or `user@host` becomes the resolver's
    canonical name when that is the bare name plus a domain; otherwise, or on a lookup error, the target is unchanged.
+   The runner's resolver must return the reachable FQDN for the bare name; when it does not, set TARGET to the FQDN
+   yourself (ssh aliases in a user's ssh config are not consulted).
 6. **Traceability.** `GATES.txt` G3 gains the Amendment 14 paragraph; new CONFORMANCE.tsv rows `amd14-1` to `amd14-3`.
+
+## Consequences
+- The 7 Nov pilot sweep's files predate the rule and do not count under it; the lead re-runs the pilot sweep under
+  Amendment 14 as its first use (lead decision 8 Nov); until then the sweep PROOF is historical.
 
 ## Checks
 `tests/contracts_v2/test_v2_amendment14.py`: the fixture
 `tests/contracts_v2/captures/g3-vacuous-clock-20261107.json` (the F1 file, host-neutral) fails the validator, both as
 written and with the runner's identity recorded; matching evidence passes; the clock factory refuses a remote target;
-normalisation with a synthetic resolver; strict per port; a real host-local strict clock run writes evidence that the
+normalisation with a synthetic resolver; strict per port; host-local files checked against an expected host;
+an invalid TARGET fails with the STRICT message; a real host-local strict clock run writes evidence that the
 validator accepts; the G3 text and rows are pinned. All fail on `1f08f44` and pass here.

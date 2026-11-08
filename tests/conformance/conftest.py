@@ -101,7 +101,7 @@ def target_identity(host: str) -> tuple[dict | None, tuple[str, ...]]:
     """(observed identity or None, reasons it does not prove `host`), read once per session."""
     try:
         observed = host_identity.observe(host)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:  # ValueError: a TARGET the ssh runner refuses (e.g. a bracketed IPv6 literal)
         return None, (f"cannot read the target's identity: {exc}",)
     return observed, tuple(host_identity.identity_problems(host, observed))
 

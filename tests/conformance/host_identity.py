@@ -8,9 +8,12 @@ accepts a file only if that identity matches the target it names.
 TARGET normalisation: 'host-local' stays as it is. For 'host' or 'user@host', a bare host name (no dot, not an IP
 address) becomes the resolver's canonical name when that name is the bare name plus a domain (bare 'host-a' ->
 'host-a.example.net'); anything else, or a lookup error, leaves the target unchanged. The default resolver is
-getaddrinfo with AI_CANONNAME, which follows the host's resolver search domains.
+getaddrinfo with AI_CANONNAME, which follows the host's resolver search domains. The runner's resolver must return
+the reachable FQDN for the bare name; when it does not, set TARGET to the FQDN yourself.
 
-Identity match: host-local evidence must carry the local identity (the harness reads it on the runner). A remote
+Identity match: host-local evidence must carry the local identity (the harness reads it on the runner), and it counts
+for the host whose kernel hostname is observed.hostname (first DNS label); evidence_problems(record, expected_host=...)
+checks that against the host the gauge wants evidence for. A remote
 target matches when its host part (without user@) equals the observed hostname, or their first DNS labels are equal
 (case-insensitive): 'host-a.example.net' matches a kernel hostname 'host-a'. An IP-address target never matches;
 name the host.
@@ -108,8 +111,9 @@ def identity_problems(target: str, observed: Any) -> list[str]:
     return problems
 
 
-def evidence_problems(record: Mapping[str, Any]) -> list[str]:
-    """Why the gauge must NOT count this conformance evidence file for G3 (empty list = it counts)."""
+def evidence_problems(record: Mapping[str, Any], expected_host: str | None = None) -> list[str]:
+    """Why the gauge must NOT count this conformance evidence file for G3 (empty list = it counts). With expected_host,
+    a host-local file must also have been observed on that host (hostname_matches)."""
     problems = []
     if record.get("strict") is not True:
         problems.append("not strict")
@@ -124,5 +128,10 @@ def evidence_problems(record: Mapping[str, Any]) -> list[str]:
     if not isinstance(target, str) or not target:
         problems.append("no target host")
     else:
-        problems += identity_problems(target, record.get("observed"))
+        identity = identity_problems(target, record.get("observed"))
+        if not identity and target == "host-local" and expected_host is not None:
+            seen = record["observed"]["hostname"]
+            if not hostname_matches(expected_host, seen):
+                identity.append(f"host-local evidence was observed on {seen!r}, not {expected_host!r}")
+        problems += identity
     return problems

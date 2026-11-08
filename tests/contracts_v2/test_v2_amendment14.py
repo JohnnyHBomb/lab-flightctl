@@ -121,10 +121,28 @@ def test_strict_run_refuses_a_target_whose_identity_it_cannot_observe(tmp_path: 
     assert record["proven"] is False and record["observed"] is None and record["identity_problems"] and evidence_problems(record)
 
 
+def test_host_local_evidence_counts_only_for_the_observed_host() -> None:
+    local = dict(_vacuous(), host="host-local", observed={"hostname": "host-b", "boot_id": BOOT_B})
+    assert evidence_problems(local) == [] and evidence_problems(local, expected_host="host-b.example.net") == []
+    assert evidence_problems(local, expected_host="host-a") == ["host-local evidence was observed on 'host-b', not 'host-a'"]
+    remote = dict(_vacuous(), observed={"hostname": "host-b", "boot_id": BOOT_B})
+    assert evidence_problems(remote, expected_host="host-a") == []  # remote files are matched against their own target
+
+
+def test_strict_run_fails_cleanly_on_a_target_the_ssh_runner_refuses(tmp_path: Path) -> None:
+    run = _pytest({"FLIGHTCTL_CONFORMANCE_STRICT": "1", "FLIGHTCTL_CONFORMANCE_PORTS": "clock",
+                   "FLIGHTCTL_CONFORMANCE_TARGET": "[2001:db8::1]"}, tmp_path, "tests/conformance/test_clock_and_commands.py", "-k", "clock-")
+    assert run.returncode == 1 and "STRICT conformance: evidence would not be from [2001:db8::1]" in run.stdout, run.stdout[-800:]
+    assert "INTERNALERROR" not in run.stdout + run.stderr
+    (evidence,) = tmp_path.glob("conformance-clock-real-*.json")
+    assert json.loads(evidence.read_text(encoding="utf-8"))["proven"] is False
+
+
 def test_g3_rule_and_rows_are_pinned() -> None:
     g3 = GATES.split("G3 REAL TWIN", 1)[1].split("G4 REAL TIME", 1)[0]
     for phrase in ("Amendment 14", "\"observed\" {hostname, boot_id}", "host_identity.evidence_problems() is empty",
-                   "\"strict\" is true only for the listed", "The real clock twin refuses a remote target"):
+                   "\"strict\" is true only for the listed", "The real clock twin refuses a remote target",
+                   "a host-local file counts for the host whose kernel hostname is observed.hostname (first DNS label)"):
         assert phrase in " ".join(g3.split()), phrase
     rows = {l.split("\t")[0]: l.split("\t") for l in CONFORMANCE.splitlines() if l.startswith("amd14-")}
     assert sorted(rows) == ["amd14-1", "amd14-2", "amd14-3"] and all(r[3] == "contract-fixed" for r in rows.values())
