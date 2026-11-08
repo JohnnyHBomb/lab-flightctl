@@ -69,6 +69,14 @@ GATES EVERY PACKET MUST PASS (gauge reruns each one itself and files the evidenc
                   Each case is attributed to its own port (port marker), never to a module. Read-only probes need no
                   lane; anything that starts a process on a GPU host runs under a lane held through the CURRENT
                   authority (legacy lanes.sh until that lane is live).
+                  Amendment 14 (G3 sweep 7 Nov, F1 and F4, measured): evidence must come from the host it names. Every
+                  real/dryrun evidence file records "observed" {hostname, boot_id}, read on the target through the twins'
+                  transport (tests/conformance/host_identity.py). In strict mode a listed port's real/dryrun case FAILS at
+                  setup when that identity cannot be read or is not the target's, and "strict" is true only for the listed
+                  ports. The gauge counts a file only if host_identity.evidence_problems() is empty; a host-local file
+                  counts for the host whose kernel hostname is observed.hostname (first DNS label). TARGET is normalised
+                  (a bare host name becomes its resolvable FQDN). The real clock twin refuses a remote target: clock G3
+                  runs host-local on each host.
   G4 REAL TIME    At least one test per seam the packet touches uses real time and real processes (marker realtime):
                   real subprocess/pipe/socket/TLS/HTTP, real monotonic clock, no FakeClock. Evidence: its output with
                   wall-clock durations.
