@@ -92,7 +92,7 @@ def test_release_identity_matches_reserve(tmp_path):
     stored = site.authority().store.get_lease(lease_id=lease["lease_id"])[0]
     assert all(stored[key] == lease[key] == identity[key] for key in ("run_id", "unit", "token_sha256"))
     assert (reserve["schema_version"], reserve["controller_id"], reserve["sent_at"], reserve["awake"]) == (2, "controller-a", "2026-10-01T12:00:00Z", {"hold_inhibitor": False})
-    assert reserve["deadlines"] == [{"kind": "max-end", "in_s": 3600, "sender_utc": reserve["sent_at"]}]
+    assert sorted(reserve["deadlines"], key=lambda item: item["kind"]) == [{"kind": kind, "in_s": in_s, "sender_utc": reserve["sent_at"]} for kind, in_s in (("expiry", 3600), ("heartbeat-stale", 600), ("max-end", 3570))]
     assert reserve["execution_policy"] == {"class": "batch", "protected": True, "preemptible": False, "grace_s": 0, "work_mode": "holder", "holder_binding": "client-heartbeat",
                                            "external_tenant": {"policy": "collision", "lane_noise_mib": 1024, "noise_cap_mib": 64, "noise_allowlist": []}}
     released = rpc(site.authority(), "release-1", "release", {"token": data["token"]})  # a new authority on the same database
