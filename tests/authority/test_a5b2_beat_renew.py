@@ -13,15 +13,15 @@ from flightctl.executor import ExecutorV2, MemoryStateStore
 from flightctl.store import SQLiteStore
 from flightctl.transport import LocalSubprocessTransport
 from tests.authority.helpers import PRINCIPAL, request as rpc_request
-from tests.contracts_v2.validation import assert_valid, ceiling_confirmed
-from tests.executor.wire_site import Rig
+from tests.contracts_v2.validation import assert_valid, ceiling_confirmed, host_ceiling_bound
+from tests.executor.wire_site import CARDS, Rig
 from tests.sim.rig import SimClock
 
 CARD = "GPU-00000000-0000-0000-0000-000000000011"
 LANE = {"lane_id": "lane-gpu1", "host_id": "host-1", "reachability": "confirmed", "enabled": True}
 LANE_REF = {"site_id": "site-a", "host_id": "host-1", "lane_id": "lane-gpu1"}
 MAPPING = [{"external_id": "peer-a", "principal": PRINCIPAL, "roles": ["agent"]}]
-ACQUIRE = {"purpose": "simulated work", "est_s": 600, "max_s": 3600}
+ACQUIRE = {"class": "batch", "purpose": "simulated work", "est_s": 600, "max_s": 3600}
 
 
 def authority_v2(database, transport, clock):
@@ -62,6 +62,22 @@ class Site:
         self.calls.append((request, reply, self.control.monotonic()))
         result = {"status": "ok", "reply": reply, "error": None}
         return self.tamper(result) if self.tamper else result
+
+
+class Minutes(threading.Event):
+    """run_beat_loop's stop event on simulated time: each wait moves both clocks on by its timeout, then runs the host's enforcer; the `count`th wait sets it."""
+
+    def __init__(self, site, count):
+        super().__init__()
+        self.site, self.count, self.waits, self.acted = site, count, [], []
+
+    def wait(self, timeout=None):
+        self.waits.append(timeout)
+        self.site.advance(timeout)
+        self.acted += self.site.host.enforce_deadlines()
+        if len(self.waits) == self.count:
+            self.set()
+        return self.is_set()
 
 
 def changed(**fields):  # the host's reply with these fields changed
@@ -119,15 +135,15 @@ def test_beat_loop_keeps_lease_alive_30min_sim(tmp_path):
     lease_id, reserve = granted["data"]["lease"]["lease_id"], site.calls[0][0]
     assert deadlines(reserve) == [("expiry", 3600), ("heartbeat-stale", 600), ("max-end", 3570)]  # approved - now - the 30 s margin
     assert {item["sender_utc"] for item in reserve["deadlines"]} == {reserve["sent_at"]}
-    for minute in range(1, 31):
-        site.advance(60)
-        assert [(item["lease_id"], item["ok"]) for item in authority.beat_leases()] == [(lease_id, True)], minute
-        beat = site.calls[-1][0]
+    minutes = Minutes(site, 30)
+    authority.run_beat_loop(minutes)  # the default interval is the policy's heartbeat_s: a beat at once, then one a minute for 30 simulated minutes
+    assert (minutes.waits, minutes.acted, len(site.calls)) == ([60] * 30, [], 31)  # the host's enforcer acted on nothing
+    for minute, (beat, reply, _) in enumerate(site.calls[1:]):
         assert (beat["kind"], beat["identity"], "execution_policy" in beat) == ("beat", reserve["identity"], False)
         assert deadlines(beat) == [("expiry", 3600 - 60 * minute), ("heartbeat-stale", 600)], minute
-        assert site.host.enforce_deadlines() == [], minute
+        assert (reply["ok"], reply["definite"], reply["observed_state"]) == (True, True, "reserved"), minute
     site.advance(0.5)
-    authority.beat_leases()
+    assert [(item["lease_id"], item["ok"]) for item in authority.beat_leases()] == [(lease_id, True)]
     assert deadlines(site.calls[-1][0]) == [("expiry", 1799), ("heartbeat-stale", 600)]  # whole seconds, rounded down
     v1 = Authority(SQLiteStore(tmp_path / "state.sqlite"), site, site.control, lanes=[LANE], identity_mapping=MAPPING)  # protocol 1 over the same database
     assert (v1.beat_leases(), len(site.calls)) == ([], 32)
@@ -162,6 +178,7 @@ def test_slow_round_trip_triggers_shorten_only_ceiling(tmp_path):
     site, granted, kinds = acquire("slow", [60, 45.5])  # the reserve's request leg takes 60 s, the first ceiling's 45.5 s, the second's none
     assert (granted["status"], kinds) == (200, ["reserve", "ceiling", "ceiling"]), granted  # a ceiling that fits the margin: the grant goes ahead
     assert [at + reply["max_end_remaining_s"] for _, reply, at in site.calls] == [3630, 3615.5, 3569.5]  # the host's max-end: after the maximum, still after it, shortened
+    assert host_ceiling_bound(send_t=0, rtt_s=site.calls[0][2], in_s=3570, approved_max_end_t=3600)["must_shorten"]
     assert [ceiling_confirmed(reply_received_t=at, max_end_remaining_s=reply["max_end_remaining_s"], approved_max_end_t=3600) for _, reply, at in site.calls] == [False, False, True]
     for (ceiling, _, _), sent_t in zip(site.calls[1:], (60, 105.5)):
         assert set(ceiling) == {"schema_version", "kind", "controller_request_id", "controller_id", "sent_at", "identity", "max_end"}  # no execution_policy, no deadlines
@@ -175,14 +192,19 @@ def test_slow_round_trip_triggers_shorten_only_ceiling(tmp_path):
     result = rpc(refused.authority, "acquire-1", "acquire", ACQUIRE)
     assert ([call[0]["kind"] for call in refused.calls], result["status"], refused.calls[0][1]["error"]["code"]) == (["reserve"], 503, "clock_skew")
     assert acquire("never fits", [60] * 9)[2] == ["reserve", "ceiling", "ceiling", "ceiling"]  # at most 3 ceilings per reserve
+    wide = Site(tmp_path / "wide", skew_s=-30, delays=[40])
+    wide.authority.ceiling_margin_s = 45  # read each time a message is built: max-end and the slow threshold follow it
+    assert (rpc(wide.authority, "acquire-1", "acquire", ACQUIRE)["status"], [(call[0]["kind"], dict(deadlines(call[0]))["max-end"]) for call in wide.calls]) == (200, [("reserve", 3555)])
 
 
 @pytest.mark.realtime
 def test_beat_loop_real_time(tmp_path):
-    rig, rounds, stale_s = Rig(tmp_path), [], 10  # rounds: (monotonic at the start, at the end, the beats) of each beat_leases() call
-    authority = authority_v2(tmp_path / "authority.sqlite", LocalSubprocessTransport(rig.argv("--controller", "controller-a"), host_id="host-1"), RealClock())
-    authority.protected_stale_s = stale_s
-    granted = rpc(authority, "acquire-1", "acquire", ACQUIRE)
+    rig, rounds, stale_s, sent = Rig(tmp_path), [], 10, []  # rounds: (monotonic at the start, at the end, the beats) of each beat_leases() call; sent: the kind of each transport call
+    wire = LocalSubprocessTransport(rig.argv("--controller", "controller-a"), host_id="host-1")
+    wire_call, wire.call = wire.call, lambda host_id, message, **kw: sent.append(message["kind"]) or wire_call(host_id, message, **kw)
+    authority = authority_v2(tmp_path / "authority.sqlite", wire, RealClock())
+    authority.preemptible_stale_s = stale_s  # a preemptible (service) lease: freed on the stub's emptiness proof once stale
+    granted = rpc(authority, "acquire-1", "acquire", {**ACQUIRE, "class": "service"})
     assert granted["status"] == 200, granted
     beat_leases = authority.beat_leases
 
@@ -211,9 +233,10 @@ def test_beat_loop_real_time(tmp_path):
         stop.set()
         stopped = time.monotonic()
         loop.join(timeout=10)
+    beats_sent = sent.count("beat")
     assert not loop.is_alive() and time.monotonic() - stopped <= 3.0  # it returned within one interval of the stop
     count = len(rounds)
-    assert 5 <= count <= 8 and all(beat["ok"] for _, _, beats in rounds for beat in beats) and all(len(beats) == 1 for _, _, beats in rounds), rounds
+    assert rig.smi_calls() == [] and 5 <= count <= 8 and all(beat["ok"] for _, _, beats in rounds for beat in beats) and all(len(beats) == 1 for _, _, beats in rounds), rounds
     assert rounds[0][0] - loop_began < 1.5 and all(3.0 <= b[0] - a[0] < 8.0 for a, b in zip(rounds, rounds[1:])), [r[0] - loop_began for r in rounds]  # the first at once, then every 3 s
     last_began = rounds[-1][0]
     returned, acted = enforce()
@@ -221,6 +244,6 @@ def test_beat_loop_real_time(tmp_path):
         time.sleep(0.5)
         returned, acted = enforce()
     assert returned >= last_began + stale_s, (returned - last_began, acted)
-    assert acted == [{"lane": LANE_REF, "generation": 1, "due": ["heartbeat-stale"], "state": "quarantined"}]
-    assert len(rounds) == count  # the loop beat nothing after it returned
+    assert acted == [{"lane": LANE_REF, "generation": 1, "due": ["heartbeat-stale"], "state": "free"}] and f"-q -d PIDS -i {CARDS['lane-gpu1']}" in rig.smi_calls()
+    assert (len(rounds), sent.count("beat")) == (count, beats_sent)  # the loop beat nothing after it returned
     print(f"{count} beat rounds in {stopped - begun:.1f} s, the enforcer acted {returned - last_began:.1f} s after the last one began (stale {stale_s} s)")
