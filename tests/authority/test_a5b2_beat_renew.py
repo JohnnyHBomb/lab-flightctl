@@ -39,11 +39,12 @@ def deadlines(request):  # the (kind, in_s) of a request's relative deadlines, s
 class Site:
     """host-1's ExecutorV2 on its own SimClock behind an in-process ExecutorTransport; keeps (request, reply, the authority's monotonic time at return) of every call.
 
-    skew_s: how far the host's UTC is ahead of the authority's. delays: the seconds the request leg of each call takes in turn (both clocks run), then none."""
+    skew_s: how far the host's UTC is ahead of the authority's. delays: the seconds the request leg of each call takes in turn (both clocks run), then none.
+    tamper: a function of the transport result, applied after the host replied."""
 
     def __init__(self, root, *, skew_s=0, delays=()):
         root.mkdir(exist_ok=True)
-        self.calls, self.delays = [], list(delays)
+        self.calls, self.delays, self.tamper = [], list(delays), None
         self.control, self.host_clock = SimClock(boot_id="sim-ctl"), SimClock(boot_id="sim-host-1", skew_s=skew_s)
         self.host = ExecutorV2(self.host_clock, host_id="host-1", store=MemoryStateStore(), lane_cards={"lane-gpu1": [CARD]})
         self.authority = authority_v2(root / "state.sqlite", self, self.control)
@@ -59,7 +60,16 @@ class Site:
         reply = self.host.handle(json.loads(json.dumps(request)))
         assert_valid(reply, "executor", "reply")
         self.calls.append((request, reply, self.control.monotonic()))
-        return {"status": "ok", "reply": reply, "error": None}
+        result = {"status": "ok", "reply": reply, "error": None}
+        return self.tamper(result) if self.tamper else result
+
+
+def changed(**fields):  # the host's reply with these fields changed
+    return lambda result: {**result, "reply": {**result["reply"], **fields}}
+
+
+def raises(result):
+    raise OSError("the transport is down")
 
 
 def test_renew_rolls_within_ceiling_and_refuses_past_it(tmp_path):
@@ -116,8 +126,17 @@ def test_beat_loop_keeps_lease_alive_30min_sim(tmp_path):
         assert (beat["kind"], beat["identity"], "execution_policy" in beat) == ("beat", reserve["identity"], False)
         assert deadlines(beat) == [("expiry", 3600 - 60 * minute), ("heartbeat-stale", 600)], minute
         assert site.host.enforce_deadlines() == [], minute
+    site.advance(0.5)
+    authority.beat_leases()
+    assert deadlines(site.calls[-1][0]) == [("expiry", 1799), ("heartbeat-stale", 600)]  # whole seconds, rounded down
     v1 = Authority(SQLiteStore(tmp_path / "state.sqlite"), site, site.control, lanes=[LANE], identity_mapping=MAPPING)  # protocol 1 over the same database
-    assert (v1.beat_leases(), len(site.calls)) == ([], 31)
+    assert (v1.beat_leases(), len(site.calls)) == ([], 32)
+    unanswered = {"not reserved": changed(observed_state="quarantined"), "not definite": changed(definite=False), "not ok": changed(ok=False), "other request": changed(controller_request_id="x"),
+                  "other identity": changed(echoed_identity=None), "other schema": changed(schema_version=1), "raised": raises, "lost": lambda result: {"status": "lost", "reply": None, "error": None}}
+    for name, tamper in unanswered.items():  # a beat that raises, is refused or is not answered is reported not ok, never raised
+        site.tamper = tamper
+        assert [item["ok"] for item in authority.beat_leases()] == [False], name
+    site.tamper = None
     site.advance(599)  # the beats stop: one second short of the stale duration after the last one
     assert host.enforce_deadlines() == []
     site.advance(1)
@@ -128,24 +147,34 @@ def test_beat_loop_keeps_lease_alive_30min_sim(tmp_path):
         for status in ("pending", "acknowledged", "uncertain", "released"):
             authority.store.put_lease({**record, "state": state}, reservation_status=status)
             assert bool(authority.beat_leases()) == (status == "acknowledged" and state in ("starting", "running")), (state, status)
+    short = Site(tmp_path / "short")  # a preemptible lease whose approved maximum lies inside the margin: max-end is 0, never negative, and its stale duration is 180 s
+    assert rpc(short.authority, "acquire-1", "acquire", {**ACQUIRE, "class": "service", "est_s": 10, "max_s": 20})["status"] == 200
+    short.authority.preemptible_stale_s = 90  # the stale durations are read each time a message is built
+    short.authority.beat_leases()
+    assert [deadlines(call[0]) for call in short.calls] == [[("expiry", 20), ("heartbeat-stale", 180), ("max-end", 0)], [("expiry", 20), ("heartbeat-stale", 90)]]
 
 
 def test_slow_round_trip_triggers_shorten_only_ceiling(tmp_path):
     def acquire(name, delays):  # the host's clock is 30 s behind the authority's; the approved maximum is 3600 s after the acquire, at monotonic 3600
         site = Site(tmp_path / name, skew_s=-30, delays=delays)
-        rpc(site.authority, "acquire-1", "acquire", ACQUIRE)
-        return site, [call[0]["kind"] for call in site.calls]
+        return site, rpc(site.authority, "acquire-1", "acquire", ACQUIRE), [call[0]["kind"] for call in site.calls]
 
-    site, kinds = acquire("slow", [60, 45])  # the reserve's request leg takes 60 s, the first ceiling's 45 s, the second's none
-    assert kinds == ["reserve", "ceiling", "ceiling"]
-    assert [at + reply["max_end_remaining_s"] for _, reply, at in site.calls] == [3630, 3615, 3570]  # the host's max-end: after the maximum, still after it, shortened
+    site, granted, kinds = acquire("slow", [60, 45.5])  # the reserve's request leg takes 60 s, the first ceiling's 45.5 s, the second's none
+    assert (granted["status"], kinds) == (200, ["reserve", "ceiling", "ceiling"]), granted  # a ceiling that fits the margin: the grant goes ahead
+    assert [at + reply["max_end_remaining_s"] for _, reply, at in site.calls] == [3630, 3615.5, 3569.5]  # the host's max-end: after the maximum, still after it, shortened
     assert [ceiling_confirmed(reply_received_t=at, max_end_remaining_s=reply["max_end_remaining_s"], approved_max_end_t=3600) for _, reply, at in site.calls] == [False, False, True]
-    for (ceiling, _, _), sent_t in zip(site.calls[1:], (60, 105)):
+    for (ceiling, _, _), sent_t in zip(site.calls[1:], (60, 105.5)):
         assert set(ceiling) == {"schema_version", "kind", "controller_request_id", "controller_id", "sent_at", "identity", "max_end"}  # no execution_policy, no deadlines
-        assert ceiling["max_end"] == {"kind": "max-end", "in_s": 3600 - sent_t - 30, "sender_utc": ceiling["sent_at"]}
+        assert ceiling["max_end"] == {"kind": "max-end", "in_s": int(3570 - sent_t), "sender_utc": ceiling["sent_at"]}
         assert ceiling["identity"] == site.calls[0][0]["identity"]
-    assert acquire("fast", [])[1] == ["reserve"] and acquire("margin", [30])[1] == ["reserve"]  # a round trip at or below the margin sends no ceiling
-    assert acquire("never fits", [60] * 9)[1] == ["reserve", "ceiling", "ceiling", "ceiling"]  # at most 3 ceilings per reserve
+    fast, _, kinds = acquire("fast", [])
+    fast.delays = [45]  # a slow beat sends no ceiling either
+    fast.authority.beat_leases()
+    assert (kinds, [call[0]["kind"] for call in fast.calls], acquire("margin", [30])[2]) == (["reserve"], ["reserve", "beat"], ["reserve"])  # a round trip at or below the margin sends none
+    refused = Site(tmp_path / "refused", skew_s=40, delays=[31])  # the host's clock 40 s ahead: a slow reserve that is definitely refused sends no ceiling
+    result = rpc(refused.authority, "acquire-1", "acquire", ACQUIRE)
+    assert ([call[0]["kind"] for call in refused.calls], result["status"], refused.calls[0][1]["error"]["code"]) == (["reserve"], 503, "clock_skew")
+    assert acquire("never fits", [60] * 9)[2] == ["reserve", "ceiling", "ceiling", "ceiling"]  # at most 3 ceilings per reserve
 
 
 @pytest.mark.realtime
@@ -171,6 +200,7 @@ def test_beat_loop_real_time(tmp_path):
     authority.beat_leases = timed
     stop = threading.Event()
     loop = threading.Thread(target=authority.run_beat_loop, args=(stop, 3.0))
+    loop_began = time.monotonic()
     loop.start()
     try:
         begun = time.monotonic()
@@ -184,6 +214,7 @@ def test_beat_loop_real_time(tmp_path):
     assert not loop.is_alive() and time.monotonic() - stopped <= 3.0  # it returned within one interval of the stop
     count = len(rounds)
     assert 5 <= count <= 8 and all(beat["ok"] for _, _, beats in rounds for beat in beats) and all(len(beats) == 1 for _, _, beats in rounds), rounds
+    assert rounds[0][0] - loop_began < 1.5 and all(3.0 <= b[0] - a[0] < 8.0 for a, b in zip(rounds, rounds[1:])), [r[0] - loop_began for r in rounds]  # the first at once, then every 3 s
     last_began = rounds[-1][0]
     returned, acted = enforce()
     while not acted and returned < last_began + stale_s + 10:  # nobody beats now: the enforcer acts once the stale duration has passed
